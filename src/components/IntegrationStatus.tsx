@@ -19,7 +19,7 @@ export function IntegrationStatus({ settings }: IntegrationStatusProps) {
     {
       name: 'Asana',
       enabled: settings.asana.enabled,
-      connected: !!settings.asana.accessToken,
+      connected: !!settings.asana.credentials?.accessToken,
       color: 'orange',
     },
   ];

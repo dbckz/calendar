@@ -22,6 +22,7 @@ interface SettingsState {
   asana: {
     enabled: boolean;
     connected: boolean;
+    hasCredentials: boolean;
     workspaceId?: string;
   };
 }
@@ -38,7 +39,8 @@ function SettingsContent() {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
 
   // Asana form
-  const [asanaToken, setAsanaToken] = useState('');
+  const [asanaClientId, setAsanaClientId] = useState('');
+  const [asanaClientSecret, setAsanaClientSecret] = useState('');
   const [isAsanaLoading, setIsAsanaLoading] = useState(false);
 
   useEffect(() => {
@@ -50,11 +52,16 @@ function SettingsContent() {
 
     if (success === 'google_connected') {
       setMessage({ type: 'success', text: 'Google Calendar connected successfully!' });
+    } else if (success === 'asana_connected') {
+      setMessage({ type: 'success', text: 'Asana connected successfully!' });
     } else if (error) {
       const errorMessages: Record<string, string> = {
         google_auth_denied: 'Google Calendar authorization was denied.',
+        asana_auth_denied: 'Asana authorization was denied.',
         no_code: 'Authorization code was not received.',
-        token_exchange_failed: 'Failed to complete authorization.',
+        token_exchange_failed: 'Failed to complete Google authorization.',
+        asana_token_exchange_failed: 'Failed to complete Asana authorization.',
+        no_settings: 'Settings not found. Please try again.',
       };
       setMessage({ type: 'error', text: errorMessages[error] || 'An error occurred.' });
     }
@@ -118,23 +125,24 @@ function SettingsContent() {
       const res = await fetch('/api/auth/asana', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accessToken: asanaToken }),
+        body: JSON.stringify({
+          clientId: asanaClientId,
+          clientSecret: asanaClientSecret,
+        }),
       });
 
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.error || 'Invalid token');
+        throw new Error(data.error || 'Failed to save credentials');
       }
 
-      setAsanaToken('');
-      fetchSettings();
-      setMessage({ type: 'success', text: 'Asana connected successfully!' });
+      const { authUrl } = await res.json();
+      window.location.href = authUrl;
     } catch (error) {
       setMessage({
         type: 'error',
         text: error instanceof Error ? error.message : 'Failed to connect Asana.',
       });
-    } finally {
       setIsAsanaLoading(false);
     }
   };
@@ -142,6 +150,8 @@ function SettingsContent() {
   const handleAsanaDisconnect = async () => {
     try {
       await fetch('/api/settings?integration=asana', { method: 'DELETE' });
+      setAsanaClientId('');
+      setAsanaClientSecret('');
       fetchSettings();
       setMessage({ type: 'success', text: 'Asana disconnected.' });
     } catch (error) {
@@ -232,7 +242,7 @@ function SettingsContent() {
             ) : (
               <form onSubmit={handleGoogleConnect} className="space-y-4">
                 <p className="text-sm text-gray-600 mb-4">
-                  To connect Google Calendar, you need to create OAuth credentials in the{' '}
+                  To connect Google Calendar, create OAuth credentials in the{' '}
                   <a
                     href="https://console.cloud.google.com/apis/credentials"
                     target="_blank"
@@ -332,7 +342,7 @@ function SettingsContent() {
             ) : (
               <form onSubmit={handleAsanaConnect} className="space-y-4">
                 <p className="text-sm text-gray-600 mb-4">
-                  Generate a Personal Access Token in your{' '}
+                  To connect Asana, create an app in the{' '}
                   <a
                     href="https://app.asana.com/0/my-apps"
                     target="_blank"
@@ -346,20 +356,33 @@ function SettingsContent() {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Personal Access Token
+                    Client ID
+                  </label>
+                  <input
+                    type="text"
+                    value={asanaClientId}
+                    onChange={(e) => setAsanaClientId(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    placeholder="Your Asana Client ID"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Client Secret
                   </label>
                   <input
                     type="password"
-                    value={asanaToken}
-                    onChange={(e) => setAsanaToken(e.target.value)}
+                    value={asanaClientSecret}
+                    onChange={(e) => setAsanaClientSecret(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                    placeholder="Your Asana personal access token"
+                    placeholder="Your Asana Client Secret"
                   />
                 </div>
 
                 <button
                   type="submit"
-                  disabled={!asanaToken || isAsanaLoading}
+                  disabled={!asanaClientId || !asanaClientSecret || isAsanaLoading}
                   className="w-full py-2 px-4 bg-orange-600 text-white rounded-lg font-medium hover:bg-orange-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
                   {isAsanaLoading ? (

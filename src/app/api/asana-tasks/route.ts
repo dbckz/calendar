@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getTasksForDate, asanaTaskToCalendarEvent } from '@/lib/asana';
+import { getTasksForDate, asanaTaskToCalendarEvent, refreshAsanaToken } from '@/lib/asana';
 import { cookies } from 'next/headers';
 
 export async function GET(request: NextRequest) {
@@ -20,17 +20,39 @@ export async function GET(request: NextRequest) {
   try {
     const settings = JSON.parse(settingsStr);
 
-    if (!settings.asana?.enabled || !settings.asana?.accessToken) {
+    if (!settings.asana?.enabled || !settings.asana?.credentials) {
       return NextResponse.json({ error: 'Asana not configured' }, { status: 401 });
     }
 
-    const { accessToken, workspaceId } = settings.asana;
+    const { clientId, clientSecret, credentials, workspaceId } = settings.asana;
 
     if (!workspaceId) {
       return NextResponse.json({ error: 'Asana workspace not selected' }, { status: 400 });
     }
 
-    const tasks = await getTasksForDate(accessToken, workspaceId, dateStr);
+    // Check if token needs refresh
+    let currentCredentials = credentials;
+    if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
+      currentCredentials = await refreshAsanaToken(credentials.refreshToken, clientId, clientSecret);
+
+      // Update cookies with new credentials
+      const updatedSettings = {
+        ...settings,
+        asana: {
+          ...settings.asana,
+          credentials: currentCredentials,
+        },
+      };
+
+      cookieStore.set('planner-settings', JSON.stringify(updatedSettings), {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 365,
+      });
+    }
+
+    const tasks = await getTasksForDate(currentCredentials.accessToken, workspaceId, dateStr);
     const events = tasks.map(asanaTaskToCalendarEvent);
 
     return NextResponse.json(events);

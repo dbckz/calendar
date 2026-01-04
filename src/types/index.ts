@@ -64,7 +64,9 @@ export interface AppSettings {
   };
   asana: {
     enabled: boolean;
-    accessToken: string;
+    clientId: string;
+    clientSecret: string;
+    credentials?: AsanaCredentials;
     workspaceId?: string;
   };
 }

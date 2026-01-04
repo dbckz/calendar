@@ -30,7 +30,8 @@ export async function GET() {
       },
       asana: {
         enabled: settings.asana?.enabled || false,
-        connected: !!settings.asana?.accessToken,
+        connected: !!settings.asana?.credentials?.accessToken,
+        hasCredentials: !!(settings.asana?.clientId && settings.asana?.clientSecret),
         workspaceId: settings.asana?.workspaceId,
       },
     });
@@ -66,7 +67,8 @@ export async function DELETE(request: NextRequest) {
     } else if (integration === 'asana') {
       settings.asana = {
         enabled: false,
-        accessToken: '',
+        clientId: '',
+        clientSecret: '',
       };
     }
 

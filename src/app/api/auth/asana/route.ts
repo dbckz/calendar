@@ -1,18 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getWorkspaces } from '@/lib/asana';
+import { getAsanaAuthUrl } from '@/lib/asana';
 import { cookies } from 'next/headers';
 
-export async function POST(request: NextRequest) {
-  const { accessToken } = await request.json();
+function getRedirectUri(request: NextRequest): string {
+  const host = request.headers.get('host') || 'localhost:3000';
+  const protocol = request.headers.get('x-forwarded-proto') || 'http';
+  return `${protocol}://${host}/api/auth/asana/callback`;
+}
 
-  if (!accessToken) {
-    return NextResponse.json({ error: 'Access token is required' }, { status: 400 });
+export async function POST(request: NextRequest) {
+  const { clientId, clientSecret } = await request.json();
+
+  if (!clientId || !clientSecret) {
+    return NextResponse.json(
+      { error: 'Client ID and Secret are required' },
+      { status: 400 }
+    );
   }
 
   try {
-    // Validate the token by fetching workspaces
-    const workspaces = await getWorkspaces(accessToken);
-
     const cookieStore = await cookies();
     const existingSettings = cookieStore.get('planner-settings')?.value;
     const settings = existingSettings ? JSON.parse(existingSettings) : {};
@@ -22,8 +28,8 @@ export async function POST(request: NextRequest) {
       asana: {
         ...settings.asana,
         enabled: true,
-        accessToken,
-        workspaceId: workspaces.length > 0 ? workspaces[0].gid : undefined,
+        clientId,
+        clientSecret,
       },
     };
 
@@ -34,13 +40,12 @@ export async function POST(request: NextRequest) {
       maxAge: 60 * 60 * 24 * 365,
     });
 
-    return NextResponse.json({ workspaces });
+    const redirectUri = getRedirectUri(request);
+    const authUrl = getAsanaAuthUrl(clientId, redirectUri);
+    return NextResponse.json({ authUrl });
   } catch (error) {
-    console.error('Error validating Asana token:', error);
-    return NextResponse.json(
-      { error: 'Invalid access token' },
-      { status: 401 }
-    );
+    console.error('Error saving Asana credentials:', error);
+    return NextResponse.json({ error: 'Failed to save credentials' }, { status: 500 });
   }
 }
 

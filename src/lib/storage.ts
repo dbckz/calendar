@@ -14,7 +14,8 @@ export const defaultSettings: AppSettings = {
   },
   asana: {
     enabled: false,
-    accessToken: '',
+    clientId: '',
+    clientSecret: '',
   },
 };
 

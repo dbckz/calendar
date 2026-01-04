@@ -1,18 +1,95 @@
 // Asana integration service
 
-import { AsanaTask, CalendarEvent } from '@/types';
+import { AsanaTask, AsanaCredentials, CalendarEvent } from '@/types';
 
 const ASANA_API_BASE = 'https://app.asana.com/api/1.0';
+const ASANA_AUTH_BASE = 'https://app.asana.com/-/oauth_authorize';
+const ASANA_TOKEN_URL = 'https://app.asana.com/-/oauth_token';
 
 interface AsanaApiResponse<T> {
   data: T;
 }
 
-interface AsanaWorkspace {
+export interface AsanaWorkspace {
   gid: string;
   name: string;
 }
 
+// OAuth functions
+export function getAsanaAuthUrl(clientId: string, redirectUri: string): string {
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+  });
+  return `${ASANA_AUTH_BASE}?${params.toString()}`;
+}
+
+export async function getAsanaTokensFromCode(
+  code: string,
+  clientId: string,
+  clientSecret: string,
+  redirectUri: string
+): Promise<AsanaCredentials> {
+  const response = await fetch(ASANA_TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+      code,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to get tokens: ${error}`);
+  }
+
+  const data = await response.json();
+  return {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token,
+    expiresAt: Date.now() + data.expires_in * 1000,
+  };
+}
+
+export async function refreshAsanaToken(
+  refreshToken: string,
+  clientId: string,
+  clientSecret: string
+): Promise<AsanaCredentials> {
+  const response = await fetch(ASANA_TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to refresh token: ${error}`);
+  }
+
+  const data = await response.json();
+  return {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token || refreshToken,
+    expiresAt: Date.now() + data.expires_in * 1000,
+  };
+}
+
+// API functions
 export async function getWorkspaces(accessToken: string): Promise<AsanaWorkspace[]> {
   const response = await fetch(`${ASANA_API_BASE}/workspaces`, {
     headers: {
