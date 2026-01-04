@@ -148,7 +148,7 @@ export async function getMyTasks(
 
   // Get tasks from the task list
   const tasksResponse = await fetch(
-    `${ASANA_API_BASE}/user_task_lists/${taskListData.data.gid}/tasks?opt_fields=name,notes,due_on,due_at,completed,assignee,projects`,
+    `${ASANA_API_BASE}/user_task_lists/${taskListData.data.gid}/tasks?opt_fields=name,notes,due_on,due_at,completed`,
     {
       headers: {
         'Authorization': `Bearer ${accessToken}`,
