@@ -55,6 +55,7 @@ function SettingsContent() {
     } else if (success === 'asana_connected') {
       setMessage({ type: 'success', text: 'Asana connected successfully!' });
     } else if (error) {
+      const details = searchParams.get('details');
       const errorMessages: Record<string, string> = {
         google_auth_denied: 'Google Calendar authorization was denied.',
         asana_auth_denied: 'Asana authorization was denied.',
@@ -63,7 +64,11 @@ function SettingsContent() {
         asana_token_exchange_failed: 'Failed to complete Asana authorization.',
         no_settings: 'Settings not found. Please try again.',
       };
-      setMessage({ type: 'error', text: errorMessages[error] || 'An error occurred.' });
+      let errorText = errorMessages[error] || 'An error occurred.';
+      if (details) {
+        errorText += ` Details: ${decodeURIComponent(details)}`;
+      }
+      setMessage({ type: 'error', text: errorText });
     }
   }, [searchParams]);
 

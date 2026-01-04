@@ -56,7 +56,12 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.redirect(new URL('/settings?success=asana_connected', request.url));
   } catch (error) {
-    console.error('Error exchanging Asana code for tokens:', error);
-    return NextResponse.redirect(new URL('/settings?error=asana_token_exchange_failed', request.url));
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Error exchanging Asana code for tokens:', errorMessage);
+    // Include error details in URL for debugging
+    const errorUrl = new URL('/settings', request.url);
+    errorUrl.searchParams.set('error', 'asana_token_exchange_failed');
+    errorUrl.searchParams.set('details', encodeURIComponent(errorMessage.substring(0, 200)));
+    return NextResponse.redirect(errorUrl);
   }
 }
