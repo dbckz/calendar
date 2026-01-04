@@ -21,6 +21,7 @@ export function getAsanaAuthUrl(clientId: string, redirectUri: string): string {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
+    scope: 'openid',
   });
   return `${ASANA_AUTH_BASE}?${params.toString()}`;
 }
