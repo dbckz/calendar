@@ -99,7 +99,9 @@ export async function getWorkspaces(accessToken: string): Promise<AsanaWorkspace
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to fetch workspaces: ${response.statusText}`);
+    const errorBody = await response.text();
+    console.error('Asana workspaces error:', response.status, errorBody);
+    throw new Error(`Failed to fetch workspaces: ${response.status} - ${errorBody.substring(0, 200)}`);
   }
 
   const data: AsanaApiResponse<AsanaWorkspace[]> = await response.json();
