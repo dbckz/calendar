@@ -21,7 +21,7 @@ export function getAsanaAuthUrl(clientId: string, redirectUri: string): string {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: 'openid profile email workspaces:read users:read user_task_lists:read tasks:read',
+    scope: 'openid profile email workspaces:read users:read tasks:read',
   });
   return `${ASANA_AUTH_BASE}?${params.toString()}`;
 }
