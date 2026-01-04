@@ -21,7 +21,7 @@ export function getAsanaAuthUrl(clientId: string, redirectUri: string): string {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: 'openid profile email workspaces:read users:read tasks:read',
+    scope: 'openid profile email workspaces:read users:read user_task_lists:read tasks:read',
   });
   return `${ASANA_AUTH_BASE}?${params.toString()}`;
 }
@@ -120,7 +120,9 @@ export async function getMyTasks(
   });
 
   if (!meResponse.ok) {
-    throw new Error(`Failed to fetch user info: ${meResponse.statusText}`);
+    const errorBody = await meResponse.text();
+    console.error('Asana /users/me error:', meResponse.status, errorBody);
+    throw new Error(`Failed to fetch user info: ${meResponse.status} - ${errorBody.substring(0, 200)}`);
   }
 
   const meData: AsanaApiResponse<{ gid: string }> = await meResponse.json();
@@ -137,7 +139,9 @@ export async function getMyTasks(
   );
 
   if (!taskListResponse.ok) {
-    throw new Error(`Failed to fetch task list: ${taskListResponse.statusText}`);
+    const errorBody = await taskListResponse.text();
+    console.error('Asana user_task_list error:', taskListResponse.status, errorBody);
+    throw new Error(`Failed to fetch task list: ${taskListResponse.status} - ${errorBody.substring(0, 200)}`);
   }
 
   const taskListData: AsanaApiResponse<{ gid: string }> = await taskListResponse.json();
@@ -153,7 +157,9 @@ export async function getMyTasks(
   );
 
   if (!tasksResponse.ok) {
-    throw new Error(`Failed to fetch tasks: ${tasksResponse.statusText}`);
+    const errorBody = await tasksResponse.text();
+    console.error('Asana tasks error:', tasksResponse.status, errorBody);
+    throw new Error(`Failed to fetch tasks: ${tasksResponse.status} - ${errorBody.substring(0, 200)}`);
   }
 
   const tasksData: AsanaApiResponse<AsanaTask[]> = await tasksResponse.json();
