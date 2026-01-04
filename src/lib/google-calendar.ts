@@ -5,16 +5,12 @@ import { CalendarEvent, GoogleCalendarCredentials } from '@/types';
 
 const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
 
-export function createOAuth2Client(clientId: string, clientSecret: string) {
-  return new google.auth.OAuth2(
-    clientId,
-    clientSecret,
-    `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/auth/google/callback`
-  );
+export function createOAuth2Client(clientId: string, clientSecret: string, redirectUri?: string) {
+  return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 }
 
-export function getAuthUrl(clientId: string, clientSecret: string): string {
-  const oauth2Client = createOAuth2Client(clientId, clientSecret);
+export function getAuthUrl(clientId: string, clientSecret: string, redirectUri: string): string {
+  const oauth2Client = createOAuth2Client(clientId, clientSecret, redirectUri);
 
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
@@ -26,9 +22,10 @@ export function getAuthUrl(clientId: string, clientSecret: string): string {
 export async function getTokensFromCode(
   code: string,
   clientId: string,
-  clientSecret: string
+  clientSecret: string,
+  redirectUri: string
 ): Promise<GoogleCalendarCredentials> {
-  const oauth2Client = createOAuth2Client(clientId, clientSecret);
+  const oauth2Client = createOAuth2Client(clientId, clientSecret, redirectUri);
   const { tokens } = await oauth2Client.getToken(code);
 
   return {

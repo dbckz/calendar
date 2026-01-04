@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getTokensFromCode } from '@/lib/google-calendar';
 import { cookies } from 'next/headers';
 
+function getRedirectUri(request: NextRequest): string {
+  const host = request.headers.get('host') || 'localhost:3000';
+  const protocol = request.headers.get('x-forwarded-proto') || 'http';
+  return `${protocol}://${host}/api/auth/google/callback`;
+}
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const code = searchParams.get('code');
@@ -26,7 +32,8 @@ export async function GET(request: NextRequest) {
     const settings = JSON.parse(settingsStr);
     const { clientId, clientSecret } = settings.googleCalendar;
 
-    const credentials = await getTokensFromCode(code, clientId, clientSecret);
+    const redirectUri = getRedirectUri(request);
+    const credentials = await getTokensFromCode(code, clientId, clientSecret, redirectUri);
 
     const updatedSettings = {
       ...settings,

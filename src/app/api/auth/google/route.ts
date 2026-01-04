@@ -2,7 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUrl } from '@/lib/google-calendar';
 import { cookies } from 'next/headers';
 
-export async function GET() {
+function getRedirectUri(request: NextRequest): string {
+  const host = request.headers.get('host') || 'localhost:3000';
+  const protocol = request.headers.get('x-forwarded-proto') || 'http';
+  return `${protocol}://${host}/api/auth/google/callback`;
+}
+
+export async function GET(request: NextRequest) {
   const cookieStore = await cookies();
   const settingsStr = cookieStore.get('planner-settings')?.value;
 
@@ -21,7 +27,8 @@ export async function GET() {
       );
     }
 
-    const authUrl = getAuthUrl(clientId, clientSecret);
+    const redirectUri = getRedirectUri(request);
+    const authUrl = getAuthUrl(clientId, clientSecret, redirectUri);
     return NextResponse.json({ authUrl });
   } catch (error) {
     console.error('Error generating auth URL:', error);
@@ -61,7 +68,8 @@ export async function POST(request: NextRequest) {
       maxAge: 60 * 60 * 24 * 365,
     });
 
-    const authUrl = getAuthUrl(clientId, clientSecret);
+    const redirectUri = getRedirectUri(request);
+    const authUrl = getAuthUrl(clientId, clientSecret, redirectUri);
     return NextResponse.json({ authUrl });
   } catch (error) {
     console.error('Error saving credentials:', error);
