@@ -2,31 +2,44 @@
 
 import { Check, X, ExternalLink } from 'lucide-react';
 import Link from 'next/link';
-import { AppSettings } from '@/types';
+
+interface IntegrationInfo {
+  id: string;
+  name: string;
+  enabled: boolean;
+  connected: boolean;
+}
+
+interface SettingsState {
+  googleIntegrations: IntegrationInfo[];
+  asanaIntegrations: IntegrationInfo[];
+}
 
 interface IntegrationStatusProps {
-  settings: AppSettings;
+  settings: SettingsState;
 }
 
 export function IntegrationStatus({ settings }: IntegrationStatusProps) {
+  const googleConnected = settings.googleIntegrations?.some(i => i.enabled && i.connected) ?? false;
+  const asanaConnected = settings.asanaIntegrations?.some(i => i.enabled && i.connected) ?? false;
+
   const integrations = [
     {
       name: 'Google Calendar',
-      enabled: settings.googleCalendar.enabled,
-      connected: !!settings.googleCalendar.credentials?.accessToken,
-      color: 'blue',
+      connected: googleConnected,
+      count: settings.googleIntegrations?.filter(i => i.enabled && i.connected).length ?? 0,
     },
     {
       name: 'Asana',
-      enabled: settings.asana.enabled,
-      connected: !!settings.asana.credentials?.accessToken,
-      color: 'orange',
+      connected: asanaConnected,
+      count: settings.asanaIntegrations?.filter(i => i.enabled && i.connected).length ?? 0,
     },
   ];
 
-  const connectedCount = integrations.filter(i => i.enabled && i.connected).length;
+  const connectedCount = integrations.filter(i => i.connected).length;
 
-  if (connectedCount === integrations.length) {
+  // Hide if at least one integration is connected
+  if (connectedCount >= 1) {
     return null;
   }
 
@@ -41,14 +54,14 @@ export function IntegrationStatus({ settings }: IntegrationStatusProps) {
           <div className="flex items-center gap-4 mt-3">
             {integrations.map(integration => (
               <div key={integration.name} className="flex items-center gap-2 text-sm">
-                {integration.enabled && integration.connected ? (
+                {integration.connected ? (
                   <Check className="w-4 h-4 text-green-600" />
                 ) : (
                   <X className="w-4 h-4 text-gray-400" />
                 )}
                 <span
                   className={
-                    integration.enabled && integration.connected
+                    integration.connected
                       ? 'text-green-700'
                       : 'text-gray-500'
                   }

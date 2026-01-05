@@ -72,7 +72,7 @@ export function ListView({ events, onToggleComplete, onDeleteTask }: ListViewPro
           <div className="space-y-2">
             {section.events.map(event => (
               <EventCard
-                key={event.id}
+                key={`${event.integrationId || event.source}-${event.id}`}
                 event={event}
                 onToggleComplete={
                   event.source === 'adhoc' || event.source === 'asana'

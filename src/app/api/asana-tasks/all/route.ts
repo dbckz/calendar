@@ -1,18 +1,17 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getTasksForDate, asanaTaskToCalendarEvent, refreshAsanaToken } from '@/lib/asana';
+import { NextResponse } from 'next/server';
+import { getIncompleteTasks, asanaTaskToCalendarEvent, refreshAsanaToken } from '@/lib/asana';
 import { getEnabledAsanaIntegrations, updateIntegration } from '@/lib/integration-storage';
 import { CalendarEvent, AsanaIntegration } from '@/types';
 
-export async function GET(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams;
-  const dateStr = searchParams.get('date');
-
-  if (!dateStr) {
-    return NextResponse.json({ error: 'Date parameter is required' }, { status: 400 });
-  }
-
+export async function GET() {
   try {
     const integrations = await getEnabledAsanaIntegrations();
+    console.log('[Asana Tasks API] Enabled integrations:', integrations.map(i => ({
+      id: i.id,
+      name: i.name,
+      workspaceId: i.workspaceId,
+      hasCredentials: !!i.credentials,
+    })));
 
     if (integrations.length === 0) {
       return NextResponse.json([]);
@@ -23,7 +22,9 @@ export async function GET(request: NextRequest) {
     // Fetch tasks from all enabled integrations
     for (const integration of integrations) {
       try {
-        const events = await fetchTasksFromIntegration(integration, dateStr);
+        console.log(`[Asana Tasks API] Fetching from "${integration.name}" (workspace: ${integration.workspaceId})`);
+        const events = await fetchTasksFromIntegration(integration);
+        console.log(`[Asana Tasks API] Got ${events.length} tasks from "${integration.name}"`);
         allEvents.push(...events);
       } catch (error) {
         console.error(`Error fetching from integration ${integration.name}:`, error);
@@ -31,12 +32,17 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Sort all events by start time
-    allEvents.sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+    // Sort by due date (tasks without due date go to the end)
+    allEvents.sort((a, b) => {
+      if (!a.dueOn && !b.dueOn) return 0;
+      if (!a.dueOn) return 1;
+      if (!b.dueOn) return -1;
+      return a.dueOn.localeCompare(b.dueOn);
+    });
 
     return NextResponse.json(allEvents);
   } catch (error) {
-    console.error('Error fetching Asana tasks:', error);
+    console.error('Error fetching all Asana tasks:', error);
     return NextResponse.json(
       { error: 'Failed to fetch Asana tasks' },
       { status: 500 }
@@ -45,8 +51,7 @@ export async function GET(request: NextRequest) {
 }
 
 async function fetchTasksFromIntegration(
-  integration: AsanaIntegration,
-  dateStr: string
+  integration: AsanaIntegration
 ): Promise<CalendarEvent[]> {
   if (!integration.credentials || !integration.workspaceId) {
     return [];
@@ -66,10 +71,9 @@ async function fetchTasksFromIntegration(
     await updateIntegration(integration.id, { credentials });
   }
 
-  const tasks = await getTasksForDate(
+  const tasks = await getIncompleteTasks(
     credentials.accessToken,
-    integration.workspaceId,
-    dateStr
+    integration.workspaceId
   );
 
   const events = tasks.map(asanaTaskToCalendarEvent);

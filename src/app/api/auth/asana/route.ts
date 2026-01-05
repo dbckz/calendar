@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAsanaAuthUrl } from '@/lib/asana';
-import { cookies } from 'next/headers';
+import { getIntegrationById, addAsanaIntegration, updateIntegration } from '@/lib/integration-storage';
+import { AsanaIntegration } from '@/types';
 
 function getRedirectUri(request: NextRequest): string {
   const host = request.headers.get('host') || 'localhost:3000';
@@ -8,78 +9,97 @@ function getRedirectUri(request: NextRequest): string {
   return `${protocol}://${host}/api/auth/asana/callback`;
 }
 
-export async function POST(request: NextRequest) {
-  const { clientId, clientSecret } = await request.json();
+// GET - Generate auth URL for an existing integration
+export async function GET(request: NextRequest) {
+  const searchParams = request.nextUrl.searchParams;
+  const integrationId = searchParams.get('integrationId');
 
-  if (!clientId || !clientSecret) {
+  if (!integrationId) {
+    return NextResponse.json({ error: 'integrationId is required' }, { status: 400 });
+  }
+
+  try {
+    const integration = await getIntegrationById(integrationId);
+
+    if (!integration || integration.type !== 'asana') {
+      return NextResponse.json({ error: 'Asana integration not found' }, { status: 404 });
+    }
+
+    const asanaIntegration = integration as AsanaIntegration;
+    const redirectUri = getRedirectUri(request);
+    const state = encodeURIComponent(JSON.stringify({ integrationId }));
+    const authUrl = getAsanaAuthUrl(asanaIntegration.clientId, redirectUri, state);
+
+    return NextResponse.json({ authUrl });
+  } catch (error) {
+    console.error('Error generating auth URL:', error);
+    return NextResponse.json({ error: 'Failed to generate auth URL' }, { status: 500 });
+  }
+}
+
+// POST - Create new integration and return auth URL
+export async function POST(request: NextRequest) {
+  const { name, clientId, clientSecret } = await request.json();
+
+  if (!name || !clientId || !clientSecret) {
     return NextResponse.json(
-      { error: 'Client ID and Secret are required' },
+      { error: 'name, clientId, and clientSecret are required' },
       { status: 400 }
     );
   }
 
   try {
-    const cookieStore = await cookies();
-    const existingSettings = cookieStore.get('planner-settings')?.value;
-    const settings = existingSettings ? JSON.parse(existingSettings) : {};
-
-    const updatedSettings = {
-      ...settings,
-      asana: {
-        ...settings.asana,
-        enabled: true,
-        clientId,
-        clientSecret,
-      },
+    const id = crypto.randomUUID();
+    const integration: AsanaIntegration = {
+      id,
+      type: 'asana',
+      name,
+      enabled: true,
+      clientId,
+      clientSecret,
+      createdAt: new Date().toISOString(),
     };
 
-    cookieStore.set('planner-settings', JSON.stringify(updatedSettings), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 365,
+    console.log('[Asana Auth] Creating new integration:', {
+      id,
+      name,
+      clientId: clientId.substring(0, 10) + '...',
     });
 
+    await addAsanaIntegration(integration);
+    console.log('[Asana Auth] Integration saved to storage');
+
+    // Generate auth URL with integration ID in state
     const redirectUri = getRedirectUri(request);
-    const authUrl = getAsanaAuthUrl(clientId, redirectUri);
-    return NextResponse.json({ authUrl });
+    const state = encodeURIComponent(JSON.stringify({ integrationId: id }));
+    const authUrl = getAsanaAuthUrl(clientId, redirectUri, state);
+
+    console.log('[Asana Auth] Generated auth URL with state:', { integrationId: id });
+
+    return NextResponse.json({ authUrl, integrationId: id });
   } catch (error) {
-    console.error('Error saving Asana credentials:', error);
-    return NextResponse.json({ error: 'Failed to save credentials' }, { status: 500 });
+    console.error('Error creating integration:', error);
+    return NextResponse.json({ error: 'Failed to create integration' }, { status: 500 });
   }
 }
 
+// PUT - Update workspace for an integration
 export async function PUT(request: NextRequest) {
-  const { workspaceId } = await request.json();
+  const { integrationId, workspaceId } = await request.json();
 
-  if (!workspaceId) {
-    return NextResponse.json({ error: 'Workspace ID is required' }, { status: 400 });
+  if (!integrationId || !workspaceId) {
+    return NextResponse.json(
+      { error: 'integrationId and workspaceId are required' },
+      { status: 400 }
+    );
   }
 
   try {
-    const cookieStore = await cookies();
-    const existingSettings = cookieStore.get('planner-settings')?.value;
+    const updated = await updateIntegration(integrationId, { workspaceId });
 
-    if (!existingSettings) {
-      return NextResponse.json({ error: 'Settings not found' }, { status: 400 });
+    if (!updated) {
+      return NextResponse.json({ error: 'Integration not found' }, { status: 404 });
     }
-
-    const settings = JSON.parse(existingSettings);
-
-    const updatedSettings = {
-      ...settings,
-      asana: {
-        ...settings.asana,
-        workspaceId,
-      },
-    };
-
-    cookieStore.set('planner-settings', JSON.stringify(updatedSettings), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 365,
-    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

@@ -11,20 +11,22 @@ import {
   ExternalLink,
   Loader2,
   Trash2,
+  Plus,
+  RefreshCw,
 } from 'lucide-react';
 
+interface IntegrationInfo {
+  id: string;
+  name: string;
+  enabled: boolean;
+  connected: boolean;
+  createdAt: string;
+  workspaceId?: string;
+}
+
 interface SettingsState {
-  googleCalendar: {
-    enabled: boolean;
-    connected: boolean;
-    hasCredentials: boolean;
-  };
-  asana: {
-    enabled: boolean;
-    connected: boolean;
-    hasCredentials: boolean;
-    workspaceId?: string;
-  };
+  googleIntegrations: IntegrationInfo[];
+  asanaIntegrations: IntegrationInfo[];
 }
 
 function SettingsContent() {
@@ -34,11 +36,15 @@ function SettingsContent() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Google Calendar form
+  const [showGoogleForm, setShowGoogleForm] = useState(false);
+  const [googleName, setGoogleName] = useState('');
   const [googleClientId, setGoogleClientId] = useState('');
   const [googleClientSecret, setGoogleClientSecret] = useState('');
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
 
   // Asana form
+  const [showAsanaForm, setShowAsanaForm] = useState(false);
+  const [asanaName, setAsanaName] = useState('');
   const [asanaClientId, setAsanaClientId] = useState('');
   const [asanaClientSecret, setAsanaClientSecret] = useState('');
   const [isAsanaLoading, setIsAsanaLoading] = useState(false);
@@ -60,6 +66,9 @@ function SettingsContent() {
         google_auth_denied: 'Google Calendar authorization was denied.',
         asana_auth_denied: 'Asana authorization was denied.',
         no_code: 'Authorization code was not received.',
+        no_state: 'State parameter was missing.',
+        no_integration_id: 'Integration ID was missing.',
+        integration_not_found: 'Integration not found.',
         token_exchange_failed: 'Failed to complete Google authorization.',
         asana_token_exchange_failed: 'Failed to complete Asana authorization.',
         no_settings: 'Settings not found. Please try again.',
@@ -94,6 +103,7 @@ function SettingsContent() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          name: googleName,
           clientId: googleClientId,
           clientSecret: googleClientSecret,
         }),
@@ -109,11 +119,20 @@ function SettingsContent() {
     }
   };
 
-  const handleGoogleDisconnect = async () => {
+  const handleGoogleReconnect = async (integrationId: string) => {
     try {
-      await fetch('/api/settings?integration=google', { method: 'DELETE' });
-      setGoogleClientId('');
-      setGoogleClientSecret('');
+      const res = await fetch(`/api/auth/google?integrationId=${integrationId}`);
+      if (!res.ok) throw new Error('Failed to get auth URL');
+      const { authUrl } = await res.json();
+      window.location.href = authUrl;
+    } catch (error) {
+      setMessage({ type: 'error', text: 'Failed to reconnect Google Calendar.' });
+    }
+  };
+
+  const handleGoogleDisconnect = async (integrationId: string) => {
+    try {
+      await fetch(`/api/settings?integrationId=${integrationId}`, { method: 'DELETE' });
       fetchSettings();
       setMessage({ type: 'success', text: 'Google Calendar disconnected.' });
     } catch (error) {
@@ -131,6 +150,7 @@ function SettingsContent() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          name: asanaName,
           clientId: asanaClientId,
           clientSecret: asanaClientSecret,
         }),
@@ -152,15 +172,37 @@ function SettingsContent() {
     }
   };
 
-  const handleAsanaDisconnect = async () => {
+  const handleAsanaReconnect = async (integrationId: string) => {
     try {
-      await fetch('/api/settings?integration=asana', { method: 'DELETE' });
-      setAsanaClientId('');
-      setAsanaClientSecret('');
+      const res = await fetch(`/api/auth/asana?integrationId=${integrationId}`);
+      if (!res.ok) throw new Error('Failed to get auth URL');
+      const { authUrl } = await res.json();
+      window.location.href = authUrl;
+    } catch (error) {
+      setMessage({ type: 'error', text: 'Failed to reconnect Asana.' });
+    }
+  };
+
+  const handleAsanaDisconnect = async (integrationId: string) => {
+    try {
+      await fetch(`/api/settings?integrationId=${integrationId}`, { method: 'DELETE' });
       fetchSettings();
       setMessage({ type: 'success', text: 'Asana disconnected.' });
     } catch (error) {
       setMessage({ type: 'error', text: 'Failed to disconnect Asana.' });
+    }
+  };
+
+  const toggleIntegration = async (integrationId: string, enabled: boolean) => {
+    try {
+      await fetch('/api/integrations', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: integrationId, enabled }),
+      });
+      fetchSettings();
+    } catch (error) {
+      setMessage({ type: 'error', text: 'Failed to update integration.' });
     }
   };
 
@@ -206,7 +248,7 @@ function SettingsContent() {
           </div>
         )}
 
-        {/* Google Calendar */}
+        {/* Google Calendar Integrations */}
         <section className="bg-white rounded-lg border shadow-sm overflow-hidden">
           <div className="p-4 border-b bg-gray-50">
             <div className="flex items-center justify-between">
@@ -217,94 +259,163 @@ function SettingsContent() {
                 <div>
                   <h2 className="font-semibold text-gray-900">Google Calendar</h2>
                   <p className="text-sm text-gray-500">
-                    Sync your Google Calendar events
+                    {settings?.googleIntegrations.length || 0} integration{settings?.googleIntegrations.length !== 1 ? 's' : ''}
                   </p>
                 </div>
               </div>
-              {settings?.googleCalendar.connected && (
-                <span className="flex items-center gap-1.5 text-sm text-green-600 font-medium">
-                  <CheckCircle className="w-4 h-4" />
-                  Connected
-                </span>
-              )}
+              <button
+                onClick={() => setShowGoogleForm(!showGoogleForm)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Add
+              </button>
             </div>
           </div>
 
-          <div className="p-4">
-            {settings?.googleCalendar.connected ? (
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-gray-600">
-                  Your Google Calendar is connected and syncing events.
-                </p>
-                <button
-                  onClick={handleGoogleDisconnect}
-                  className="flex items-center gap-2 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Disconnect
-                </button>
-              </div>
-            ) : (
-              <form onSubmit={handleGoogleConnect} className="space-y-4">
-                <p className="text-sm text-gray-600 mb-4">
-                  To connect Google Calendar, create OAuth credentials in the{' '}
-                  <a
-                    href="https://console.cloud.google.com/apis/credentials"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 hover:underline inline-flex items-center gap-1"
-                  >
-                    Google Cloud Console
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                </p>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Client ID
-                  </label>
-                  <input
-                    type="text"
-                    value={googleClientId}
-                    onChange={(e) => setGoogleClientId(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                    placeholder="your-client-id.apps.googleusercontent.com"
-                  />
+          <div className="divide-y">
+            {/* Existing integrations */}
+            {settings?.googleIntegrations.map((integration) => (
+              <div key={integration.id} className="p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className={`w-2 h-2 rounded-full ${integration.connected ? 'bg-green-500' : 'bg-gray-300'}`} />
+                  <div>
+                    <p className="font-medium text-gray-900">{integration.name}</p>
+                    <p className="text-xs text-gray-500">
+                      {integration.connected ? 'Connected' : 'Not connected'}
+                    </p>
+                  </div>
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Client Secret
-                  </label>
-                  <input
-                    type="password"
-                    value={googleClientSecret}
-                    onChange={(e) => setGoogleClientSecret(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                    placeholder="Your client secret"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={!googleClientId || !googleClientSecret || isGoogleLoading}
-                  className="w-full py-2 px-4 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {isGoogleLoading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Connecting...
-                    </>
-                  ) : (
-                    'Connect Google Calendar'
+                <div className="flex items-center gap-2">
+                  {integration.connected && (
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={integration.enabled}
+                        onChange={(e) => toggleIntegration(integration.id, e.target.checked)}
+                        className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-sm text-gray-600">Enabled</span>
+                    </label>
                   )}
-                </button>
-              </form>
+                  {!integration.connected && (
+                    <button
+                      onClick={() => handleGoogleReconnect(integration.id)}
+                      className="flex items-center gap-1.5 px-2 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      Reconnect
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleGoogleDisconnect(integration.id)}
+                    className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors"
+                    title="Remove"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {/* Add new form */}
+            {showGoogleForm && (
+              <div className="p-4 bg-gray-50">
+                <form onSubmit={handleGoogleConnect} className="space-y-4">
+                  <p className="text-sm text-gray-600">
+                    Create OAuth credentials in the{' '}
+                    <a
+                      href="https://console.cloud.google.com/apis/credentials"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline inline-flex items-center gap-1"
+                    >
+                      Google Cloud Console
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </p>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Name
+                    </label>
+                    <input
+                      type="text"
+                      value={googleName}
+                      onChange={(e) => setGoogleName(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                      placeholder="e.g., Work Google, Personal"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Client ID
+                    </label>
+                    <input
+                      type="text"
+                      value={googleClientId}
+                      onChange={(e) => setGoogleClientId(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                      placeholder="your-client-id.apps.googleusercontent.com"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Client Secret
+                    </label>
+                    <input
+                      type="password"
+                      value={googleClientSecret}
+                      onChange={(e) => setGoogleClientSecret(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                      placeholder="Your client secret"
+                    />
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="submit"
+                      disabled={!googleName || !googleClientId || !googleClientSecret || isGoogleLoading}
+                      className="flex-1 py-2 px-4 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                      {isGoogleLoading ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Connecting...
+                        </>
+                      ) : (
+                        'Connect'
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowGoogleForm(false);
+                        setGoogleName('');
+                        setGoogleClientId('');
+                        setGoogleClientSecret('');
+                      }}
+                      className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* Empty state */}
+            {!showGoogleForm && settings?.googleIntegrations.length === 0 && (
+              <div className="p-4 text-center text-gray-500 text-sm">
+                No Google Calendar integrations. Click "Add" to connect one.
+              </div>
             )}
           </div>
         </section>
 
-        {/* Asana */}
+        {/* Asana Integrations */}
         <section className="bg-white rounded-lg border shadow-sm overflow-hidden">
           <div className="p-4 border-b bg-gray-50">
             <div className="flex items-center justify-between">
@@ -317,96 +428,171 @@ function SettingsContent() {
                 <div>
                   <h2 className="font-semibold text-gray-900">Asana</h2>
                   <p className="text-sm text-gray-500">
-                    Sync your Asana tasks
+                    {settings?.asanaIntegrations.length || 0} integration{settings?.asanaIntegrations.length !== 1 ? 's' : ''}
                   </p>
                 </div>
               </div>
-              {settings?.asana.connected && (
-                <span className="flex items-center gap-1.5 text-sm text-green-600 font-medium">
-                  <CheckCircle className="w-4 h-4" />
-                  Connected
-                </span>
-              )}
+              <button
+                onClick={() => setShowAsanaForm(!showAsanaForm)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-orange-600 hover:bg-orange-50 rounded-lg transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Add
+              </button>
             </div>
           </div>
 
-          <div className="p-4">
-            {settings?.asana.connected ? (
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-gray-600">
-                  Your Asana account is connected and syncing tasks.
-                </p>
-                <button
-                  onClick={handleAsanaDisconnect}
-                  className="flex items-center gap-2 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Disconnect
-                </button>
-              </div>
-            ) : (
-              <form onSubmit={handleAsanaConnect} className="space-y-4">
-                <p className="text-sm text-gray-600 mb-4">
-                  To connect Asana, create an app in the{' '}
-                  <a
-                    href="https://app.asana.com/0/my-apps"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 hover:underline inline-flex items-center gap-1"
-                  >
-                    Asana Developer Console
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                </p>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Client ID
-                  </label>
-                  <input
-                    type="text"
-                    value={asanaClientId}
-                    onChange={(e) => setAsanaClientId(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                    placeholder="Your Asana Client ID"
-                  />
+          <div className="divide-y">
+            {/* Existing integrations */}
+            {settings?.asanaIntegrations.map((integration) => (
+              <div key={integration.id} className="p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className={`w-2 h-2 rounded-full ${integration.connected ? 'bg-green-500' : 'bg-gray-300'}`} />
+                  <div>
+                    <p className="font-medium text-gray-900">{integration.name}</p>
+                    <p className="text-xs text-gray-500">
+                      {integration.connected ? 'Connected' : 'Not connected'}
+                    </p>
+                  </div>
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Client Secret
-                  </label>
-                  <input
-                    type="password"
-                    value={asanaClientSecret}
-                    onChange={(e) => setAsanaClientSecret(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                    placeholder="Your Asana Client Secret"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={!asanaClientId || !asanaClientSecret || isAsanaLoading}
-                  className="w-full py-2 px-4 bg-orange-600 text-white rounded-lg font-medium hover:bg-orange-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {isAsanaLoading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Connecting...
-                    </>
-                  ) : (
-                    'Connect Asana'
+                <div className="flex items-center gap-2">
+                  {integration.connected && (
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={integration.enabled}
+                        onChange={(e) => toggleIntegration(integration.id, e.target.checked)}
+                        className="w-4 h-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
+                      />
+                      <span className="text-sm text-gray-600">Enabled</span>
+                    </label>
                   )}
-                </button>
-              </form>
+                  {!integration.connected && (
+                    <button
+                      onClick={() => handleAsanaReconnect(integration.id)}
+                      className="flex items-center gap-1.5 px-2 py-1 text-sm text-orange-600 hover:bg-orange-50 rounded transition-colors"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      Reconnect
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleAsanaDisconnect(integration.id)}
+                    className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors"
+                    title="Remove"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {/* Add new form */}
+            {showAsanaForm && (
+              <div className="p-4 bg-gray-50">
+                <form onSubmit={handleAsanaConnect} className="space-y-4">
+                  <p className="text-sm text-gray-600">
+                    Create an app in the{' '}
+                    <a
+                      href="https://app.asana.com/0/my-apps"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline inline-flex items-center gap-1"
+                    >
+                      Asana Developer Console
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </p>
+
+                  {settings && settings.asanaIntegrations.length > 0 && (
+                    <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      Tip: To connect a different Asana account, log out of Asana first or use an incognito window.
+                    </p>
+                  )}
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Name
+                    </label>
+                    <input
+                      type="text"
+                      value={asanaName}
+                      onChange={(e) => setAsanaName(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                      placeholder="e.g., Work Asana, Personal"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Client ID
+                    </label>
+                    <input
+                      type="text"
+                      value={asanaClientId}
+                      onChange={(e) => setAsanaClientId(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                      placeholder="Your Asana Client ID"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Client Secret
+                    </label>
+                    <input
+                      type="password"
+                      value={asanaClientSecret}
+                      onChange={(e) => setAsanaClientSecret(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                      placeholder="Your Asana Client Secret"
+                    />
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="submit"
+                      disabled={!asanaName || !asanaClientId || !asanaClientSecret || isAsanaLoading}
+                      className="flex-1 py-2 px-4 bg-orange-600 text-white rounded-lg font-medium hover:bg-orange-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                      {isAsanaLoading ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Connecting...
+                        </>
+                      ) : (
+                        'Connect'
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAsanaForm(false);
+                        setAsanaName('');
+                        setAsanaClientId('');
+                        setAsanaClientSecret('');
+                      }}
+                      className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* Empty state */}
+            {!showAsanaForm && settings?.asanaIntegrations.length === 0 && (
+              <div className="p-4 text-center text-gray-500 text-sm">
+                No Asana integrations. Click "Add" to connect one.
+              </div>
             )}
           </div>
         </section>
 
         {/* About */}
         <section className="bg-white rounded-lg border shadow-sm p-4">
-          <h2 className="font-semibold text-gray-900 mb-2">About Daily Planner</h2>
+          <h2 className="font-semibold text-gray-900 mb-2">About Dave's Daily Planner</h2>
           <p className="text-sm text-gray-600">
             A unified daily planner that brings together your Google Calendar events,
             Asana tasks, and ad-hoc tasks in one beautiful interface.

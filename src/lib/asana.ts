@@ -16,15 +16,19 @@ export interface AsanaWorkspace {
 }
 
 // OAuth functions
-export function getAsanaAuthUrl(clientId: string, redirectUri: string): string {
+export function getAsanaAuthUrl(clientId: string, redirectUri: string, state?: string): string {
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: 'openid profile email workspaces:read users:read tasks:read',
+    scope: 'openid profile email workspaces:read users:read tasks:read custom_fields:read',
   });
+  if (state) {
+    params.set('state', state);
+  }
   return `${ASANA_AUTH_BASE}?${params.toString()}`;
 }
+
 
 export async function getAsanaTokensFromCode(
   code: string,
@@ -148,7 +152,7 @@ export async function getMyTasks(
 
   // Get tasks from the task list
   const tasksResponse = await fetch(
-    `${ASANA_API_BASE}/user_task_lists/${taskListData.data.gid}/tasks?opt_fields=name,notes,due_on,due_at,completed`,
+    `${ASANA_API_BASE}/user_task_lists/${taskListData.data.gid}/tasks?opt_fields=name,notes,due_on,due_at,completed,assignee.name`,
     {
       headers: {
         'Authorization': `Bearer ${accessToken}`,
@@ -162,11 +166,62 @@ export async function getMyTasks(
     throw new Error(`Failed to fetch tasks: ${tasksResponse.status} - ${errorBody.substring(0, 200)}`);
   }
 
-  const tasksData: AsanaApiResponse<AsanaTask[]> = await tasksResponse.json();
-  return tasksData.data.map(task => ({
-    ...task,
-    id: task.gid,
+  const tasksData = await tasksResponse.json();
+  // Map snake_case API response to camelCase
+  return tasksData.data.map((task: Record<string, unknown>) => ({
+    id: task.gid as string,
+    gid: task.gid as string,
+    name: task.name as string,
+    notes: task.notes as string | undefined,
+    dueOn: task.due_on as string | undefined,
+    dueAt: task.due_at as string | undefined,
+    completed: task.completed as boolean,
+    assignee: task.assignee as { gid: string; name: string } | undefined,
   }));
+}
+
+export async function getTaskByName(
+  accessToken: string,
+  workspaceId: string,
+  taskName: string
+): Promise<Record<string, unknown> | null> {
+  const allTasks = await getMyTasks(accessToken, workspaceId);
+  const task = allTasks.find(t => t.name.toLowerCase().includes(taskName.toLowerCase()));
+
+  if (!task) return null;
+
+  // Fetch full task details with all available fields
+  const response = await fetch(
+    `${ASANA_API_BASE}/tasks/${task.gid}`,
+    {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const data = await response.json();
+  return data.data;
+}
+
+export async function getIncompleteTasks(
+  accessToken: string,
+  workspaceId: string
+): Promise<AsanaTask[]> {
+  const allTasks = await getMyTasks(accessToken, workspaceId);
+  return allTasks
+    .filter(task => !task.completed)
+    .sort((a, b) => {
+      // Tasks with no due date go to the end
+      if (!a.dueOn && !b.dueOn) return 0;
+      if (!a.dueOn) return 1;
+      if (!b.dueOn) return -1;
+      return a.dueOn.localeCompare(b.dueOn);
+    });
 }
 
 export async function getTasksForDate(
@@ -213,6 +268,8 @@ export function asanaTaskToCalendarEvent(task: AsanaTask): CalendarEvent {
     source: 'asana',
     color: '#f06a6a',
     completed: task.completed,
+    assignee: task.assignee?.name,
+    dueOn: task.dueOn,
   };
 }
 

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Daily Planner",
+  title: "Dave's Daily Planner",
   description: "Plan your day with Google Calendar, Asana, and ad-hoc tasks",
 };
 

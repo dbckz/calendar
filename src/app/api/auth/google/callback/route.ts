@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getTokensFromCode } from '@/lib/google-calendar';
-import { cookies } from 'next/headers';
+import { getIntegrationById, updateIntegration } from '@/lib/integration-storage';
+import { GoogleIntegration } from '@/types';
 
 function getRedirectUri(request: NextRequest): string {
   const host = request.headers.get('host') || 'localhost:3000';
@@ -12,6 +13,7 @@ export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const code = searchParams.get('code');
   const error = searchParams.get('error');
+  const state = searchParams.get('state');
 
   if (error) {
     return NextResponse.redirect(new URL('/settings?error=google_auth_denied', request.url));
@@ -21,38 +23,45 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL('/settings?error=no_code', request.url));
   }
 
-  const cookieStore = await cookies();
-  const settingsStr = cookieStore.get('planner-settings')?.value;
-
-  if (!settingsStr) {
-    return NextResponse.redirect(new URL('/settings?error=no_settings', request.url));
+  if (!state) {
+    return NextResponse.redirect(new URL('/settings?error=no_state', request.url));
   }
 
   try {
-    const settings = JSON.parse(settingsStr);
-    const { clientId, clientSecret } = settings.googleCalendar;
+    // Parse state to get integration ID
+    const stateData = JSON.parse(decodeURIComponent(state));
+    const { integrationId } = stateData;
 
+    if (!integrationId) {
+      return NextResponse.redirect(new URL('/settings?error=no_integration_id', request.url));
+    }
+
+    // Get the integration
+    const integration = await getIntegrationById(integrationId);
+
+    if (!integration || integration.type !== 'google') {
+      return NextResponse.redirect(new URL('/settings?error=integration_not_found', request.url));
+    }
+
+    const googleIntegration = integration as GoogleIntegration;
     const redirectUri = getRedirectUri(request);
-    const credentials = await getTokensFromCode(code, clientId, clientSecret, redirectUri);
 
-    const updatedSettings = {
-      ...settings,
-      googleCalendar: {
-        ...settings.googleCalendar,
-        credentials,
-      },
-    };
+    // Exchange code for tokens
+    const credentials = await getTokensFromCode(
+      code,
+      googleIntegration.clientId,
+      googleIntegration.clientSecret,
+      redirectUri
+    );
 
-    cookieStore.set('planner-settings', JSON.stringify(updatedSettings), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 365,
-    });
+    // Update integration with credentials
+    await updateIntegration(integrationId, { credentials });
 
-    return NextResponse.redirect(new URL('/settings?success=google_connected', request.url));
-  } catch (error) {
-    console.error('Error exchanging code for tokens:', error);
+    return NextResponse.redirect(
+      new URL(`/settings?success=google_connected&id=${integrationId}`, request.url)
+    );
+  } catch (err) {
+    console.error('Error exchanging code for tokens:', err);
     return NextResponse.redirect(new URL('/settings?error=token_exchange_failed', request.url));
   }
 }

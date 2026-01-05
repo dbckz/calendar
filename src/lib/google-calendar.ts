@@ -3,7 +3,7 @@
 import { google } from 'googleapis';
 import { CalendarEvent, GoogleCalendarCredentials } from '@/types';
 
-const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
+const SCOPES = ['https://www.googleapis.com/auth/calendar.events'];
 
 export function createOAuth2Client(clientId: string, clientSecret: string, redirectUri?: string) {
   return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
@@ -99,6 +99,123 @@ export async function getCalendarEvents(
       location: event.location || undefined,
       allDay: isAllDay,
     };
+  });
+}
+
+export async function updateCalendarEvent(
+  credentials: GoogleCalendarCredentials,
+  clientId: string,
+  clientSecret: string,
+  eventId: string,
+  startTime: Date,
+  endTime: Date
+): Promise<CalendarEvent> {
+  const oauth2Client = createOAuth2Client(clientId, clientSecret);
+  oauth2Client.setCredentials({
+    access_token: credentials.accessToken,
+    refresh_token: credentials.refreshToken,
+  });
+
+  const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+  // First get the existing event to preserve other fields
+  const existingEvent = await calendar.events.get({
+    calendarId: 'primary',
+    eventId: eventId,
+  });
+
+  const event = existingEvent.data;
+  const isAllDay = !!event.start?.date;
+
+  // Update the event times
+  const updatedEvent = await calendar.events.update({
+    calendarId: 'primary',
+    eventId: eventId,
+    requestBody: {
+      ...event,
+      start: isAllDay
+        ? { date: startTime.toISOString().split('T')[0] }
+        : { dateTime: startTime.toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+      end: isAllDay
+        ? { date: endTime.toISOString().split('T')[0] }
+        : { dateTime: endTime.toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+    },
+  });
+
+  return {
+    id: updatedEvent.data.id!,
+    title: updatedEvent.data.summary || 'Untitled Event',
+    description: updatedEvent.data.description || undefined,
+    startTime: new Date(updatedEvent.data.start?.dateTime || updatedEvent.data.start?.date || ''),
+    endTime: new Date(updatedEvent.data.end?.dateTime || updatedEvent.data.end?.date || ''),
+    source: 'google',
+    color: updatedEvent.data.colorId ? getGoogleColor(updatedEvent.data.colorId) : '#4285f4',
+    location: updatedEvent.data.location || undefined,
+    allDay: isAllDay,
+  };
+}
+
+export async function createCalendarEvent(
+  credentials: GoogleCalendarCredentials,
+  clientId: string,
+  clientSecret: string,
+  title: string,
+  startTime: Date,
+  endTime: Date,
+  description?: string
+): Promise<CalendarEvent> {
+  const oauth2Client = createOAuth2Client(clientId, clientSecret);
+  oauth2Client.setCredentials({
+    access_token: credentials.accessToken,
+    refresh_token: credentials.refreshToken,
+  });
+
+  const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+  const event = await calendar.events.insert({
+    calendarId: 'primary',
+    requestBody: {
+      summary: title,
+      description: description,
+      start: {
+        dateTime: startTime.toISOString(),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      },
+      end: {
+        dateTime: endTime.toISOString(),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      },
+    },
+  });
+
+  return {
+    id: event.data.id!,
+    title: event.data.summary || 'Untitled Event',
+    description: event.data.description || undefined,
+    startTime: new Date(event.data.start?.dateTime || ''),
+    endTime: new Date(event.data.end?.dateTime || ''),
+    source: 'google',
+    color: '#4285f4',
+  };
+}
+
+export async function deleteCalendarEvent(
+  credentials: GoogleCalendarCredentials,
+  clientId: string,
+  clientSecret: string,
+  eventId: string
+): Promise<void> {
+  const oauth2Client = createOAuth2Client(clientId, clientSecret);
+  oauth2Client.setCredentials({
+    access_token: credentials.accessToken,
+    refresh_token: credentials.refreshToken,
+  });
+
+  const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+  await calendar.events.delete({
+    calendarId: 'primary',
+    eventId: eventId,
   });
 }
 

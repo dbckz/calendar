@@ -1,9 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { X } from 'lucide-react';
-import { AdHocTask } from '@/types';
+import { X, ChevronDown } from 'lucide-react';
+import { AdHocTask, TaskType, TASK_TYPE_EMOJIS, TASK_TYPE_LABELS } from '@/types';
 import { format } from 'date-fns';
+
+const TASK_TYPES: TaskType[] = ['flight', 'train', 'car', 'walk', 'writing', 'reading', 'focus', 'email', 'batch', 'other'];
 
 interface AddTaskModalProps {
   isOpen: boolean;
@@ -17,18 +19,21 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate }: AddTaskMod
   const [description, setDescription] = useState('');
   const [dueDate, setDueDate] = useState(defaultDate ? format(defaultDate, 'yyyy-MM-dd') : '');
   const [dueTime, setDueTime] = useState('');
-  const [priority, setPriority] = useState<'low' | 'medium' | 'high'>('medium');
+  const [taskType, setTaskType] = useState<TaskType | ''>('');
+  const [showTypeDropdown, setShowTypeDropdown] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim() || !taskType) return;
 
+    const emoji = TASK_TYPE_EMOJIS[taskType];
     onAdd({
-      title: title.trim(),
+      title: `${emoji} ${title.trim()}`,
       description: description.trim() || undefined,
       dueDate: dueDate || undefined,
       dueTime: dueTime || undefined,
-      priority,
+      priority: 'medium',
+      taskType,
       completed: false,
     });
 
@@ -37,7 +42,7 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate }: AddTaskMod
     setDescription('');
     setDueDate(defaultDate ? format(defaultDate, 'yyyy-MM-dd') : '');
     setDueTime('');
-    setPriority('medium');
+    setTaskType('');
     onClose();
   };
 
@@ -57,6 +62,43 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate }: AddTaskMod
         </div>
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
+          {/* Task Type Dropdown */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Type *
+            </label>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowTypeDropdown(!showTypeDropdown)}
+                className="w-full flex items-center justify-between px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
+              >
+                <span className={taskType ? 'text-gray-900' : 'text-gray-400'}>
+                  {taskType ? `${TASK_TYPE_EMOJIS[taskType]} ${TASK_TYPE_LABELS[taskType]}` : 'Select type...'}
+                </span>
+                <ChevronDown className="w-4 h-4 text-gray-400" />
+              </button>
+              {showTypeDropdown && (
+                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                  {TASK_TYPES.map(type => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => {
+                        setTaskType(type);
+                        setShowTypeDropdown(false);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-blue-50 transition-colors"
+                    >
+                      <span>{TASK_TYPE_EMOJIS[type]}</span>
+                      <span>{TASK_TYPE_LABELS[type]}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
           <div>
             <label htmlFor="title" className="block text-sm font-medium text-gray-700 mb-1">
               Title *
@@ -114,30 +156,6 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate }: AddTaskMod
             </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Priority</label>
-            <div className="flex gap-2">
-              {(['low', 'medium', 'high'] as const).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => setPriority(p)}
-                  className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium capitalize transition-colors ${
-                    priority === p
-                      ? p === 'low'
-                        ? 'bg-green-100 text-green-700 border-2 border-green-500'
-                        : p === 'medium'
-                        ? 'bg-yellow-100 text-yellow-700 border-2 border-yellow-500'
-                        : 'bg-red-100 text-red-700 border-2 border-red-500'
-                      : 'bg-gray-100 text-gray-600 border-2 border-transparent hover:bg-gray-200'
-                  }`}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-          </div>
-
           <div className="flex gap-3 pt-2">
             <button
               type="button"
@@ -148,7 +166,7 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate }: AddTaskMod
             </button>
             <button
               type="submit"
-              disabled={!title.trim()}
+              disabled={!title.trim() || !taskType}
               className="flex-1 py-2 px-4 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Add Task

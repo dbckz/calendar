@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Calendar body -->
+  <rect x="2" y="6" width="28" height="24" rx="3" fill="#EC4899"/>
+  <!-- Calendar header -->
+  <rect x="2" y="6" width="28" height="8" rx="3" fill="#DB2777"/>
+  <rect x="2" y="11" width="28" height="3" fill="#DB2777"/>
+  <!-- Calendar rings -->
+  <rect x="8" y="3" width="3" height="6" rx="1.5" fill="#BE185D"/>
+  <rect x="21" y="3" width="3" height="6" rx="1.5" fill="#BE185D"/>
+  <!-- Calendar grid lines -->
+  <line x1="2" y1="18" x2="30" y2="18" stroke="#F9A8D4" stroke-width="0.5"/>
+  <line x1="2" y1="23" x2="30" y2="23" stroke="#F9A8D4" stroke-width="0.5"/>
+  <line x1="11" y1="14" x2="11" y2="30" stroke="#F9A8D4" stroke-width="0.5"/>
+  <line x1="21" y1="14" x2="21" y2="30" stroke="#F9A8D4" stroke-width="0.5"/>
+  <!-- Check mark -->
+  <path d="M10 21L14 25L22 17" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

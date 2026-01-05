@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthUrl } from '@/lib/google-calendar';
-import { cookies } from 'next/headers';
+import { google } from 'googleapis';
+import { getIntegrationById, addGoogleIntegration } from '@/lib/integration-storage';
+import { GoogleIntegration } from '@/types';
 
 function getRedirectUri(request: NextRequest): string {
   const host = request.headers.get('host') || 'localhost:3000';
@@ -8,27 +9,48 @@ function getRedirectUri(request: NextRequest): string {
   return `${protocol}://${host}/api/auth/google/callback`;
 }
 
-export async function GET(request: NextRequest) {
-  const cookieStore = await cookies();
-  const settingsStr = cookieStore.get('planner-settings')?.value;
+function getAuthUrlWithState(
+  clientId: string,
+  clientSecret: string,
+  redirectUri: string,
+  state: string
+): string {
+  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
-  if (!settingsStr) {
-    return NextResponse.json({ error: 'Settings not found' }, { status: 400 });
+  return oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    scope: ['https://www.googleapis.com/auth/calendar.events'],
+    prompt: 'consent',
+    state,
+  });
+}
+
+// GET - Generate auth URL for an existing integration
+export async function GET(request: NextRequest) {
+  const searchParams = request.nextUrl.searchParams;
+  const integrationId = searchParams.get('integrationId');
+
+  if (!integrationId) {
+    return NextResponse.json({ error: 'integrationId is required' }, { status: 400 });
   }
 
   try {
-    const settings = JSON.parse(settingsStr);
-    const { clientId, clientSecret } = settings.googleCalendar;
+    const integration = await getIntegrationById(integrationId);
 
-    if (!clientId || !clientSecret) {
-      return NextResponse.json(
-        { error: 'Google Calendar credentials not configured' },
-        { status: 400 }
-      );
+    if (!integration || integration.type !== 'google') {
+      return NextResponse.json({ error: 'Google integration not found' }, { status: 404 });
     }
 
+    const googleIntegration = integration as GoogleIntegration;
     const redirectUri = getRedirectUri(request);
-    const authUrl = getAuthUrl(clientId, clientSecret, redirectUri);
+    const state = encodeURIComponent(JSON.stringify({ integrationId }));
+    const authUrl = getAuthUrlWithState(
+      googleIntegration.clientId,
+      googleIntegration.clientSecret,
+      redirectUri,
+      state
+    );
+
     return NextResponse.json({ authUrl });
   } catch (error) {
     console.error('Error generating auth URL:', error);
@@ -36,43 +58,39 @@ export async function GET(request: NextRequest) {
   }
 }
 
+// POST - Create new integration and return auth URL
 export async function POST(request: NextRequest) {
-  const { clientId, clientSecret } = await request.json();
+  const { name, clientId, clientSecret } = await request.json();
 
-  if (!clientId || !clientSecret) {
+  if (!name || !clientId || !clientSecret) {
     return NextResponse.json(
-      { error: 'Client ID and Secret are required' },
+      { error: 'name, clientId, and clientSecret are required' },
       { status: 400 }
     );
   }
 
   try {
-    const cookieStore = await cookies();
-    const existingSettings = cookieStore.get('planner-settings')?.value;
-    const settings = existingSettings ? JSON.parse(existingSettings) : {};
-
-    const updatedSettings = {
-      ...settings,
-      googleCalendar: {
-        ...settings.googleCalendar,
-        enabled: true,
-        clientId,
-        clientSecret,
-      },
+    const id = crypto.randomUUID();
+    const integration: GoogleIntegration = {
+      id,
+      type: 'google',
+      name,
+      enabled: true,
+      clientId,
+      clientSecret,
+      createdAt: new Date().toISOString(),
     };
 
-    cookieStore.set('planner-settings', JSON.stringify(updatedSettings), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 365,
-    });
+    await addGoogleIntegration(integration);
 
+    // Generate auth URL with integration ID in state
     const redirectUri = getRedirectUri(request);
-    const authUrl = getAuthUrl(clientId, clientSecret, redirectUri);
-    return NextResponse.json({ authUrl });
+    const state = encodeURIComponent(JSON.stringify({ integrationId: id }));
+    const authUrl = getAuthUrlWithState(clientId, clientSecret, redirectUri, state);
+
+    return NextResponse.json({ authUrl, integrationId: id });
   } catch (error) {
-    console.error('Error saving credentials:', error);
-    return NextResponse.json({ error: 'Failed to save credentials' }, { status: 500 });
+    console.error('Error creating integration:', error);
+    return NextResponse.json({ error: 'Failed to create integration' }, { status: 500 });
   }
 }
