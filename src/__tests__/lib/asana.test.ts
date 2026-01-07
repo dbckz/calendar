@@ -29,12 +29,29 @@ describe('Asana Utilities', () => {
       expect(url).not.toContain('state=');
     });
 
-    it('includes required scopes', () => {
+    it('includes all required scopes for API endpoints', () => {
       const url = getAsanaAuthUrl('client-123', 'http://localhost:3001/callback');
 
-      // Check that the URL includes required scopes
-      expect(url).toContain('workspaces%3Aread');
-      expect(url).toContain('tasks%3Aread');
+      // These scopes are required for the app's functionality:
+      // - workspaces:read - fetch user's workspaces
+      // - users:read - get current user info for task lists
+      // - tasks:read - read tasks from user's task list
+      // - tasks:write - mark tasks complete, add comments
+      // - projects:read - fetch projects for filtering
+      // - custom_fields:read - read custom field values on tasks
+      const requiredScopes = [
+        'workspaces:read',
+        'users:read',
+        'tasks:read',
+        'tasks:write',
+        'projects:read',
+        'custom_fields:read',
+      ];
+
+      requiredScopes.forEach(scope => {
+        const encodedScope = encodeURIComponent(scope);
+        expect(url).toContain(encodedScope);
+      });
     });
   });
 

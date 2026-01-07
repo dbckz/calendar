@@ -21,7 +21,7 @@ export function getAsanaAuthUrl(clientId: string, redirectUri: string, state?: s
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: 'openid profile email workspaces:read users:read tasks:read custom_fields:read',
+    scope: 'openid profile email workspaces:read users:read tasks:read tasks:write projects:read custom_fields:read',
   });
   if (state) {
     params.set('state', state);
