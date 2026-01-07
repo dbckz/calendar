@@ -2,7 +2,7 @@
 
 ## Core Navigation & Layout
 
-- [ ] App loads successfully at localhost:3001
+- [ ] App loads successfully at localhost (port shown in terminal)
 - [ ] Header displays current date
 - [ ] Yesterday/Today/Tomorrow navigation buttons work
 - [ ] Refresh button reloads data

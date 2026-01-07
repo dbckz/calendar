@@ -4,7 +4,10 @@ import { getIntegrationById, updateIntegration } from '@/lib/integration-storage
 import { GoogleIntegration } from '@/types';
 
 function getRedirectUri(request: NextRequest): string {
-  const host = request.headers.get('host') || 'localhost:3000';
+  const host = request.headers.get('host');
+  if (!host) {
+    throw new Error('Missing host header');
+  }
   const protocol = request.headers.get('x-forwarded-proto') || 'http';
   return `${protocol}://${host}/api/auth/google/callback`;
 }
