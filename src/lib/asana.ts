@@ -248,15 +248,15 @@ export function asanaTaskToCalendarEvent(task: AsanaTask): CalendarEvent {
 
   if (task.dueAt) {
     startTime = new Date(task.dueAt);
-    endTime = new Date(startTime.getTime() + 60 * 60 * 1000); // 1 hour duration
+    endTime = new Date(startTime.getTime() + 30 * 60 * 1000); // 30 min duration
   } else if (task.dueOn) {
     startTime = new Date(task.dueOn);
     startTime.setHours(9, 0, 0, 0); // Default to 9 AM
-    endTime = new Date(startTime.getTime() + 60 * 60 * 1000);
+    endTime = new Date(startTime.getTime() + 30 * 60 * 1000);
   } else {
     startTime = new Date();
     startTime.setHours(9, 0, 0, 0);
-    endTime = new Date(startTime.getTime() + 60 * 60 * 1000);
+    endTime = new Date(startTime.getTime() + 30 * 60 * 1000);
   }
 
   return {
@@ -292,4 +292,58 @@ export async function completeTask(
   if (!response.ok) {
     throw new Error(`Failed to update task: ${response.statusText}`);
   }
+}
+
+export async function addTaskComment(
+  accessToken: string,
+  taskGid: string,
+  text: string
+): Promise<void> {
+  const response = await fetch(`${ASANA_API_BASE}/tasks/${taskGid}/stories`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      data: { text },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Failed to add comment: ${response.status} - ${errorBody}`);
+  }
+}
+
+export function getAsanaTaskUrl(taskGid: string): string {
+  return `https://app.asana.com/0/0/${taskGid}`;
+}
+
+export interface AsanaProject {
+  gid: string;
+  name: string;
+}
+
+export async function getProjects(
+  accessToken: string,
+  workspaceId: string
+): Promise<AsanaProject[]> {
+  const response = await fetch(
+    `${ASANA_API_BASE}/projects?workspace=${workspaceId}&opt_fields=name`,
+    {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    console.error('Asana projects error:', response.status, errorBody);
+    throw new Error(`Failed to fetch projects: ${response.status}`);
+  }
+
+  const data: AsanaApiResponse<AsanaProject[]> = await response.json();
+  return data.data;
 }

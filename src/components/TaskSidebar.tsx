@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, memo, useCallback } from 'react';
-import { AdHocTask, DragItem, CalendarEvent, TaskType, TASK_TYPE_EMOJIS, TASK_TYPE_LABELS } from '@/types';
-import { Plus, GripVertical, Calendar, X, ChevronDown } from 'lucide-react';
-import { format } from 'date-fns';
+import { useState, useEffect, memo, useCallback, useMemo } from 'react';
+import { DragItem, CalendarEvent, TaskType, TaskTypeSelection, TaskTemplate, CustomTaskType, BuiltInTaskType, BUILT_IN_TASK_TYPE_EMOJIS, BUILT_IN_TASK_TYPE_LABELS, isCustomTaskType, getCustomTaskTypeId } from '@/types';
+import { Plus, GripVertical, Calendar, X, ChevronDown, Star, PlusCircle } from 'lucide-react';
+import { getTaskTemplates, addTaskTemplate, deleteTaskTemplate, getCustomTaskTypes, addCustomTaskType } from '@/lib/storage';
+import { EmojiPicker } from './EmojiPicker';
 
 interface ColorScheme {
   headerBg: string;
@@ -14,123 +15,131 @@ interface ColorScheme {
 }
 
 interface TaskSidebarProps {
-  tasks: AdHocTask[];
-  selectedDate: Date;
-  onAddTask: (task: {
-    title: string;
-    description?: string;
-    dueDate?: string;
-    dueTime?: string;
-    priority: 'low' | 'medium' | 'high';
-    taskType: TaskType;
-    completed: boolean;
-  }) => void;
-  onDeleteTask?: (taskId: string) => void;
-  scheduledTaskIds?: Set<string>;
-  onUnschedule?: (taskId: string) => void;
   allDayEvents?: CalendarEvent[];
   colorScheme?: ColorScheme;
 }
 
-const TASK_TYPES: TaskType[] = ['flight', 'train', 'car', 'walk', 'writing', 'reading', 'focus', 'email', 'batch', 'other'];
+const BUILT_IN_TASK_TYPES: BuiltInTaskType[] = ['flight', 'train', 'car', 'walk', 'writing', 'reading', 'focus', 'email', 'batch'];
 
-export function TaskSidebar({ tasks, selectedDate, onAddTask, onDeleteTask, scheduledTaskIds, onUnschedule, allDayEvents = [], colorScheme }: TaskSidebarProps) {
+export function TaskSidebar({ allDayEvents = [], colorScheme }: TaskSidebarProps) {
   const [title, setTitle] = useState('');
-  const [taskType, setTaskType] = useState<TaskType | ''>('');
+  const [taskType, setTaskType] = useState<TaskTypeSelection>(null);
+  const [duration, setDuration] = useState(30); // default 30 min for templates
   const [isAdding, setIsAdding] = useState(false);
-  const [isDragOver, setIsDragOver] = useState(false);
   const [showTypeDropdown, setShowTypeDropdown] = useState(false);
+  const [templates, setTemplates] = useState<TaskTemplate[]>([]);
+  const [customTypes, setCustomTypes] = useState<CustomTaskType[]>([]);
+  const [isCreatingCustomType, setIsCreatingCustomType] = useState(false);
+  const [customTypeLabel, setCustomTypeLabel] = useState('');
+  const [customTypeEmoji, setCustomTypeEmoji] = useState('');
+
+  // Load templates and custom types on mount
+  useEffect(() => {
+    setTemplates(getTaskTemplates());
+    setCustomTypes(getCustomTaskTypes());
+  }, []);
+
+  // Helper to get emoji for any task type
+  const getTaskTypeEmoji = useCallback((type: TaskType): string => {
+    if (isCustomTaskType(type)) {
+      const customId = getCustomTaskTypeId(type);
+      const custom = customTypes.find(c => c.id === customId);
+      return custom?.emoji || '📌';
+    }
+    return BUILT_IN_TASK_TYPE_EMOJIS[type as BuiltInTaskType];
+  }, [customTypes]);
+
+  // Helper to get label for any task type
+  const getTaskTypeLabel = useCallback((type: TaskType): string => {
+    if (isCustomTaskType(type)) {
+      const customId = getCustomTaskTypeId(type);
+      const custom = customTypes.find(c => c.id === customId);
+      return custom?.label || 'Custom';
+    }
+    return BUILT_IN_TASK_TYPE_LABELS[type as BuiltInTaskType];
+  }, [customTypes]);
+
+  // All task types including custom ones
+  const allTaskTypes = useMemo((): Array<{ type: TaskType; emoji: string; label: string }> => {
+    const builtIn = BUILT_IN_TASK_TYPES.map(type => ({
+      type: type as TaskType,
+      emoji: BUILT_IN_TASK_TYPE_EMOJIS[type],
+      label: BUILT_IN_TASK_TYPE_LABELS[type],
+    }));
+    const custom = customTypes.map(c => ({
+      type: `custom:${c.id}` as TaskType,
+      emoji: c.emoji,
+      label: c.label,
+    }));
+    return [...builtIn, ...custom];
+  }, [customTypes]);
+
+  const handleCreateCustomType = useCallback(() => {
+    if (!customTypeLabel.trim() || !customTypeEmoji.trim()) return;
+
+    const newType = addCustomTaskType({
+      label: customTypeLabel.trim(),
+      emoji: customTypeEmoji.trim(),
+    });
+    setCustomTypes(prev => [...prev, newType]);
+    setTaskType(`custom:${newType.id}` as TaskType);
+    setCustomTypeLabel('');
+    setCustomTypeEmoji('');
+    setIsCreatingCustomType(false);
+    setShowTypeDropdown(false);
+  }, [customTypeLabel, customTypeEmoji]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !taskType) return;
 
-    const emoji = TASK_TYPE_EMOJIS[taskType];
-    onAddTask({
+    const emoji = getTaskTypeEmoji(taskType);
+
+    // Add as template
+    const newTemplate = addTaskTemplate({
       title: `${emoji} ${title.trim()}`,
       priority: 'medium',
       taskType,
-      completed: false,
+      duration,
     });
+    setTemplates(prev => [...prev, newTemplate]);
 
     setTitle('');
-    setTaskType('');
+    setTaskType(null);
+    setDuration(30);
     setIsAdding(false);
   };
 
-  const handleDragStart = useCallback((e: React.DragEvent, task: AdHocTask) => {
-    const dragItem: DragItem = {
-      type: 'adhoc-task',
-      id: task.id,
-      source: 'adhoc',
-      title: task.title,
-      duration: task.duration || 60, // Use task duration or default 1 hour
-    };
-    e.dataTransfer.setData('application/json', JSON.stringify(dragItem));
-    e.dataTransfer.effectAllowed = 'move';
+  const handleDeleteTemplate = useCallback((templateId: string) => {
+    deleteTaskTemplate(templateId);
+    setTemplates(prev => prev.filter(t => t.id !== templateId));
   }, []);
 
-  // Filter tasks that don't have a scheduled time (unscheduled tasks)
-  const unscheduledTasks = tasks.filter(task => !task.dueTime);
-  // Tasks scheduled for the selected date
-  const scheduledTasks = tasks.filter(
-    task => task.dueDate === format(selectedDate, 'yyyy-MM-dd') && task.dueTime
-  );
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    // Only set to false if leaving the container entirely
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX;
-    const y = e.clientY;
-    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-      setIsDragOver(false);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(false);
-
-    try {
-      const data = e.dataTransfer.getData('application/json');
-      if (!data) return;
-
-      const dragItem: DragItem = JSON.parse(data);
-      console.log('[TaskSidebar] Drop received:', dragItem);
-
-      // Only unschedule adhoc tasks dropped here
-      if (dragItem.source === 'adhoc' && onUnschedule) {
-        console.log('[TaskSidebar] Unscheduling task:', dragItem.id);
-        onUnschedule(dragItem.id);
-      }
-    } catch (err) {
-      console.error('Failed to parse drag data:', err);
-    }
-  };
+  const handleTemplateDragStart = useCallback((e: React.DragEvent, template: TaskTemplate) => {
+    const dragItem: DragItem = {
+      type: 'task-template',
+      id: template.id,
+      source: 'template',
+      title: template.title,
+      duration: template.duration,
+      taskType: template.taskType,
+      priority: template.priority,
+    };
+    e.dataTransfer.setData('application/json', JSON.stringify(dragItem));
+    e.dataTransfer.effectAllowed = 'copy'; // copy instead of move for templates
+  }, []);
 
   return (
-    <div
-      className={`bg-white border-l border-gray-200 h-full overflow-hidden flex flex-col transition-colors ${
-        isDragOver ? 'bg-purple-50' : ''
-      }`}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-    >
+    <div className="bg-white border-l border-gray-200 h-full overflow-hidden flex flex-col">
       <div className={`p-4 border-b border-gray-200 ${colorScheme?.sidebarHeaderBg || ''}`}>
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-purple-500" />
-          <h2 className={`font-semibold ${colorScheme?.sidebarHeaderText || 'text-gray-900'}`}>Ad-hoc Tasks</h2>
+          <Star className="w-4 h-4 text-amber-500" />
+          <h2 className={`font-semibold ${colorScheme?.sidebarHeaderText || 'text-gray-900'}`}>
+            Frequent Tasks
+          </h2>
         </div>
         <p className="text-sm mt-1 text-gray-500">
-          {unscheduledTasks.length} unscheduled
+          {templates.length} template{templates.length !== 1 ? 's' : ''}
         </p>
       </div>
 
@@ -142,30 +151,92 @@ export function TaskSidebar({ tasks, selectedDate, onAddTask, onDeleteTask, sche
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setShowTypeDropdown(!showTypeDropdown)}
-                className="w-full flex items-center justify-between px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none bg-white"
+                onClick={() => {
+                  setShowTypeDropdown(!showTypeDropdown);
+                  setIsCreatingCustomType(false);
+                }}
+                className="w-full flex items-center justify-between px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none bg-white"
               >
                 <span className={taskType ? 'text-gray-900' : 'text-gray-400'}>
-                  {taskType ? `${TASK_TYPE_EMOJIS[taskType]} ${TASK_TYPE_LABELS[taskType]}` : 'Select type...'}
+                  {taskType ? `${getTaskTypeEmoji(taskType)} ${getTaskTypeLabel(taskType)}` : 'Select type...'}
                 </span>
                 <ChevronDown className="w-4 h-4 text-gray-400" />
               </button>
               {showTypeDropdown && (
-                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                  {TASK_TYPES.map(type => (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => {
-                        setTaskType(type);
-                        setShowTypeDropdown(false);
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-purple-50 transition-colors"
-                    >
-                      <span>{TASK_TYPE_EMOJIS[type]}</span>
-                      <span>{TASK_TYPE_LABELS[type]}</span>
-                    </button>
-                  ))}
+                <div className={`absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-y-auto ${isCreatingCustomType ? 'max-h-96' : 'max-h-64'}`}>
+                  {isCreatingCustomType ? (
+                    <div className="p-3 space-y-3">
+                      <div className="flex gap-2 items-center">
+                        <div
+                          className={`w-10 h-10 flex items-center justify-center text-xl border-2 rounded-lg ${
+                            customTypeEmoji ? 'border-purple-400 bg-purple-50' : 'border-gray-300 bg-gray-50'
+                          }`}
+                        >
+                          {customTypeEmoji || '?'}
+                        </div>
+                        <input
+                          type="text"
+                          value={customTypeLabel}
+                          onChange={(e) => setCustomTypeLabel(e.target.value)}
+                          placeholder="Type name..."
+                          className="flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none"
+                          autoFocus
+                        />
+                      </div>
+                      <EmojiPicker
+                        onSelect={(emoji) => setCustomTypeEmoji(emoji)}
+                        selectedEmoji={customTypeEmoji}
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={handleCreateCustomType}
+                          disabled={!customTypeEmoji.trim() || !customTypeLabel.trim()}
+                          className="flex-1 px-2 py-1.5 text-xs bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Create
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsCreatingCustomType(false);
+                            setCustomTypeLabel('');
+                            setCustomTypeEmoji('');
+                          }}
+                          className="px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-100 rounded"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {allTaskTypes.map(({ type, emoji, label }) => (
+                        <button
+                          key={type}
+                          type="button"
+                          onClick={() => {
+                            setTaskType(type);
+                            setShowTypeDropdown(false);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-amber-50 transition-colors"
+                        >
+                          <span>{emoji}</span>
+                          <span>{label}</span>
+                        </button>
+                      ))}
+                      <div className="border-t border-gray-200 mt-1 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setIsCreatingCustomType(true)}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left text-amber-600 hover:bg-amber-50 transition-colors"
+                        >
+                          <PlusCircle className="w-4 h-4" />
+                          <span>Create custom type...</span>
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -173,14 +244,32 @@ export function TaskSidebar({ tasks, selectedDate, onAddTask, onDeleteTask, sche
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Task title..."
-              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none"
+              placeholder="Template name..."
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none"
             />
+            {/* Duration field */}
+            <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-600">Duration:</label>
+                <select
+                  value={duration}
+                  onChange={(e) => setDuration(Number(e.target.value))}
+                  className="flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none"
+                >
+                  <option value={15}>15 min</option>
+                  <option value={30}>30 min</option>
+                  <option value={45}>45 min</option>
+                  <option value={60}>1 hour</option>
+                  <option value={90}>1.5 hours</option>
+                  <option value={120}>2 hours</option>
+                  <option value={180}>3 hours</option>
+                  <option value={240}>4 hours</option>
+                </select>
+            </div>
             <div className="flex gap-2">
               <button
                 type="submit"
                 disabled={!title.trim() || !taskType}
-                className="flex-1 px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="flex-1 px-3 py-1.5 text-sm text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors bg-amber-600 hover:bg-amber-700"
               >
                 Add
               </button>
@@ -189,8 +278,12 @@ export function TaskSidebar({ tasks, selectedDate, onAddTask, onDeleteTask, sche
                 onClick={() => {
                   setIsAdding(false);
                   setTitle('');
-                  setTaskType('');
+                  setTaskType(null);
+                  setDuration(30);
                   setShowTypeDropdown(false);
+                  setIsCreatingCustomType(false);
+                  setCustomTypeLabel('');
+                  setCustomTypeEmoji('');
                 }}
                 className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
               >
@@ -201,53 +294,33 @@ export function TaskSidebar({ tasks, selectedDate, onAddTask, onDeleteTask, sche
         ) : (
           <button
             onClick={() => setIsAdding(true)}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-purple-600 border border-purple-200 rounded-lg hover:bg-purple-50 transition-colors"
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors text-amber-600 border border-amber-200 hover:bg-amber-50"
           >
             <Plus className="w-4 h-4" />
-            Create Task
+            Create Template
           </button>
         )}
       </div>
 
-      {/* Task List */}
+      {/* Template List */}
       <div className="flex-1 overflow-y-auto">
-        {unscheduledTasks.length === 0 && scheduledTasks.length === 0 ? (
+        {templates.length === 0 ? (
           <div className="p-4 text-center text-gray-500 text-sm">
-            No tasks yet. Create one above!
+            No templates yet. Create one above!
+            <p className="mt-2 text-xs">
+              Templates can be dragged to the calendar multiple times.
+            </p>
           </div>
         ) : (
           <div className="p-2 space-y-1">
-            {/* Unscheduled tasks - can be dragged */}
-            {unscheduledTasks.map(task => (
-              <TaskItem
-                key={task.id}
-                task={task}
-                onDragStart={handleDragStart}
-                onDelete={onDeleteTask}
-                draggable
-                isScheduled={scheduledTaskIds?.has(task.id) || false}
+            {templates.map(template => (
+              <TemplateItem
+                key={template.id}
+                template={template}
+                onDragStart={handleTemplateDragStart}
+                onDelete={handleDeleteTemplate}
               />
             ))}
-
-            {/* Scheduled tasks for today */}
-            {scheduledTasks.length > 0 && (
-              <>
-                <div className="text-xs text-gray-400 uppercase tracking-wider px-2 pt-3 pb-1">
-                  Scheduled Today
-                </div>
-                {scheduledTasks.map(task => (
-                  <TaskItem
-                    key={task.id}
-                    task={task}
-                    onDragStart={handleDragStart}
-                    onDelete={onDeleteTask}
-                    draggable
-                    showTime
-                    isScheduled
-                  />
-                ))}
-              </>
-            )}
           </div>
         )}
       </div>
@@ -275,63 +348,52 @@ export function TaskSidebar({ tasks, selectedDate, onAddTask, onDeleteTask, sche
   );
 }
 
-interface TaskItemProps {
-  task: AdHocTask;
-  onDragStart: (e: React.DragEvent, task: AdHocTask) => void;
-  onDelete?: (taskId: string) => void;
-  draggable?: boolean;
-  showTime?: boolean;
-  isScheduled?: boolean;
+interface TemplateItemProps {
+  template: TaskTemplate;
+  onDragStart: (e: React.DragEvent, template: TaskTemplate) => void;
+  onDelete: (templateId: string) => void;
 }
 
-const TaskItem = memo(function TaskItem({ task, onDragStart, onDelete, draggable, showTime, isScheduled }: TaskItemProps) {
+const TemplateItem = memo(function TemplateItem({ template, onDragStart, onDelete }: TemplateItemProps) {
   const handleDrag = useCallback((e: React.DragEvent) => {
-    onDragStart(e, task);
-  }, [onDragStart, task]);
+    onDragStart(e, template);
+  }, [onDragStart, template]);
 
   const handleDelete = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    onDelete?.(task.id);
-  }, [onDelete, task.id]);
+    onDelete(template.id);
+  }, [onDelete, template.id]);
+
+  const formatDuration = (minutes: number) => {
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  };
 
   return (
     <div
-      draggable={draggable}
+      draggable
       onDragStart={handleDrag}
-      className={`group flex items-start gap-2 p-2 rounded-lg hover:bg-gray-50 ${
-        draggable ? 'cursor-grab active:cursor-grabbing' : ''
-      } ${task.completed ? 'opacity-50' : ''}`}
+      className="group flex items-start gap-2 p-2 rounded-lg hover:bg-amber-50 cursor-grab active:cursor-grabbing"
     >
-      {draggable && (
-        <GripVertical className="w-4 h-4 text-gray-300 group-hover:text-gray-400 mt-0.5 flex-shrink-0" />
-      )}
+      <GripVertical className="w-4 h-4 text-amber-300 group-hover:text-amber-400 mt-0.5 flex-shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between gap-2">
-          <p className={`text-sm font-medium text-gray-900 line-clamp-2 ${
-            task.completed ? 'line-through text-gray-500' : ''
-          }`}>
-            {task.title}
+          <p className="text-sm font-medium text-gray-900 line-clamp-2">
+            {template.title}
           </p>
-          <div className="flex items-center gap-1 flex-shrink-0">
-            {isScheduled && (
-              <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">
-                Scheduled
-              </span>
-            )}
-            {onDelete && (
-              <button
-                onClick={handleDelete}
-                className="opacity-0 group-hover:opacity-100 p-0.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-all"
-                title="Delete task"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
+          <button
+            onClick={handleDelete}
+            className="opacity-0 group-hover:opacity-100 p-0.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-all flex-shrink-0"
+            title="Delete template"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
-        {showTime && task.dueTime && (
-          <p className="text-xs text-gray-500 mt-0.5">{task.dueTime}</p>
-        )}
+        <p className="text-xs text-amber-600 mt-0.5">
+          {formatDuration(template.duration)}
+        </p>
       </div>
     </div>
   );

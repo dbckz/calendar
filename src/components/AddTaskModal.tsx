@@ -1,37 +1,112 @@
 'use client';
 
-import { useState } from 'react';
-import { X, ChevronDown } from 'lucide-react';
-import { AdHocTask, TaskType, TASK_TYPE_EMOJIS, TASK_TYPE_LABELS } from '@/types';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { X, ChevronDown, PlusCircle } from 'lucide-react';
+import { AdHocTask, TaskType, TaskTypeSelection, BuiltInTaskType, CustomTaskType, BUILT_IN_TASK_TYPE_EMOJIS, BUILT_IN_TASK_TYPE_LABELS, isCustomTaskType, getCustomTaskTypeId } from '@/types';
 import { format } from 'date-fns';
+import { getCustomTaskTypes, addCustomTaskType } from '@/lib/storage';
+import { EmojiPicker } from './EmojiPicker';
 
-const TASK_TYPES: TaskType[] = ['flight', 'train', 'car', 'walk', 'writing', 'reading', 'focus', 'email', 'batch', 'other'];
+const BUILT_IN_TASK_TYPES: BuiltInTaskType[] = ['flight', 'train', 'car', 'walk', 'writing', 'reading', 'focus', 'email', 'batch'];
 
 interface AddTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAdd: (task: Omit<AdHocTask, 'id' | 'createdAt' | 'updatedAt'>) => void;
   defaultDate?: Date;
+  defaultStartTime?: Date;
+  defaultEndTime?: Date;
 }
 
-export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate }: AddTaskModalProps) {
+export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStartTime, defaultEndTime }: AddTaskModalProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [dueDate, setDueDate] = useState(defaultDate ? format(defaultDate, 'yyyy-MM-dd') : '');
-  const [dueTime, setDueTime] = useState('');
-  const [taskType, setTaskType] = useState<TaskType | ''>('');
+  const [dueDate, setDueDate] = useState(
+    defaultStartTime ? format(defaultStartTime, 'yyyy-MM-dd') :
+    defaultDate ? format(defaultDate, 'yyyy-MM-dd') : ''
+  );
+  const [dueTime, setDueTime] = useState(defaultStartTime ? format(defaultStartTime, 'HH:mm') : '');
+  const [taskType, setTaskType] = useState<TaskTypeSelection>(null);
   const [showTypeDropdown, setShowTypeDropdown] = useState(false);
+  const [customTypes, setCustomTypes] = useState<CustomTaskType[]>([]);
+  const [isCreatingCustomType, setIsCreatingCustomType] = useState(false);
+  const [customTypeLabel, setCustomTypeLabel] = useState('');
+  const [customTypeEmoji, setCustomTypeEmoji] = useState('');
+
+  // Load custom types on mount
+  useEffect(() => {
+    setCustomTypes(getCustomTaskTypes());
+  }, []);
+
+  // Helper to get emoji for any task type
+  const getTaskTypeEmoji = useCallback((type: TaskType): string => {
+    if (isCustomTaskType(type)) {
+      const customId = getCustomTaskTypeId(type);
+      const custom = customTypes.find(c => c.id === customId);
+      return custom?.emoji || '📌';
+    }
+    return BUILT_IN_TASK_TYPE_EMOJIS[type as BuiltInTaskType];
+  }, [customTypes]);
+
+  // Helper to get label for any task type
+  const getTaskTypeLabel = useCallback((type: TaskType): string => {
+    if (isCustomTaskType(type)) {
+      const customId = getCustomTaskTypeId(type);
+      const custom = customTypes.find(c => c.id === customId);
+      return custom?.label || 'Custom';
+    }
+    return BUILT_IN_TASK_TYPE_LABELS[type as BuiltInTaskType];
+  }, [customTypes]);
+
+  // All task types including custom ones
+  const allTaskTypes = useMemo((): Array<{ type: TaskType; emoji: string; label: string }> => {
+    const builtIn = BUILT_IN_TASK_TYPES.map(type => ({
+      type: type as TaskType,
+      emoji: BUILT_IN_TASK_TYPE_EMOJIS[type],
+      label: BUILT_IN_TASK_TYPE_LABELS[type],
+    }));
+    const custom = customTypes.map(c => ({
+      type: `custom:${c.id}` as TaskType,
+      emoji: c.emoji,
+      label: c.label,
+    }));
+    return [...builtIn, ...custom];
+  }, [customTypes]);
+
+  const handleCreateCustomType = useCallback(() => {
+    if (!customTypeLabel.trim() || !customTypeEmoji.trim()) return;
+
+    const newType = addCustomTaskType({
+      label: customTypeLabel.trim(),
+      emoji: customTypeEmoji.trim(),
+    });
+    setCustomTypes(prev => [...prev, newType]);
+    setTaskType(`custom:${newType.id}` as TaskType);
+    setCustomTypeLabel('');
+    setCustomTypeEmoji('');
+    setIsCreatingCustomType(false);
+    setShowTypeDropdown(false);
+  }, [customTypeLabel, customTypeEmoji]);
+
+  // Calculate duration from start/end times if provided
+  const calculatedDuration = useMemo(() => {
+    if (defaultStartTime && defaultEndTime) {
+      return Math.round((defaultEndTime.getTime() - defaultStartTime.getTime()) / (60 * 1000));
+    }
+    return 30; // Default 30 minute duration
+  }, [defaultStartTime, defaultEndTime]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !taskType) return;
 
-    const emoji = TASK_TYPE_EMOJIS[taskType];
+    const emoji = getTaskTypeEmoji(taskType);
     onAdd({
       title: `${emoji} ${title.trim()}`,
       description: description.trim() || undefined,
       dueDate: dueDate || undefined,
       dueTime: dueTime || undefined,
+      duration: calculatedDuration,
       priority: 'medium',
       taskType,
       completed: false,
@@ -40,9 +115,15 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate }: AddTaskMod
     // Reset form
     setTitle('');
     setDescription('');
-    setDueDate(defaultDate ? format(defaultDate, 'yyyy-MM-dd') : '');
-    setDueTime('');
-    setTaskType('');
+    setDueDate(
+      defaultStartTime ? format(defaultStartTime, 'yyyy-MM-dd') :
+      defaultDate ? format(defaultDate, 'yyyy-MM-dd') : ''
+    );
+    setDueTime(defaultStartTime ? format(defaultStartTime, 'HH:mm') : '');
+    setTaskType(null);
+    setIsCreatingCustomType(false);
+    setCustomTypeLabel('');
+    setCustomTypeEmoji('');
     onClose();
   };
 
@@ -70,30 +151,92 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate }: AddTaskMod
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setShowTypeDropdown(!showTypeDropdown)}
+                onClick={() => {
+                  setShowTypeDropdown(!showTypeDropdown);
+                  setIsCreatingCustomType(false);
+                }}
                 className="w-full flex items-center justify-between px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
               >
                 <span className={taskType ? 'text-gray-900' : 'text-gray-400'}>
-                  {taskType ? `${TASK_TYPE_EMOJIS[taskType]} ${TASK_TYPE_LABELS[taskType]}` : 'Select type...'}
+                  {taskType ? `${getTaskTypeEmoji(taskType)} ${getTaskTypeLabel(taskType)}` : 'Select type...'}
                 </span>
                 <ChevronDown className="w-4 h-4 text-gray-400" />
               </button>
               {showTypeDropdown && (
-                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                  {TASK_TYPES.map(type => (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => {
-                        setTaskType(type);
-                        setShowTypeDropdown(false);
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-blue-50 transition-colors"
-                    >
-                      <span>{TASK_TYPE_EMOJIS[type]}</span>
-                      <span>{TASK_TYPE_LABELS[type]}</span>
-                    </button>
-                  ))}
+                <div className={`absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-y-auto ${isCreatingCustomType ? 'max-h-96' : 'max-h-64'}`}>
+                  {isCreatingCustomType ? (
+                    <div className="p-3 space-y-3">
+                      <div className="flex gap-2 items-center">
+                        <div
+                          className={`w-10 h-10 flex items-center justify-center text-xl border-2 rounded-lg ${
+                            customTypeEmoji ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-gray-50'
+                          }`}
+                        >
+                          {customTypeEmoji || '?'}
+                        </div>
+                        <input
+                          type="text"
+                          value={customTypeLabel}
+                          onChange={(e) => setCustomTypeLabel(e.target.value)}
+                          placeholder="Type name..."
+                          className="flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                          autoFocus
+                        />
+                      </div>
+                      <EmojiPicker
+                        onSelect={(emoji) => setCustomTypeEmoji(emoji)}
+                        selectedEmoji={customTypeEmoji}
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={handleCreateCustomType}
+                          disabled={!customTypeEmoji.trim() || !customTypeLabel.trim()}
+                          className="flex-1 px-2 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Create
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsCreatingCustomType(false);
+                            setCustomTypeLabel('');
+                            setCustomTypeEmoji('');
+                          }}
+                          className="px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-100 rounded"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {allTaskTypes.map(({ type, emoji, label }) => (
+                        <button
+                          key={type}
+                          type="button"
+                          onClick={() => {
+                            setTaskType(type);
+                            setShowTypeDropdown(false);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-blue-50 transition-colors"
+                        >
+                          <span>{emoji}</span>
+                          <span>{label}</span>
+                        </button>
+                      ))}
+                      <div className="border-t border-gray-200 mt-1 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setIsCreatingCustomType(true)}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left text-blue-600 hover:bg-blue-50 transition-colors"
+                        >
+                          <PlusCircle className="w-4 h-4" />
+                          <span>Create custom type...</span>
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>

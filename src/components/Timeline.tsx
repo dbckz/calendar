@@ -8,12 +8,13 @@ import { EventCard } from './EventCard';
 interface TimelineProps {
   events: CalendarEvent[];
   selectedDate: Date;
-  onToggleComplete?: (id: string, source: 'adhoc' | 'asana') => void;
   onDeleteTask?: (id: string) => void;
   onDropTask?: (dragItem: DragItem, startTime: Date, endTime: Date) => void;
   onEventMove?: (eventId: string, source: 'adhoc' | 'asana' | 'google', startTime: Date, endTime: Date) => void;
   onUnscheduleTask?: (eventId: string, source: 'adhoc' | 'asana') => void;
   onDeleteEvent?: (event: CalendarEvent) => void;
+  onCreateTask?: (startTime: Date, endTime: Date) => void;
+  onEventClick?: (event: CalendarEvent) => void;
 }
 
 interface PositionedEvent {
@@ -120,12 +121,13 @@ function timeToY(time: Date): number {
 export function Timeline({
   events,
   selectedDate,
-  onToggleComplete,
   onDeleteTask,
   onDropTask,
   onEventMove,
   onUnscheduleTask,
   onDeleteEvent,
+  onCreateTask,
+  onEventClick,
 }: TimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -145,6 +147,11 @@ export function Timeline({
   } | null>(null);
   const [dragOffset, setDragOffset] = useState({ top: 0, height: 0 });
 
+  // Click-and-drag task creation state
+  const [isCreatingEvent, setIsCreatingEvent] = useState(false);
+  const [creationStartY, setCreationStartY] = useState<number | null>(null);
+  const [creationEndY, setCreationEndY] = useState<number | null>(null);
+
   const hours = useMemo(() => {
     return Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, i) => i + START_HOUR);
   }, []);
@@ -163,15 +170,30 @@ export function Timeline({
     return selectedDate.toDateString() === today.toDateString();
   }, [selectedDate]);
 
-  // Current time position (updates on mount)
-  const currentTimePosition = useMemo(() => {
-    const now = new Date();
-    const hours = now.getHours() + now.getMinutes() / 60;
-    return (hours - START_HOUR) * HOUR_HEIGHT;
+  // Current time state - updates every 2 minutes
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 2 * 60 * 1000); // Update every 2 minutes
+
+    return () => clearInterval(interval);
   }, []);
 
-  // Memoize current hour - only updates on component mount
-  const currentHour = useMemo(() => new Date().getHours(), []);
+  // Current time position
+  const currentTimePosition = useMemo(() => {
+    const hours = currentTime.getHours() + currentTime.getMinutes() / 60;
+    return (hours - START_HOUR) * HOUR_HEIGHT;
+  }, [currentTime]);
+
+  // Format current time as HH:mm (24 hour)
+  const currentTimeLabel = useMemo(() => {
+    return format(currentTime, 'HH:mm');
+  }, [currentTime]);
+
+  // Memoize current hour - updates with currentTime
+  const currentHour = useMemo(() => currentTime.getHours(), [currentTime]);
 
   // Pre-compute hour labels once
   const hourLabels = useMemo(() => {
@@ -231,7 +253,8 @@ export function Timeline({
   // Handle external drop (from sidebars)
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
+    // Use 'copy' for templates, 'move' for other items
+    e.dataTransfer.dropEffect = e.dataTransfer.effectAllowed === 'copy' ? 'copy' : 'move';
     setIsDraggingOver(true);
 
     if (containerRef.current) {
@@ -265,7 +288,7 @@ export function Timeline({
         const y = e.clientY - rect.top;
 
         const startTime = yToTime(y, selectedDate);
-        const duration = dragItem.duration || 60;
+        const duration = dragItem.duration || 30;
         const endTime = new Date(startTime.getTime() + duration * 60 * 1000);
 
         onDropTask?.(dragItem, startTime, endTime);
@@ -341,6 +364,105 @@ export function Timeline({
     return format(time, 'h:mm a');
   };
 
+  // Check if a Y position overlaps with any existing event
+  const doesOverlapWithEvents = useCallback((y: number, height: number = HOUR_HEIGHT / 2) => {
+    const startTime = yToTime(y, selectedDate);
+    const endTime = yToTime(y + height, selectedDate);
+
+    return events.some(event =>
+      startTime < event.endTime && endTime > event.startTime
+    );
+  }, [events, selectedDate]);
+
+  // Handle click-and-drag task creation - mouse down on empty space
+  const handleEmptySpaceMouseDown = useCallback((e: React.MouseEvent) => {
+    // Only start creation if clicking on empty space (not an event)
+    if (!onCreateTask) return;
+    if ((e.target as HTMLElement).closest('.event-card-wrapper')) return;
+
+    // Don't start if we're dragging an event
+    if (draggingEvent) return;
+
+    if (containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      const snappedY = Math.round(y / (HOUR_HEIGHT * SNAP_MINUTES / 60)) * (HOUR_HEIGHT * SNAP_MINUTES / 60);
+
+      // Check if this position overlaps with an event
+      if (doesOverlapWithEvents(snappedY)) return;
+
+      setIsCreatingEvent(true);
+      setCreationStartY(snappedY);
+      setCreationEndY(snappedY + (HOUR_HEIGHT / 2)); // Default 30 min
+    }
+  }, [onCreateTask, draggingEvent, doesOverlapWithEvents]);
+
+  // Handle creation mouse move
+  const handleCreationMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!isCreatingEvent || creationStartY === null) return;
+
+    if (containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      const snappedY = Math.round(y / (HOUR_HEIGHT * SNAP_MINUTES / 60)) * (HOUR_HEIGHT * SNAP_MINUTES / 60);
+
+      // Clamp to valid range
+      const clampedY = Math.max(0, Math.min(snappedY, hours.length * HOUR_HEIGHT));
+
+      // Ensure minimum height of 15 minutes
+      const minHeight = HOUR_HEIGHT * SNAP_MINUTES / 60;
+      if (clampedY >= creationStartY) {
+        setCreationEndY(Math.max(clampedY, creationStartY + minHeight));
+      } else {
+        setCreationEndY(creationStartY + minHeight);
+        setCreationStartY(Math.min(clampedY, creationStartY - minHeight));
+      }
+    }
+  }, [isCreatingEvent, creationStartY, hours.length]);
+
+  // Handle creation mouse up
+  const handleCreationMouseUp = useCallback(() => {
+    if (!isCreatingEvent || creationStartY === null || creationEndY === null) {
+      setIsCreatingEvent(false);
+      setCreationStartY(null);
+      setCreationEndY(null);
+      return;
+    }
+
+    const startY = Math.min(creationStartY, creationEndY);
+    const endY = Math.max(creationStartY, creationEndY);
+
+    const startTime = yToTime(startY, selectedDate);
+    const endTime = yToTime(endY, selectedDate);
+
+    // Only trigger if we have a valid selection (at least 15 minutes)
+    if (endTime.getTime() - startTime.getTime() >= 15 * 60 * 1000) {
+      onCreateTask?.(startTime, endTime);
+    }
+
+    setIsCreatingEvent(false);
+    setCreationStartY(null);
+    setCreationEndY(null);
+  }, [isCreatingEvent, creationStartY, creationEndY, selectedDate, onCreateTask]);
+
+  // Creation preview box
+  const creationPreview = useMemo(() => {
+    if (!isCreatingEvent || creationStartY === null || creationEndY === null) return null;
+
+    const top = Math.min(creationStartY, creationEndY);
+    const height = Math.abs(creationEndY - creationStartY);
+
+    const startTime = yToTime(top, selectedDate);
+    const endTime = yToTime(top + height, selectedDate);
+
+    return {
+      top,
+      height,
+      startLabel: format(startTime, 'h:mm a'),
+      endLabel: format(endTime, 'h:mm a'),
+    };
+  }, [isCreatingEvent, creationStartY, creationEndY, selectedDate]);
+
   if (events.length === 0 && !isDraggingOver) {
     return (
       <div
@@ -355,13 +477,31 @@ export function Timeline({
     );
   }
 
+  // Combined mouse move handler
+  const handleCombinedMouseMove = useCallback((e: React.MouseEvent) => {
+    if (draggingEvent) {
+      handleMouseMove(e);
+    } else if (isCreatingEvent) {
+      handleCreationMouseMove(e);
+    }
+  }, [draggingEvent, handleMouseMove, isCreatingEvent, handleCreationMouseMove]);
+
+  // Combined mouse up handler
+  const handleCombinedMouseUp = useCallback(() => {
+    if (draggingEvent) {
+      handleMouseUp();
+    } else if (isCreatingEvent) {
+      handleCreationMouseUp();
+    }
+  }, [draggingEvent, handleMouseUp, isCreatingEvent, handleCreationMouseUp]);
+
   return (
     <div
       ref={scrollContainerRef}
       className="space-y-4"
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+      onMouseMove={handleCombinedMouseMove}
+      onMouseUp={handleCombinedMouseUp}
+      onMouseLeave={handleCombinedMouseUp}
     >
       {/* Timeline */}
       <div className="relative">
@@ -391,16 +531,17 @@ export function Timeline({
           );
         })}
 
-        {/* Events overlay - also serves as drop zone */}
+        {/* Events overlay - also serves as drop zone and creation area */}
         <div
           ref={containerRef}
           className={`absolute top-0 left-20 right-0 ${
             isDraggingOver ? 'bg-purple-50/30' : ''
-          }`}
+          } ${onCreateTask ? 'cursor-crosshair' : ''}`}
           style={{ height: `${hours.length * HOUR_HEIGHT}px` }}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
+          onMouseDown={handleEmptySpaceMouseDown}
         >
           {/* Drop preview line */}
           {isDraggingOver && dropPreviewY !== null && (
@@ -415,15 +556,36 @@ export function Timeline({
             </div>
           )}
 
-          {/* Current time indicator - red line */}
+          {/* Current time indicator - red line with time label */}
           {isToday && currentTimePosition >= 0 && currentTimePosition <= hours.length * HOUR_HEIGHT && (
             <div
-              className="absolute left-0 right-0 z-20 pointer-events-none"
-              style={{ top: `${currentTimePosition}px` }}
+              className="absolute z-20 pointer-events-none"
+              style={{ top: `${currentTimePosition}px`, left: '-80px', right: '0' }}
             >
               <div className="flex items-center">
+                <span className="text-xs font-medium text-red-500 w-[70px] text-right pr-2">
+                  {currentTimeLabel}
+                </span>
                 <div className="w-2.5 h-2.5 rounded-full bg-red-500 -ml-1" />
                 <div className="flex-1 h-0.5 bg-red-500" />
+              </div>
+            </div>
+          )}
+
+          {/* Creation preview box */}
+          {creationPreview && (
+            <div
+              className="absolute left-1 right-1 bg-purple-500/20 border-2 border-purple-500 border-dashed rounded-lg pointer-events-none z-40"
+              style={{
+                top: `${creationPreview.top}px`,
+                height: `${creationPreview.height}px`,
+              }}
+            >
+              <div className="absolute -top-5 left-2 px-2 py-0.5 bg-purple-500 text-white text-xs rounded">
+                {creationPreview.startLabel}
+              </div>
+              <div className="absolute -bottom-5 left-2 px-2 py-0.5 bg-purple-500 text-white text-xs rounded">
+                {creationPreview.endLabel}
               </div>
             </div>
           )}
@@ -435,7 +597,7 @@ export function Timeline({
               <div
                 key={`${pos.event.integrationId || pos.event.source}-${pos.event.id}`}
                 style={getEventStyle(pos)}
-                className="group"
+                className="group event-card-wrapper"
               >
                 {/* Resize handle - top */}
                 {canDrag && (
@@ -455,16 +617,18 @@ export function Timeline({
                       handleEventMouseDown(e, pos.event, 'move');
                     }
                   }}
+                  onClick={(e) => {
+                    // Trigger event click to highlight in sidebar (only if not dragging)
+                    if (!draggingEvent && onEventClick) {
+                      e.stopPropagation();
+                      onEventClick(pos.event);
+                    }
+                  }}
                 >
                   <EventCard
                     event={pos.event}
                     compact
                     isPast={isEventPast(pos.event)}
-                    onToggleComplete={
-                      canDrag
-                        ? () => onToggleComplete?.(pos.event.id, pos.event.source as 'adhoc' | 'asana')
-                        : undefined
-                    }
                     onDelete={pos.event.source === 'adhoc' ? onDeleteTask : undefined}
                     onUnschedule={
                       canDrag

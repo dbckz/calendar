@@ -1,12 +1,11 @@
 'use client';
 
 import { format } from 'date-fns';
-import { Check, Clock, MapPin, Trash2, X } from 'lucide-react';
+import { Clock, MapPin, Trash2, X } from 'lucide-react';
 import { CalendarEvent } from '@/types';
 
 interface EventCardProps {
   event: CalendarEvent;
-  onToggleComplete?: (id: string) => void;
   onDelete?: (id: string) => void;
   onUnschedule?: (id: string) => void;
   onDeleteEvent?: () => void;
@@ -14,7 +13,7 @@ interface EventCardProps {
   isPast?: boolean;
 }
 
-export function EventCard({ event, onToggleComplete, onDelete, onUnschedule, onDeleteEvent, compact, isPast }: EventCardProps) {
+export function EventCard({ event, onDelete, onUnschedule, onDeleteEvent, compact, isPast }: EventCardProps) {
   const sourceLabels = {
     google: 'Google Calendar',
     asana: 'Asana',
@@ -26,8 +25,6 @@ export function EventCard({ event, onToggleComplete, onDelete, onUnschedule, onD
     asana: 'bg-orange-100 text-orange-700',
     adhoc: 'bg-purple-100 text-purple-700',
   };
-
-  const isCompletable = event.source === 'adhoc' || event.source === 'asana';
 
   // Compact view for timeline
   if (compact) {
@@ -44,21 +41,6 @@ export function EventCard({ event, onToggleComplete, onDelete, onUnschedule, onD
       >
         <div className="p-2 h-full flex flex-col">
           <div className="flex items-start gap-2">
-            {isCompletable && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleComplete?.(event.id);
-                }}
-                className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded border-2 flex items-center justify-center transition-colors ${
-                  event.completed
-                    ? 'bg-green-500 border-green-500 text-white'
-                    : 'border-gray-300 hover:border-gray-400 bg-white'
-                }`}
-              >
-                {event.completed && <Check className="w-2.5 h-2.5" />}
-              </button>
-            )}
             <div className="flex-1 min-w-0">
               <h3
                 className={`text-sm font-medium text-gray-900 line-clamp-2 ${
@@ -129,19 +111,6 @@ export function EventCard({ event, onToggleComplete, onDelete, onUnschedule, onD
     >
       <div className="p-3">
         <div className="flex items-start gap-3">
-          {isCompletable && (
-            <button
-              onClick={() => onToggleComplete?.(event.id)}
-              className={`mt-0.5 flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
-                event.completed
-                  ? 'bg-green-500 border-green-500 text-white'
-                  : 'border-gray-300 hover:border-gray-400'
-              }`}
-            >
-              {event.completed && <Check className="w-3 h-3" />}
-            </button>
-          )}
-
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-2">
               <h3

@@ -6,11 +6,10 @@ import { EventCard } from './EventCard';
 
 interface ListViewProps {
   events: CalendarEvent[];
-  onToggleComplete?: (id: string, source: 'adhoc' | 'asana') => void;
   onDeleteTask?: (id: string) => void;
 }
 
-export function ListView({ events, onToggleComplete, onDeleteTask }: ListViewProps) {
+export function ListView({ events, onDeleteTask }: ListViewProps) {
   const groupedEvents = useMemo(() => {
     const groups: {
       allDay: CalendarEvent[];
@@ -74,11 +73,6 @@ export function ListView({ events, onToggleComplete, onDeleteTask }: ListViewPro
               <EventCard
                 key={`${event.integrationId || event.source}-${event.id}`}
                 event={event}
-                onToggleComplete={
-                  event.source === 'adhoc' || event.source === 'asana'
-                    ? () => onToggleComplete?.(event.id, event.source as 'adhoc' | 'asana')
-                    : undefined
-                }
                 onDelete={event.source === 'adhoc' ? onDeleteTask : undefined}
               />
             ))}

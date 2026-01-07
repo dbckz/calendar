@@ -7,24 +7,15 @@ import { Timeline } from '@/components/Timeline';
 import { IntegrationStatus } from '@/components/IntegrationStatus';
 import { AsanaSidebar } from '@/components/AsanaSidebar';
 import { TaskSidebar } from '@/components/TaskSidebar';
+import { AddTaskModal } from '@/components/AddTaskModal';
 import { useTasks } from '@/hooks/useTasks';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
-import { CalendarEvent, DragItem, TaskType } from '@/types';
+import { useToast } from '@/hooks/useToast';
+import { CalendarEvent, DragItem, TaskType, SettingsResponse } from '@/types';
+import { api } from '@/lib/api';
 
-interface SettingsState {
-  googleIntegrations: Array<{
-    id: string;
-    name: string;
-    enabled: boolean;
-    connected: boolean;
-  }>;
-  asanaIntegrations: Array<{
-    id: string;
-    name: string;
-    enabled: boolean;
-    connected: boolean;
-  }>;
-}
+// Use the typed SettingsResponse from types, but we keep a local alias for clarity
+type SettingsState = SettingsResponse;
 
 // Softer, more cohesive color themes
 // Each theme has a main header color and a shared sidebar accent
@@ -94,21 +85,32 @@ export default function Home() {
 
   const colorScheme = COLOR_SCHEMES[colorSchemeIndex];
 
-  const { tasks, addTask, updateTask, toggleComplete: toggleAdHocComplete, removeTask, getTasksForDate } = useTasks();
+  const toast = useToast();
+  const { tasks, addTask, updateTask, removeTask, getTasksForDate } = useTasks();
   const {
     googleEvents,
     allAsanaTasks,
+    filteredAsanaTasks,
     scheduledAsanaTasks,
     isLoading,
     fetchAllEvents,
     adhocToCalendarEvent,
     scheduleAsana,
     updateScheduledAsana,
+    updateScheduledAsanaByGoogleEvent,
     unscheduleAsana,
+    unscheduleAllAsanaInstances,
     updateGoogleEvent,
     createGoogleEvent,
     deleteGoogleEvent,
     getScheduledAsanaEventsForDate,
+    completeAsanaTask,
+    addAsanaComment,
+    // Asana filter state
+    asanaProjects,
+    asanaFilters,
+    setAsanaFilters,
+    clearAsanaFilters,
   } = useCalendarEvents();
 
   // State for calendar selection modal
@@ -123,15 +125,46 @@ export default function Home() {
     event: CalendarEvent | null;
   }>({ show: false, event: null });
 
+  // State for task creation modal (triggered by click-drag on timeline)
+  const [createTaskModal, setCreateTaskModal] = useState<{
+    show: boolean;
+    startTime: Date | null;
+    endTime: Date | null;
+  }>({ show: false, startTime: null, endTime: null });
+
+  // State for pending task creation (needs calendar selection)
+  const [pendingTaskCreation, setPendingTaskCreation] = useState<{
+    task: {
+      title: string;
+      description?: string;
+      dueDate?: string;
+      dueTime?: string;
+      duration?: number;
+      priority: 'low' | 'medium' | 'high';
+      taskType: TaskType;
+      completed: boolean;
+    };
+    taskId: string;
+    startTime: Date;
+    endTime: Date;
+  } | null>(null);
+
+  // State for highlighted Asana task in sidebar (when clicking calendar event)
+  const [highlightedAsanaTaskId, setHighlightedAsanaTaskId] = useState<string | null>(null);
+
   // Fetch settings on mount
   useEffect(() => {
-    fetch('/api/settings')
-      .then(res => res.json())
+    api.getSettings()
       .then(data => setSettings(data))
-      .catch(console.error);
-  }, []);
+      .catch(err => {
+        console.error('Failed to load settings:', err);
+        toast.error('Failed to load integration settings');
+      });
+  }, [toast]);
 
   // Combine all events for the calendar (scheduled tasks only)
+  // NOTE: We filter out adhoc tasks that have a corresponding Google event
+  // to avoid showing duplicates on the calendar
   const allEvents = useMemo((): CalendarEvent[] => {
     const dateStr = format(selectedDate, 'yyyy-MM-dd');
 
@@ -141,15 +174,36 @@ export default function Home() {
       return eventDateStr === dateStr;
     });
 
+    // Enrich Google events with linked Asana task info (for unified display)
+    const enrichedGoogleEvents = filteredGoogleEvents.map(event => {
+      const linkedAsana = scheduledAsanaTasks.find(s => s.googleEventId === event.id);
+      if (linkedAsana) {
+        return {
+          ...event,
+          linkedAsanaTaskId: linkedAsana.asanaTaskId,
+          linkedAsanaIntegrationId: linkedAsana.integrationId,
+          // Use Asana color for linked events
+          color: '#f06a6a',
+        };
+      }
+      return event;
+    });
+
     // Only include tasks that have both date AND time (scheduled on calendar)
-    const adhocTasks = getTasksForDate(dateStr).filter(t => t.dueTime);
+    // AND that don't have a corresponding Google event (to avoid duplicates)
+    const adhocTasks = getTasksForDate(dateStr).filter(t => t.dueTime && !t.googleEventId);
     const adhocEvents = adhocTasks.map(adhocToCalendarEvent);
 
-    // Include scheduled Asana tasks for this date (from local storage)
-    const scheduledAsanaEvents = getScheduledAsanaEventsForDate(dateStr);
+    // Include scheduled Asana tasks for this date, but EXCLUDE those with linked Google events
+    // (they will show as the enriched Google event instead)
+    // Note: event.id is the schedule ID, so we find the schedule directly
+    const scheduledAsanaEvents = getScheduledAsanaEventsForDate(dateStr).filter(event => {
+      const schedule = scheduledAsanaTasks.find(s => s.id === event.id);
+      return !schedule?.googleEventId;
+    });
 
-    return [...filteredGoogleEvents, ...adhocEvents, ...scheduledAsanaEvents];
-  }, [googleEvents, selectedDate, getTasksForDate, adhocToCalendarEvent, getScheduledAsanaEventsForDate]);
+    return [...enrichedGoogleEvents, ...adhocEvents, ...scheduledAsanaEvents];
+  }, [googleEvents, selectedDate, getTasksForDate, adhocToCalendarEvent, getScheduledAsanaEventsForDate, scheduledAsanaTasks]);
 
   // Separate all-day events from timed events
   const allDayEvents = useMemo(() => {
@@ -172,18 +226,31 @@ export default function Home() {
     fetchAllEvents();
   }, [fetchAllEvents]);
 
-  const handleToggleComplete = useCallback(async (id: string, source: 'adhoc' | 'asana') => {
-    if (source === 'adhoc') {
-      toggleAdHocComplete(id);
-    } else if (source === 'asana') {
-      // TODO: Implement Asana task completion
-      console.log('Toggle Asana task:', id);
-    }
-  }, [toggleAdHocComplete]);
-
   const handleDeleteTask = useCallback((id: string) => {
     removeTask(id);
   }, [removeTask]);
+
+  // Handle Asana task completion from sidebar (with integration ID)
+  const handleSidebarAsanaComplete = useCallback(async (taskId: string, integrationId: string, completed: boolean) => {
+    try {
+      await completeAsanaTask(taskId, integrationId, completed);
+      toast.success(completed ? 'Task completed in Asana' : 'Task reopened in Asana');
+    } catch (err) {
+      toast.error('Failed to update task in Asana');
+      console.error('Error completing Asana task:', err);
+    }
+  }, [completeAsanaTask, toast]);
+
+  // Handle Asana comment from sidebar (with integration ID)
+  const handleSidebarAsanaComment = useCallback(async (taskId: string, integrationId: string, comment: string) => {
+    try {
+      await addAsanaComment(taskId, integrationId, comment);
+      toast.success('Comment added to Asana');
+    } catch (err) {
+      toast.error('Failed to add comment to Asana');
+      console.error('Error adding Asana comment:', err);
+    }
+  }, [addAsanaComment, toast]);
 
   // Get connected Google integrations
   const connectedGoogleIntegrations = useMemo(() => {
@@ -196,7 +263,8 @@ export default function Home() {
     const timeStr = format(startTime, 'HH:mm');
     const duration = Math.round((endTime.getTime() - startTime.getTime()) / (60 * 1000));
 
-    // Check if we should sync to Google Calendar
+    // Check if we should sync to Google Calendar and prompt for selection
+    // Always prompt when there are multiple calendars connected
     if (connectedGoogleIntegrations.length > 1) {
       // Multiple calendars - show selection modal
       setCalendarSelectionModal({
@@ -225,27 +293,83 @@ export default function Home() {
               googleEventId: googleEvent.id,
               googleIntegrationId: integrationId,
             });
+            toast.success('Event added to Google Calendar');
+          } else {
+            toast.error('Failed to sync with Google Calendar');
           }
         });
       }
     } else if (dragItem.type === 'asana-task') {
       // Find the Asana task to get its integration ID
       const asanaTask = allAsanaTasks.find(t => t.id === dragItem.id);
-      // Schedule Asana task locally
-      scheduleAsana(
-        dragItem.id,
-        asanaTask?.integrationId,
-        dateStr,
-        timeStr,
-        duration
-      );
+
+      // Create Google event FIRST if connected, then link it to Asana schedule
+      if (integrationId && asanaTask) {
+        createGoogleEvent(integrationId, asanaTask.title, startTime, endTime).then(googleEvent => {
+          if (googleEvent) {
+            // Schedule Asana task with Google event reference (unified display)
+            scheduleAsana(
+              dragItem.id,
+              asanaTask.integrationId,
+              dateStr,
+              timeStr,
+              duration,
+              googleEvent.id,
+              integrationId
+            );
+            toast.success('Task scheduled and synced to Google Calendar');
+          } else {
+            // Still schedule locally even if Google fails
+            scheduleAsana(
+              dragItem.id,
+              asanaTask.integrationId,
+              dateStr,
+              timeStr,
+              duration
+            );
+            toast.error('Failed to sync with Google Calendar');
+          }
+        });
+      } else {
+        // No Google calendar - just schedule locally
+        scheduleAsana(
+          dragItem.id,
+          asanaTask?.integrationId,
+          dateStr,
+          timeStr,
+          duration
+        );
+      }
+    } else if (dragItem.type === 'task-template') {
+      // Create a new ad-hoc task from the template
+      const newTask = addTask({
+        title: dragItem.title,
+        dueDate: dateStr,
+        dueTime: timeStr,
+        priority: dragItem.priority || 'medium',
+        taskType: dragItem.taskType!,
+        completed: false,
+      });
+
+      // Update with duration
+      updateTask(newTask.id, { duration });
 
       // Also create in Google Calendar if connected
-      if (integrationId && asanaTask) {
-        createGoogleEvent(integrationId, asanaTask.title, startTime, endTime);
+      if (integrationId) {
+        createGoogleEvent(integrationId, dragItem.title, startTime, endTime).then(googleEvent => {
+          if (googleEvent) {
+            updateTask(newTask.id, {
+              googleEventId: googleEvent.id,
+              googleIntegrationId: integrationId,
+            });
+            toast.success('Event added to Google Calendar');
+          } else {
+            toast.error('Failed to sync with Google Calendar');
+          }
+        });
       }
     }
-  }, [updateTask, scheduleAsana, allAsanaTasks, connectedGoogleIntegrations, createGoogleEvent]);
+  }, [updateTask, addTask, scheduleAsana, allAsanaTasks, connectedGoogleIntegrations, createGoogleEvent, toast]);
 
   // Handle calendar selection from modal
   const handleCalendarSelection = useCallback((integrationId: string) => {
@@ -270,25 +394,90 @@ export default function Home() {
             googleEventId: googleEvent.id,
             googleIntegrationId: integrationId,
           });
+          toast.success('Event added to Google Calendar');
+        } else {
+          toast.error('Failed to sync with Google Calendar');
         }
       });
     } else if (dragItem.type === 'asana-task') {
       const asanaTask = allAsanaTasks.find(t => t.id === dragItem.id);
-      scheduleAsana(
-        dragItem.id,
-        asanaTask?.integrationId,
-        dateStr,
-        timeStr,
-        duration
-      );
 
       if (asanaTask) {
-        createGoogleEvent(integrationId, asanaTask.title, startTime, endTime);
+        // Create Google event first, then link to Asana schedule
+        createGoogleEvent(integrationId, asanaTask.title, startTime, endTime).then(googleEvent => {
+          if (googleEvent) {
+            scheduleAsana(
+              dragItem.id,
+              asanaTask.integrationId,
+              dateStr,
+              timeStr,
+              duration,
+              googleEvent.id,
+              integrationId
+            );
+            toast.success('Task scheduled and synced to Google Calendar');
+          } else {
+            scheduleAsana(
+              dragItem.id,
+              asanaTask.integrationId,
+              dateStr,
+              timeStr,
+              duration
+            );
+            toast.error('Failed to sync with Google Calendar');
+          }
+        });
       }
+    } else if (dragItem.type === 'task-template') {
+      // Create a new ad-hoc task from the template
+      const newTask = addTask({
+        title: dragItem.title,
+        dueDate: dateStr,
+        dueTime: timeStr,
+        priority: dragItem.priority || 'medium',
+        taskType: dragItem.taskType!,
+        completed: false,
+      });
+
+      // Update with duration
+      updateTask(newTask.id, { duration });
+
+      createGoogleEvent(integrationId, dragItem.title, startTime, endTime).then(googleEvent => {
+        if (googleEvent) {
+          updateTask(newTask.id, {
+            googleEventId: googleEvent.id,
+            googleIntegrationId: integrationId,
+          });
+          toast.success('Event added to Google Calendar');
+        } else {
+          toast.error('Failed to sync with Google Calendar');
+        }
+      });
     }
 
     setCalendarSelectionModal({ show: false, pendingDrop: null });
-  }, [calendarSelectionModal, updateTask, scheduleAsana, allAsanaTasks, createGoogleEvent]);
+  }, [calendarSelectionModal, updateTask, addTask, scheduleAsana, allAsanaTasks, createGoogleEvent, toast]);
+
+  // Handle calendar selection for new task creation
+  const handleTaskCreationCalendarSelection = useCallback((integrationId: string) => {
+    if (!pendingTaskCreation) return;
+
+    const { task, taskId, startTime, endTime } = pendingTaskCreation;
+
+    createGoogleEvent(integrationId, task.title, startTime, endTime).then(googleEvent => {
+      if (googleEvent) {
+        updateTask(taskId, {
+          googleEventId: googleEvent.id,
+          googleIntegrationId: integrationId,
+        });
+        toast.success('Event added to Google Calendar');
+      } else {
+        toast.error('Failed to sync with Google Calendar');
+      }
+    });
+
+    setPendingTaskCreation(null);
+  }, [pendingTaskCreation, createGoogleEvent, updateTask, toast]);
 
   // Handle moving/resizing an event on the calendar
   const handleEventMove = useCallback((
@@ -319,8 +508,15 @@ export default function Home() {
       if (googleEvent?.integrationId) {
         updateGoogleEvent(eventId, googleEvent.integrationId, startTime, endTime);
       }
+
+      // Also update linked Asana schedule if present (keeps duration in sync)
+      updateScheduledAsanaByGoogleEvent(eventId, {
+        scheduledDate: dateStr,
+        scheduledTime: timeStr,
+        duration,
+      });
     }
-  }, [updateTask, updateScheduledAsana, updateGoogleEvent, googleEvents]);
+  }, [updateTask, updateScheduledAsana, updateScheduledAsanaByGoogleEvent, updateGoogleEvent, googleEvents]);
 
   // Handle unscheduling a task (dragging off calendar)
   const handleUnscheduleTask = useCallback((eventId: string, source: 'adhoc' | 'asana') => {
@@ -334,18 +530,71 @@ export default function Home() {
     }
   }, [updateTask, unscheduleAsana]);
 
-  // Handle adding a new task from the sidebar
+  // Handle adding a new task from the sidebar or creation modal
   const handleAddTask = useCallback((task: {
     title: string;
     description?: string;
     dueDate?: string;
     dueTime?: string;
+    duration?: number;
     priority: 'low' | 'medium' | 'high';
     taskType: TaskType;
     completed: boolean;
   }) => {
-    addTask(task);
-  }, [addTask]);
+    const newTask = addTask(task);
+
+    // If created with time and we have Google Calendar, sync it
+    if (task.dueDate && task.dueTime && task.duration && connectedGoogleIntegrations.length > 0) {
+      const [hours, minutes] = task.dueTime.split(':').map(Number);
+      const startTime = new Date(task.dueDate);
+      startTime.setHours(hours, minutes, 0, 0);
+      const endTime = new Date(startTime.getTime() + task.duration * 60 * 1000);
+
+      // If multiple calendars, prompt for selection
+      if (connectedGoogleIntegrations.length > 1) {
+        setPendingTaskCreation({
+          task,
+          taskId: newTask.id,
+          startTime,
+          endTime,
+        });
+        return newTask;
+      }
+
+      // Single calendar - use it directly
+      const integrationId = connectedGoogleIntegrations[0].id;
+      createGoogleEvent(integrationId, task.title, startTime, endTime).then(googleEvent => {
+        if (googleEvent) {
+          updateTask(newTask.id, {
+            googleEventId: googleEvent.id,
+            googleIntegrationId: integrationId,
+          });
+          toast.success('Event added to Google Calendar');
+        }
+      });
+    }
+
+    return newTask;
+  }, [addTask, connectedGoogleIntegrations, createGoogleEvent, updateTask, toast]);
+
+  // Handle creating a new task from timeline click-drag
+  const handleTimelineCreateTask = useCallback((startTime: Date, endTime: Date) => {
+    setCreateTaskModal({ show: true, startTime, endTime });
+  }, []);
+
+  // Handle clicking a calendar event to highlight its Asana task in sidebar
+  const handleEventClick = useCallback((event: CalendarEvent) => {
+    // Check if this is an Asana task (either directly or linked)
+    const asanaTaskId = event.linkedAsanaTaskId || (event.source === 'asana' ? event.id : null);
+    if (asanaTaskId) {
+      setHighlightedAsanaTaskId(asanaTaskId);
+    }
+  }, []);
+
+  // Clear highlighted Asana task
+  const handleClearHighlight = useCallback(() => {
+    setHighlightedAsanaTaskId(null);
+  }, []);
 
   // Handle delete event request (shows confirmation)
   const handleDeleteEventRequest = useCallback((event: CalendarEvent) => {
@@ -357,36 +606,43 @@ export default function Home() {
     const { event } = deleteConfirmModal;
     if (!event) return;
 
-    if (event.source === 'google' && event.integrationId) {
-      await deleteGoogleEvent(event.id, event.integrationId);
-    } else if (event.source === 'adhoc') {
-      removeTask(event.id);
-    } else if (event.source === 'asana') {
-      unscheduleAsana(event.id);
+    try {
+      if (event.source === 'google' && event.integrationId) {
+        const success = await deleteGoogleEvent(event.id, event.integrationId);
+        if (success) {
+          // Also unschedule linked Asana schedule if present (find by googleEventId)
+          const linkedSchedule = scheduledAsanaTasks.find(s => s.googleEventId === event.id);
+          if (linkedSchedule) {
+            unscheduleAsana(linkedSchedule.id);
+          }
+          toast.success('Event deleted from Google Calendar');
+        } else {
+          toast.error('Failed to delete event from Google Calendar');
+        }
+      } else if (event.source === 'adhoc') {
+        removeTask(event.id);
+        toast.success('Task deleted');
+      } else if (event.source === 'asana') {
+        // event.id is the schedule ID for Asana events
+        unscheduleAsana(event.id);
+        toast.success('Task unscheduled');
+      }
+    } catch {
+      toast.error('Failed to delete event');
     }
 
     setDeleteConfirmModal({ show: false, event: null });
-  }, [deleteConfirmModal, deleteGoogleEvent, removeTask, unscheduleAsana]);
+  }, [deleteConfirmModal, deleteGoogleEvent, removeTask, unscheduleAsana, scheduledAsanaTasks, toast]);
 
   // Memoized callbacks for sidebars to avoid recreating on every render
-  const handleUnscheduleAsana = useCallback((taskId: string) => {
-    handleUnscheduleTask(taskId, 'asana');
-  }, [handleUnscheduleTask]);
+  // Called from sidebar - unschedule all instances of an Asana task
+  const handleUnscheduleAsana = useCallback((asanaTaskId: string) => {
+    unscheduleAllAsanaInstances(asanaTaskId);
+  }, [unscheduleAllAsanaInstances]);
 
   const handleUnscheduleAdhoc = useCallback((taskId: string) => {
     handleUnscheduleTask(taskId, 'adhoc');
   }, [handleUnscheduleTask]);
-
-  // Get set of scheduled task IDs for sidebar indicators
-  const scheduledTaskIds = useMemo(() => {
-    const ids = new Set<string>();
-    // Ad-hoc tasks with scheduled times
-    tasks.filter(t => t.dueTime).forEach(t => ids.add(t.id));
-    // Scheduled Asana tasks
-    scheduledAsanaTasks.forEach(s => ids.add(s.asanaTaskId));
-    return ids;
-  }, [tasks, scheduledAsanaTasks]);
-
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
@@ -402,11 +658,19 @@ export default function Home() {
         {/* Asana Sidebar - Left (fixed) */}
         <aside className="w-72 flex-shrink-0 overflow-hidden">
           <AsanaSidebar
-            tasks={allAsanaTasks}
+            tasks={filteredAsanaTasks}
             isLoading={isLoading}
-            scheduledTaskIds={scheduledTaskIds}
+            scheduledAsanaTasks={scheduledAsanaTasks}
             onUnschedule={handleUnscheduleAsana}
             colorScheme={colorScheme}
+            projects={asanaProjects}
+            filters={asanaFilters}
+            onFiltersChange={setAsanaFilters}
+            onClearFilters={clearAsanaFilters}
+            onToggleComplete={handleSidebarAsanaComplete}
+            onAddComment={handleSidebarAsanaComment}
+            highlightedTaskId={highlightedAsanaTaskId}
+            onClearHighlight={handleClearHighlight}
           />
         </aside>
 
@@ -427,34 +691,29 @@ export default function Home() {
                 <Timeline
                   events={timedEvents}
                   selectedDate={selectedDate}
-                  onToggleComplete={handleToggleComplete}
                   onDeleteTask={handleDeleteTask}
                   onDropTask={handleDropTask}
                   onEventMove={handleEventMove}
                   onUnscheduleTask={handleUnscheduleTask}
                   onDeleteEvent={handleDeleteEventRequest}
+                  onCreateTask={handleTimelineCreateTask}
+                  onEventClick={handleEventClick}
                 />
               )}
             </div>
           </div>
         </main>
 
-        {/* Task Sidebar - Right (fixed) */}
+        {/* Task Sidebar - Right (templates and all-day events) */}
         <aside className="w-72 flex-shrink-0 overflow-hidden">
           <TaskSidebar
-            tasks={tasks}
-            selectedDate={selectedDate}
-            onAddTask={handleAddTask}
-            onDeleteTask={handleDeleteTask}
-            scheduledTaskIds={scheduledTaskIds}
-            onUnschedule={handleUnscheduleAdhoc}
             allDayEvents={allDayEvents}
             colorScheme={colorScheme}
           />
         </aside>
       </div>
 
-      {/* Calendar Selection Modal */}
+      {/* Calendar Selection Modal (for drag & drop) */}
       {calendarSelectionModal.show && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm w-full mx-4">
@@ -476,6 +735,33 @@ export default function Home() {
               className="mt-4 w-full px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
             >
               Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Calendar Selection Modal (for new task creation) */}
+      {pendingTaskCreation && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm w-full mx-4">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Select Calendar</h3>
+            <p className="text-sm text-gray-600 mb-4">Choose which Google Calendar to add &quot;{pendingTaskCreation.task.title}&quot; to:</p>
+            <div className="space-y-2">
+              {connectedGoogleIntegrations.map(integration => (
+                <button
+                  key={integration.id}
+                  onClick={() => handleTaskCreationCalendarSelection(integration.id)}
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-colors"
+                >
+                  <span className="font-medium text-gray-900">{integration.name}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setPendingTaskCreation(null)}
+              className="mt-4 w-full px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              Skip (don&apos;t sync to Google)
             </button>
           </div>
         </div>
@@ -511,6 +797,16 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {/* Task Creation Modal (from timeline click-drag) */}
+      <AddTaskModal
+        isOpen={createTaskModal.show}
+        onClose={() => setCreateTaskModal({ show: false, startTime: null, endTime: null })}
+        onAdd={handleAddTask}
+        defaultDate={selectedDate}
+        defaultStartTime={createTaskModal.startTime || undefined}
+        defaultEndTime={createTaskModal.endTime || undefined}
+      />
     </div>
   );
 }
