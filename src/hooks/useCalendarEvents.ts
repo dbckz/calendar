@@ -32,6 +32,8 @@ export function useCalendarEvents() {
     error: asanaError,
     // Filter state
     projects: asanaProjects,
+    typeValues: asanaTypeValues,
+    integrations: asanaIntegrations,
     filters: asanaFilters,
     setFilters: setAsanaFilters,
     clearFilters: clearAsanaFilters,
@@ -147,6 +149,8 @@ export function useCalendarEvents() {
     error,
     // Asana filter state
     asanaProjects,
+    asanaTypeValues,
+    asanaIntegrations,
     asanaFilters,
     setAsanaFilters,
     clearAsanaFilters,

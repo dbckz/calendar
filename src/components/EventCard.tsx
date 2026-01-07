@@ -11,9 +11,10 @@ interface EventCardProps {
   onDeleteEvent?: () => void;
   compact?: boolean;
   isPast?: boolean;
+  height?: number; // Height in pixels for compact view
 }
 
-export function EventCard({ event, onDelete, onUnschedule, onDeleteEvent, compact, isPast }: EventCardProps) {
+export function EventCard({ event, onDelete, onUnschedule, onDeleteEvent, compact, isPast, height }: EventCardProps) {
   const sourceLabels = {
     google: 'Google Calendar',
     asana: 'Asana',
@@ -26,8 +27,69 @@ export function EventCard({ event, onDelete, onUnschedule, onDeleteEvent, compac
     adhoc: 'bg-purple-100 text-purple-700',
   };
 
+  // Determine if this is a very small event (15-20 minutes = 15-20px)
+  const isVerySmall = height !== undefined && height <= 20;
+  const isSmall = height !== undefined && height <= 35;
+
   // Compact view for timeline
   if (compact) {
+    // Very small events (15 min) - single line with just title
+    if (isVerySmall) {
+      return (
+        <div
+          className={`h-full rounded border shadow-sm overflow-hidden transition-all hover:shadow-md ${
+            event.completed || isPast ? 'opacity-50' : ''
+          } ${isPast ? 'grayscale-[30%]' : ''}`}
+          style={{
+            borderLeftColor: event.color,
+            borderLeftWidth: '3px',
+            backgroundColor: event.color ? `${event.color}20` : 'white',
+          }}
+          title={`${event.title} (${format(event.startTime, 'h:mm a')} - ${format(event.endTime, 'h:mm a')})`}
+        >
+          <div className="px-1.5 h-full flex items-center">
+            <span
+              className={`text-xs font-medium text-gray-900 truncate ${
+                event.completed ? 'line-through text-gray-500' : ''
+              }`}
+            >
+              {event.title}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    // Small events (20-35 min) - title and time on same line
+    if (isSmall) {
+      return (
+        <div
+          className={`h-full rounded-lg border shadow-sm overflow-hidden transition-all hover:shadow-md ${
+            event.completed || isPast ? 'opacity-50' : ''
+          } ${isPast ? 'grayscale-[30%]' : ''}`}
+          style={{
+            borderLeftColor: event.color,
+            borderLeftWidth: '4px',
+            backgroundColor: event.color ? `${event.color}15` : 'white',
+          }}
+        >
+          <div className="px-2 py-1 h-full flex items-center justify-between gap-2">
+            <span
+              className={`text-xs font-medium text-gray-900 truncate flex-1 ${
+                event.completed ? 'line-through text-gray-500' : ''
+              }`}
+            >
+              {event.title}
+            </span>
+            <span className="text-[10px] text-gray-500 flex-shrink-0">
+              {format(event.startTime, 'h:mm a')}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    // Normal compact view
     return (
       <div
         className={`h-full rounded-lg border shadow-sm overflow-hidden transition-all hover:shadow-md ${

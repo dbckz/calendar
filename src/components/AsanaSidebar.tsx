@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, memo, useMemo, useCallback, useRef, useEffect, forwardRef } from 'react';
-import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDueDateFilter, ScheduledAsanaTask } from '@/types';
-import { Calendar, GripVertical, Filter, X, ChevronDown, ExternalLink, MessageSquare, Send, Check } from 'lucide-react';
+import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDateFilter, AsanaSortField, AsanaSortDirection, AsanaFilterLogic, ScheduledAsanaTask } from '@/types';
+import { Calendar, GripVertical, Filter, X, ChevronDown, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle } from 'lucide-react';
 import { format, parseISO, isToday, isPast } from 'date-fns';
 import { getAsanaTaskUrl } from '@/lib/asana';
 
@@ -22,6 +22,8 @@ interface AsanaSidebarProps {
   colorScheme?: ColorScheme;
   // Filter props
   projects?: AsanaProject[];
+  typeValues?: string[]; // Unique Type custom field values
+  integrations?: { id: string; name: string }[]; // Unique integrations from all tasks
   filters?: AsanaFilterState;
   onFiltersChange?: (filters: AsanaFilterState) => void;
   onClearFilters?: () => void;
@@ -33,12 +35,20 @@ interface AsanaSidebarProps {
   onClearHighlight?: () => void;
 }
 
-const DUE_DATE_OPTIONS: { value: AsanaDueDateFilter; label: string }[] = [
-  { value: 'all', label: 'All dates' },
+const DATE_FILTER_OPTIONS: { value: AsanaDateFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
   { value: 'overdue', label: 'Overdue' },
   { value: 'today', label: 'Today' },
   { value: 'this_week', label: 'This week' },
-  { value: 'no_date', label: 'No due date' },
+  { value: 'no_date', label: 'No date' },
+];
+
+const SORT_OPTIONS: { value: AsanaSortField; label: string }[] = [
+  { value: 'dueOn', label: 'Due date' },
+  { value: 'startOn', label: 'Start date' },
+  { value: 'createdAt', label: 'Created' },
+  { value: 'title', label: 'Title' },
+  { value: 'type', label: 'Type' },
 ];
 
 export function AsanaSidebar({
@@ -48,6 +58,8 @@ export function AsanaSidebar({
   onUnschedule,
   colorScheme,
   projects = [],
+  typeValues = [],
+  integrations = [],
   filters,
   onFiltersChange,
   onClearFilters,
@@ -58,6 +70,7 @@ export function AsanaSidebar({
 }: AsanaSidebarProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [showSort, setShowSort] = useState(false);
   const [selectedTask, setSelectedTask] = useState<CalendarEvent | null>(null);
   const taskRefs = useRef<Map<string, HTMLLIElement>>(new Map());
   const listRef = useRef<HTMLUListElement>(null);
@@ -91,22 +104,13 @@ export function AsanaSidebar({
     }
   }, [highlightedTaskId]);
 
-  // Get unique integrations from tasks
-  const integrations = useMemo(() => {
-    const seen = new Map<string, string>();
-    tasks.forEach(task => {
-      if (task.integrationId && task.integrationName && !seen.has(task.integrationId)) {
-        seen.set(task.integrationId, task.integrationName);
-      }
-    });
-    return Array.from(seen.entries()).map(([id, name]) => ({ id, name }));
-  }, [tasks]);
-
   // Check if any filters are active
   const hasActiveFilters = filters && (
     filters.integrationIds.length > 0 ||
     filters.projectIds.length > 0 ||
-    filters.dueDateRange !== 'all'
+    filters.typeValues.length > 0 ||
+    filters.dueDateRange !== 'all' ||
+    filters.startDateRange !== 'all'
   );
 
   const handleIntegrationToggle = (integrationId: string) => {
@@ -117,9 +121,48 @@ export function AsanaSidebar({
     onFiltersChange({ ...filters, integrationIds: newIds });
   };
 
-  const handleDueDateChange = (value: AsanaDueDateFilter) => {
+  const handleProjectToggle = (projectId: string) => {
+    if (!filters || !onFiltersChange) return;
+    const newIds = filters.projectIds.includes(projectId)
+      ? filters.projectIds.filter(id => id !== projectId)
+      : [...filters.projectIds, projectId];
+    onFiltersChange({ ...filters, projectIds: newIds });
+  };
+
+  const handleTypeToggle = (typeValue: string) => {
+    if (!filters || !onFiltersChange) return;
+    const newTypes = filters.typeValues.includes(typeValue)
+      ? filters.typeValues.filter(t => t !== typeValue)
+      : [...filters.typeValues, typeValue];
+    onFiltersChange({ ...filters, typeValues: newTypes });
+  };
+
+  const handleDueDateChange = (value: AsanaDateFilter) => {
     if (!filters || !onFiltersChange) return;
     onFiltersChange({ ...filters, dueDateRange: value });
+  };
+
+  const handleStartDateChange = (value: AsanaDateFilter) => {
+    if (!filters || !onFiltersChange) return;
+    onFiltersChange({ ...filters, startDateRange: value });
+  };
+
+  const handleFilterLogicChange = (logic: AsanaFilterLogic) => {
+    if (!filters || !onFiltersChange) return;
+    onFiltersChange({ ...filters, filterLogic: logic });
+  };
+
+  const handleSortChange = (field: AsanaSortField) => {
+    if (!filters || !onFiltersChange) return;
+    // If clicking same field, toggle direction; otherwise set new field with asc
+    if (filters.sortField === field) {
+      onFiltersChange({
+        ...filters,
+        sortDirection: filters.sortDirection === 'asc' ? 'desc' : 'asc',
+      });
+    } else {
+      onFiltersChange({ ...filters, sortField: field, sortDirection: 'asc' });
+    }
   };
 
   const handleDragStart = (e: React.DragEvent, task: CalendarEvent) => {
@@ -187,27 +230,92 @@ export function AsanaSidebar({
             <div className="w-2 h-2 rounded-full bg-orange-500" />
             <h2 className={`font-semibold ${colorScheme?.sidebarHeaderText || 'text-gray-900'}`}>Asana Tasks</h2>
           </div>
-          {filters && onFiltersChange && (
-            <button
-              onClick={() => setShowFilters(!showFilters)}
-              className={`p-1.5 rounded-md transition-colors ${
-                hasActiveFilters
-                  ? 'bg-orange-100 text-orange-600'
-                  : 'hover:bg-gray-100 text-gray-500'
-              }`}
-              title={showFilters ? 'Hide filters' : 'Show filters'}
-            >
-              <Filter className="w-4 h-4" />
-            </button>
-          )}
+          <div className="flex items-center gap-1">
+            {filters && onFiltersChange && (
+              <>
+                <button
+                  onClick={() => { setShowSort(!showSort); setShowFilters(false); }}
+                  className={`p-1.5 rounded-md transition-colors ${
+                    showSort ? 'bg-orange-100 text-orange-600' : 'hover:bg-gray-100 text-gray-500'
+                  }`}
+                  title="Sort"
+                >
+                  <ArrowUpDown className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => { setShowFilters(!showFilters); setShowSort(false); }}
+                  className={`p-1.5 rounded-md transition-colors ${
+                    hasActiveFilters
+                      ? 'bg-orange-100 text-orange-600'
+                      : showFilters ? 'bg-orange-100 text-orange-600' : 'hover:bg-gray-100 text-gray-500'
+                  }`}
+                  title={showFilters ? 'Hide filters' : 'Show filters'}
+                >
+                  <Filter className="w-4 h-4" />
+                </button>
+              </>
+            )}
+          </div>
         </div>
         <p className="text-sm mt-1 text-gray-500">
           {tasks.length} task{tasks.length !== 1 ? 's' : ''}
         </p>
 
+        {/* Sort Panel */}
+        {showSort && filters && onFiltersChange && (
+          <div className="mt-3 pt-3 border-t border-gray-200 space-y-2">
+            <label className="text-xs font-medium text-gray-600 block">Sort by</label>
+            <div className="flex flex-wrap gap-1.5">
+              {SORT_OPTIONS.map(option => (
+                <button
+                  key={option.value}
+                  onClick={() => handleSortChange(option.value)}
+                  className={`text-xs px-2 py-1 rounded-full transition-colors flex items-center gap-1 ${
+                    filters.sortField === option.value
+                      ? 'bg-orange-100 text-orange-700'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  }`}
+                >
+                  {option.label}
+                  {filters.sortField === option.value && (
+                    <span className="text-[10px]">{filters.sortDirection === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Filter Panel */}
         {showFilters && filters && onFiltersChange && (
-          <div className="mt-3 pt-3 border-t border-gray-200 space-y-3">
+          <div className="mt-3 pt-3 border-t border-gray-200 space-y-3 max-h-[400px] overflow-y-auto">
+            {/* AND/OR logic toggle */}
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1.5">Filter logic</label>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => handleFilterLogicChange('and')}
+                  className={`text-xs px-3 py-1 rounded-l-md border transition-colors ${
+                    filters.filterLogic === 'and'
+                      ? 'bg-orange-100 text-orange-700 border-orange-300'
+                      : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  AND
+                </button>
+                <button
+                  onClick={() => handleFilterLogicChange('or')}
+                  className={`text-xs px-3 py-1 rounded-r-md border-t border-r border-b transition-colors ${
+                    filters.filterLogic === 'or'
+                      ? 'bg-orange-100 text-orange-700 border-orange-300'
+                      : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  OR
+                </button>
+              </div>
+            </div>
+
             {/* Integration filter */}
             {integrations.length > 1 && (
               <div>
@@ -218,9 +326,9 @@ export function AsanaSidebar({
                       key={integration.id}
                       onClick={() => handleIntegrationToggle(integration.id)}
                       className={`text-xs px-2 py-1 rounded-full transition-colors ${
-                        filters.integrationIds.length === 0 || filters.integrationIds.includes(integration.id)
+                        filters.integrationIds.includes(integration.id)
                           ? 'bg-orange-100 text-orange-700'
-                          : 'bg-gray-100 text-gray-500'
+                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                       }`}
                     >
                       {integration.name}
@@ -230,16 +338,90 @@ export function AsanaSidebar({
               </div>
             )}
 
+            {/* Project filter */}
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1.5 flex items-center gap-1">
+                <Folder className="w-3 h-3" /> Project
+              </label>
+              {projects.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                  {projects.map(project => (
+                    <button
+                      key={project.gid}
+                      onClick={() => handleProjectToggle(project.gid)}
+                      className={`text-xs px-2 py-1 rounded-full transition-colors truncate max-w-[150px] ${
+                        filters.projectIds.includes(project.gid)
+                          ? 'bg-orange-100 text-orange-700'
+                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      }`}
+                      title={project.name}
+                    >
+                      {project.name}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 italic">No projects available</p>
+              )}
+            </div>
+
+            {/* Type filter */}
+            {typeValues.length > 0 && (
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-1.5 flex items-center gap-1">
+                  <Tag className="w-3 h-3" /> Type
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {typeValues.map(typeValue => (
+                    <button
+                      key={typeValue}
+                      onClick={() => handleTypeToggle(typeValue)}
+                      className={`text-xs px-2 py-1 rounded-full transition-colors ${
+                        filters.typeValues.includes(typeValue)
+                          ? 'bg-orange-100 text-orange-700'
+                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      }`}
+                    >
+                      {typeValue}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Start date filter */}
+            <div>
+              <label className="text-xs font-medium text-gray-600 block mb-1.5 flex items-center gap-1">
+                <PlayCircle className="w-3 h-3" /> Start date
+              </label>
+              <div className="relative">
+                <select
+                  value={filters.startDateRange}
+                  onChange={(e) => handleStartDateChange(e.target.value as AsanaDateFilter)}
+                  className="w-full text-sm bg-gray-50 border border-gray-200 rounded-md px-2.5 py-1.5 pr-8 appearance-none focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                >
+                  {DATE_FILTER_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+              </div>
+            </div>
+
             {/* Due date filter */}
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1.5">Due date</label>
+              <label className="text-xs font-medium text-gray-600 block mb-1.5 flex items-center gap-1">
+                <Clock className="w-3 h-3" /> Due date
+              </label>
               <div className="relative">
                 <select
                   value={filters.dueDateRange}
-                  onChange={(e) => handleDueDateChange(e.target.value as AsanaDueDateFilter)}
+                  onChange={(e) => handleDueDateChange(e.target.value as AsanaDateFilter)}
                   className="w-full text-sm bg-gray-50 border border-gray-200 rounded-md px-2.5 py-1.5 pr-8 appearance-none focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                 >
-                  {DUE_DATE_OPTIONS.map(option => (
+                  {DATE_FILTER_OPTIONS.map(option => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>
@@ -256,7 +438,7 @@ export function AsanaSidebar({
                 className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700"
               >
                 <X className="w-3 h-3" />
-                Clear filters
+                Clear all filters
               </button>
             )}
           </div>
@@ -357,43 +539,122 @@ function TaskDetailDialog({
     }
   };
 
+  // Get Type custom field
+  const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden"
+        className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden max-h-[90vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="p-4 border-b border-gray-200">
+        <div className="p-4 border-b border-gray-200 flex-shrink-0">
           <div className="flex items-start justify-between gap-3">
             <h3 className="font-semibold text-gray-900 line-clamp-2">{task.title}</h3>
             <button
               onClick={onClose}
-              className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+              className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded flex-shrink-0"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
-          {task.description && (
-            <p className="text-sm text-gray-600 mt-2 line-clamp-3">{task.description}</p>
+
+          {/* Type badge */}
+          {typeField?.displayValue && (
+            <span className="inline-flex items-center gap-1 mt-2 px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">
+              <Tag className="w-3 h-3" />
+              {typeField.displayValue}
+            </span>
           )}
-          <div className="flex items-center gap-3 mt-3 text-sm text-gray-500">
-            {task.dueOn && (
-              <span className="flex items-center gap-1">
-                <Calendar className="w-4 h-4" />
-                {format(parseISO(task.dueOn), 'MMM d, yyyy')}
-              </span>
-            )}
-            {scheduledDuration !== undefined && scheduledDuration > 0 && (
-              <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-xs">
-                {formatDuration(scheduledDuration)} scheduled
-              </span>
-            )}
-          </div>
+
+          {/* Scheduled duration */}
+          {scheduledDuration !== undefined && scheduledDuration > 0 && (
+            <span className="inline-flex ml-2 mt-2 bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-xs">
+              {formatDuration(scheduledDuration)} scheduled
+            </span>
+          )}
         </div>
 
-        {/* Actions */}
-        <div className="p-4 space-y-4">
+        {/* Scrollable content */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Notes/Description */}
+          {task.description && (
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Notes</label>
+              <p className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">{task.description}</p>
+            </div>
+          )}
+
+          {/* Task Details Grid */}
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            {/* Start date */}
+            {task.startOn && (
+              <div>
+                <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1">
+                  <PlayCircle className="w-3 h-3" /> Start
+                </label>
+                <p className="text-gray-900 mt-0.5">{format(parseISO(task.startOn), 'MMM d, yyyy')}</p>
+              </div>
+            )}
+
+            {/* Due date */}
+            {task.dueOn && (
+              <div>
+                <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1">
+                  <Clock className="w-3 h-3" /> Due
+                </label>
+                <p className={`mt-0.5 ${
+                  isPast(parseISO(task.dueOn)) && !isToday(parseISO(task.dueOn))
+                    ? 'text-red-600 font-medium'
+                    : isToday(parseISO(task.dueOn))
+                    ? 'text-orange-600 font-medium'
+                    : 'text-gray-900'
+                }`}>
+                  {format(parseISO(task.dueOn), 'MMM d, yyyy')}
+                </p>
+              </div>
+            )}
+
+            {/* Created at */}
+            {task.createdAt && (
+              <div>
+                <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Created</label>
+                <p className="text-gray-900 mt-0.5">{format(parseISO(task.createdAt), 'MMM d, yyyy')}</p>
+              </div>
+            )}
+
+            {/* Integration */}
+            {task.integrationName && (
+              <div>
+                <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Integration</label>
+                <p className="text-gray-900 mt-0.5">{task.integrationName}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Projects */}
+          {task.projects && task.projects.length > 0 && (
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1">
+                <Folder className="w-3 h-3" /> Projects
+              </label>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {task.projects.map(project => (
+                  <span
+                    key={project.gid}
+                    className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded text-xs"
+                  >
+                    {project.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Actions - fixed at bottom */}
+        <div className="p-4 border-t border-gray-200 space-y-3 flex-shrink-0">
           {/* Complete/Reopen button */}
           {onToggleComplete && task.integrationId && (
             <button

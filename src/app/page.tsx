@@ -108,6 +108,8 @@ export default function Home() {
     addAsanaComment,
     // Asana filter state
     asanaProjects,
+    asanaTypeValues,
+    asanaIntegrations,
     asanaFilters,
     setAsanaFilters,
     clearAsanaFilters,
@@ -664,6 +666,8 @@ export default function Home() {
             onUnschedule={handleUnscheduleAsana}
             colorScheme={colorScheme}
             projects={asanaProjects}
+            typeValues={asanaTypeValues}
+            integrations={asanaIntegrations}
             filters={asanaFilters}
             onFiltersChange={setAsanaFilters}
             onClearFilters={clearAsanaFilters}

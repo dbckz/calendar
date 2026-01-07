@@ -100,6 +100,7 @@ const HOUR_HEIGHT = 60;
 const START_HOUR = 6;
 const END_HOUR = 23;
 const SNAP_MINUTES = 15;
+const MIN_EVENT_HEIGHT = HOUR_HEIGHT * SNAP_MINUTES / 60; // 15px = 15 minutes
 
 // Convert Y position to time
 function yToTime(y: number, selectedDate: Date): Date {
@@ -228,7 +229,7 @@ export function Timeline({
     const clampedEnd = Math.min(endHour, END_HOUR + 1);
 
     let top = (clampedStart - START_HOUR) * HOUR_HEIGHT;
-    let height = Math.max((clampedEnd - clampedStart) * HOUR_HEIGHT, 30);
+    let height = Math.max((clampedEnd - clampedStart) * HOUR_HEIGHT, MIN_EVENT_HEIGHT);
 
     // Apply drag offset if this event is being dragged
     if (draggingEvent?.event.id === event.id) {
@@ -324,11 +325,11 @@ export function Timeline({
     if (draggingEvent.mode === 'move') {
       setDragOffset({ top: snappedDelta, height: 0 });
     } else if (draggingEvent.mode === 'resize-top') {
-      const maxDelta = draggingEvent.originalHeight - 30; // Minimum 30px height
+      const maxDelta = draggingEvent.originalHeight - MIN_EVENT_HEIGHT; // Minimum 15px height (15 min)
       const clampedDelta = Math.min(snappedDelta, maxDelta);
       setDragOffset({ top: clampedDelta, height: -clampedDelta });
     } else if (draggingEvent.mode === 'resize-bottom') {
-      const minDelta = -(draggingEvent.originalHeight - 30);
+      const minDelta = -(draggingEvent.originalHeight - MIN_EVENT_HEIGHT);
       const clampedDelta = Math.max(snappedDelta, minDelta);
       setDragOffset({ top: 0, height: clampedDelta });
     }
@@ -344,7 +345,7 @@ export function Timeline({
 
     // Clamp to valid range
     newTop = Math.max(0, Math.min(newTop, hours.length * HOUR_HEIGHT - newHeight));
-    newHeight = Math.max(30, newHeight);
+    newHeight = Math.max(MIN_EVENT_HEIGHT, newHeight);
 
     const newStartTime = yToTime(newTop, selectedDate);
     const newEndTime = yToTime(newTop + newHeight, selectedDate);
@@ -410,7 +411,7 @@ export function Timeline({
       const clampedY = Math.max(0, Math.min(snappedY, hours.length * HOUR_HEIGHT));
 
       // Ensure minimum height of 15 minutes
-      const minHeight = HOUR_HEIGHT * SNAP_MINUTES / 60;
+      const minHeight = MIN_EVENT_HEIGHT;
       if (clampedY >= creationStartY) {
         setCreationEndY(Math.max(clampedY, creationStartY + minHeight));
       } else {
@@ -592,11 +593,13 @@ export function Timeline({
 
           {positionedEvents.map(pos => {
             const canDrag = pos.event.source === 'adhoc' || pos.event.source === 'asana' || pos.event.source === 'google';
+            const eventStyle = getEventStyle(pos);
+            const eventHeight = parseFloat(eventStyle.height);
 
             return (
               <div
                 key={`${pos.event.integrationId || pos.event.source}-${pos.event.id}`}
-                style={getEventStyle(pos)}
+                style={eventStyle}
                 className="group event-card-wrapper"
               >
                 {/* Resize handle - top */}
@@ -629,6 +632,7 @@ export function Timeline({
                     event={pos.event}
                     compact
                     isPast={isEventPast(pos.event)}
+                    height={eventHeight}
                     onDelete={pos.event.source === 'adhoc' ? onDeleteTask : undefined}
                     onUnschedule={
                       canDrag

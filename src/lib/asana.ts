@@ -150,9 +150,24 @@ export async function getMyTasks(
 
   const taskListData: AsanaApiResponse<{ gid: string }> = await taskListResponse.json();
 
-  // Get tasks from the task list
+  // Get tasks from the task list with all needed fields
+  const optFields = [
+    'name',
+    'notes',
+    'due_on',
+    'due_at',
+    'start_on',
+    'completed',
+    'created_at',
+    'assignee.name',
+    'projects.name',
+    'custom_fields.name',
+    'custom_fields.display_value',
+    'custom_fields.type',
+  ].join(',');
+
   const tasksResponse = await fetch(
-    `${ASANA_API_BASE}/user_task_lists/${taskListData.data.gid}/tasks?opt_fields=name,notes,due_on,due_at,completed,assignee.name`,
+    `${ASANA_API_BASE}/user_task_lists/${taskListData.data.gid}/tasks?opt_fields=${optFields}`,
     {
       headers: {
         'Authorization': `Bearer ${accessToken}`,
@@ -175,8 +190,17 @@ export async function getMyTasks(
     notes: task.notes as string | undefined,
     dueOn: task.due_on as string | undefined,
     dueAt: task.due_at as string | undefined,
+    startOn: task.start_on as string | undefined,
+    createdAt: task.created_at as string | undefined,
     completed: task.completed as boolean,
     assignee: task.assignee as { gid: string; name: string } | undefined,
+    projects: task.projects as Array<{ gid: string; name: string }> | undefined,
+    customFields: (task.custom_fields as Array<{ gid: string; name: string; display_value: string | null; type: string }> | undefined)?.map(cf => ({
+      gid: cf.gid,
+      name: cf.name,
+      displayValue: cf.display_value,
+      type: cf.type,
+    })),
   }));
 }
 
@@ -270,6 +294,10 @@ export function asanaTaskToCalendarEvent(task: AsanaTask): CalendarEvent {
     completed: task.completed,
     assignee: task.assignee?.name,
     dueOn: task.dueOn,
+    startOn: task.startOn,
+    createdAt: task.createdAt,
+    projects: task.projects,
+    customFields: task.customFields,
   };
 }
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { CalendarEvent, ScheduledAsanaTask, AsanaProject, AsanaFilterState, AsanaDueDateFilter } from '@/types';
+import { CalendarEvent, ScheduledAsanaTask, AsanaProject, AsanaFilterState, AsanaDateFilter } from '@/types';
 import { api, parseCalendarEvents, ApiRequestError } from '@/lib/api';
 import {
   getScheduledAsanaTasks,
@@ -11,7 +11,7 @@ import {
   unscheduleAsanaTask,
   unscheduleAllAsanaTaskInstances,
 } from '@/lib/storage';
-import { isToday, isPast, isThisWeek, parseISO } from 'date-fns';
+import { isToday, isPast, isThisWeek, parseISO, compareAsc, compareDesc } from 'date-fns';
 
 interface UseAsanaTasksReturn {
   allAsanaTasks: CalendarEvent[];
@@ -21,6 +21,8 @@ interface UseAsanaTasksReturn {
   error: string | null;
   // Filter state
   projects: AsanaProject[];
+  typeValues: string[]; // Unique type values from tasks
+  integrations: { id: string; name: string }[]; // Unique integrations from tasks
   filters: AsanaFilterState;
   setFilters: (filters: AsanaFilterState) => void;
   clearFilters: () => void;
@@ -53,13 +55,45 @@ interface UseAsanaTasksReturn {
 const DEFAULT_FILTERS: AsanaFilterState = {
   integrationIds: [],
   projectIds: [],
+  typeValues: [],
   dueDateRange: 'all',
+  startDateRange: 'all',
+  filterLogic: 'and',
+  sortField: 'dueOn',
+  sortDirection: 'asc',
 };
+
+// Helper to get "Type" custom field value from a task
+function getTaskTypeValue(task: CalendarEvent): string | null {
+  const typeField = task.customFields?.find(
+    cf => cf.name.toLowerCase() === 'type'
+  );
+  return typeField?.displayValue || null;
+}
+
+// Helper to check if date matches filter
+function matchesDateFilter(dateStr: string | undefined, filter: AsanaDateFilter): boolean {
+  if (filter === 'all') return true;
+
+  const date = dateStr ? parseISO(dateStr) : null;
+
+  switch (filter) {
+    case 'no_date':
+      return date === null;
+    case 'overdue':
+      return date !== null && isPast(date) && !isToday(date);
+    case 'today':
+      return date !== null && isToday(date);
+    case 'this_week':
+      return date !== null && isThisWeek(date);
+    default:
+      return true;
+  }
+}
 
 export function useAsanaTasks(): UseAsanaTasksReturn {
   const [allAsanaTasks, setAllAsanaTasks] = useState<CalendarEvent[]>([]);
   const [scheduledAsanaTasks, setScheduledAsanaTasks] = useState<ScheduledAsanaTask[]>([]);
-  const [projects, setProjects] = useState<AsanaProject[]>([]);
   const [filters, setFilters] = useState<AsanaFilterState>(DEFAULT_FILTERS);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,16 +103,6 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     setScheduledAsanaTasks(getScheduledAsanaTasks());
   }, []);
 
-  // Fetch projects when tasks are loaded
-  const fetchProjects = useCallback(async () => {
-    try {
-      const { projects: fetchedProjects } = await api.getAsanaProjects();
-      setProjects(fetchedProjects);
-    } catch (err) {
-      console.error('Failed to fetch Asana projects:', err);
-    }
-  }, []);
-
   const fetchAllAsanaTasks = useCallback(async () => {
     setIsLoading(true);
     setError(null);
@@ -86,8 +110,6 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     try {
       const tasks = await api.getAllAsanaTasks();
       setAllAsanaTasks(parseCalendarEvents(tasks));
-      // Also fetch projects
-      fetchProjects();
     } catch (err) {
       if (err instanceof ApiRequestError && err.status === 401) {
         setAllAsanaTasks([]);
@@ -98,46 +120,137 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     } finally {
       setIsLoading(false);
     }
-  }, [fetchProjects]);
+  }, []);
 
-  // Filter tasks based on current filters
+  // Extract unique projects from all tasks
+  const projects = useMemo(() => {
+    const projectMap = new Map<string, AsanaProject>();
+    allAsanaTasks.forEach(task => {
+      if (task.projects) {
+        task.projects.forEach(project => {
+          if (!projectMap.has(project.gid)) {
+            projectMap.set(project.gid, {
+              gid: project.gid,
+              name: project.name,
+              integrationId: task.integrationId || '',
+              integrationName: task.integrationName || '',
+            });
+          }
+        });
+      }
+    });
+    return Array.from(projectMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [allAsanaTasks]);
+
+  // Extract unique type values from all tasks
+  const typeValues = useMemo(() => {
+    const types = new Set<string>();
+    allAsanaTasks.forEach(task => {
+      const typeValue = getTaskTypeValue(task);
+      if (typeValue) types.add(typeValue);
+    });
+    return Array.from(types).sort();
+  }, [allAsanaTasks]);
+
+  // Extract unique integrations from all tasks
+  const integrations = useMemo(() => {
+    const integrationMap = new Map<string, string>();
+    allAsanaTasks.forEach(task => {
+      if (task.integrationId && task.integrationName && !integrationMap.has(task.integrationId)) {
+        integrationMap.set(task.integrationId, task.integrationName);
+      }
+    });
+    return Array.from(integrationMap.entries()).map(([id, name]) => ({ id, name }));
+  }, [allAsanaTasks]);
+
+  // Filter and sort tasks based on current filters
   const filteredAsanaTasks = useMemo(() => {
-    return allAsanaTasks.filter(task => {
+    // Filter tasks
+    const filtered = allAsanaTasks.filter(task => {
+      const conditions: boolean[] = [];
+
       // Filter by integration
       if (filters.integrationIds.length > 0) {
-        if (!task.integrationId || !filters.integrationIds.includes(task.integrationId)) {
-          return false;
-        }
+        conditions.push(
+          task.integrationId !== undefined && filters.integrationIds.includes(task.integrationId)
+        );
       }
 
-      // Filter by project - need to check task's projects array
-      // Note: projects info is stored in task metadata (from API response)
+      // Filter by project
       if (filters.projectIds.length > 0) {
-        // Tasks don't have projects array in CalendarEvent type, so we skip this filter for now
-        // This would require extending the CalendarEvent type or using a different approach
+        const taskProjectIds = task.projects?.map(p => p.gid) || [];
+        conditions.push(
+          filters.projectIds.some(pid => taskProjectIds.includes(pid))
+        );
+      }
+
+      // Filter by Type custom field
+      if (filters.typeValues.length > 0) {
+        const taskType = getTaskTypeValue(task);
+        conditions.push(
+          taskType !== null && filters.typeValues.includes(taskType)
+        );
       }
 
       // Filter by due date
       if (filters.dueDateRange !== 'all') {
-        const dueDate = task.dueOn ? parseISO(task.dueOn) : null;
-
-        switch (filters.dueDateRange) {
-          case 'no_date':
-            if (dueDate !== null) return false;
-            break;
-          case 'overdue':
-            if (!dueDate || !isPast(dueDate) || isToday(dueDate)) return false;
-            break;
-          case 'today':
-            if (!dueDate || !isToday(dueDate)) return false;
-            break;
-          case 'this_week':
-            if (!dueDate || !isThisWeek(dueDate)) return false;
-            break;
-        }
+        conditions.push(matchesDateFilter(task.dueOn, filters.dueDateRange));
       }
 
-      return true;
+      // Filter by start date
+      if (filters.startDateRange !== 'all') {
+        conditions.push(matchesDateFilter(task.startOn, filters.startDateRange));
+      }
+
+      // If no conditions, include the task
+      if (conditions.length === 0) return true;
+
+      // Apply AND/OR logic
+      if (filters.filterLogic === 'and') {
+        return conditions.every(c => c);
+      } else {
+        return conditions.some(c => c);
+      }
+    });
+
+    // Sort tasks
+    return filtered.sort((a, b) => {
+      const direction = filters.sortDirection === 'asc' ? 1 : -1;
+
+      switch (filters.sortField) {
+        case 'title':
+          return direction * a.title.localeCompare(b.title);
+
+        case 'dueOn': {
+          if (!a.dueOn && !b.dueOn) return 0;
+          if (!a.dueOn) return direction; // No date goes to end for asc
+          if (!b.dueOn) return -direction;
+          return direction * compareAsc(parseISO(a.dueOn), parseISO(b.dueOn));
+        }
+
+        case 'startOn': {
+          if (!a.startOn && !b.startOn) return 0;
+          if (!a.startOn) return direction;
+          if (!b.startOn) return -direction;
+          return direction * compareAsc(parseISO(a.startOn), parseISO(b.startOn));
+        }
+
+        case 'createdAt': {
+          if (!a.createdAt && !b.createdAt) return 0;
+          if (!a.createdAt) return direction;
+          if (!b.createdAt) return -direction;
+          return direction * compareAsc(parseISO(a.createdAt), parseISO(b.createdAt));
+        }
+
+        case 'type': {
+          const typeA = getTaskTypeValue(a) || '';
+          const typeB = getTaskTypeValue(b) || '';
+          return direction * typeA.localeCompare(typeB);
+        }
+
+        default:
+          return 0;
+      }
     });
   }, [allAsanaTasks, filters]);
 
@@ -242,6 +355,8 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     error,
     // Filter state
     projects,
+    typeValues,
+    integrations,
     filters,
     setFilters,
     clearFilters,

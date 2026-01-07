@@ -13,11 +13,23 @@ export interface CalendarEvent {
   completed?: boolean;
   assignee?: string;
   dueOn?: string;
+  startOn?: string;
+  createdAt?: string;
   integrationId?: string;
   integrationName?: string;
+  // Asana-specific fields
+  projects?: Array<{ gid: string; name: string }>;
+  customFields?: AsanaCustomField[];
   // Link to Asana task (when Google event represents a scheduled Asana task)
   linkedAsanaTaskId?: string;
   linkedAsanaIntegrationId?: string;
+}
+
+export interface AsanaCustomField {
+  gid: string;
+  name: string;
+  displayValue: string | null;
+  type: string;
 }
 
 export interface AsanaTask {
@@ -27,6 +39,8 @@ export interface AsanaTask {
   notes?: string;
   dueOn?: string;
   dueAt?: string;
+  startOn?: string;
+  createdAt?: string;
   completed: boolean;
   assignee?: {
     gid: string;
@@ -36,6 +50,7 @@ export interface AsanaTask {
     gid: string;
     name: string;
   }>;
+  customFields?: AsanaCustomField[];
 }
 
 export interface AsanaProject {
@@ -45,13 +60,26 @@ export interface AsanaProject {
   integrationName: string;
 }
 
-export type AsanaDueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'no_date';
+export type AsanaDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'no_date';
+
+export type AsanaSortField = 'dueOn' | 'startOn' | 'createdAt' | 'title' | 'type';
+export type AsanaSortDirection = 'asc' | 'desc';
+
+export type AsanaFilterLogic = 'and' | 'or';
 
 export interface AsanaFilterState {
   integrationIds: string[];
   projectIds: string[];
-  dueDateRange: AsanaDueDateFilter;
+  typeValues: string[]; // Custom field "Type" values
+  dueDateRange: AsanaDateFilter;
+  startDateRange: AsanaDateFilter;
+  filterLogic: AsanaFilterLogic;
+  sortField: AsanaSortField;
+  sortDirection: AsanaSortDirection;
 }
+
+// Legacy alias for backwards compatibility
+export type AsanaDueDateFilter = AsanaDateFilter;
 
 // Built-in task types
 export type BuiltInTaskType =
