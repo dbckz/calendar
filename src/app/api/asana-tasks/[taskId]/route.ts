@@ -1,7 +1,54 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { completeTask, addTaskComment, deleteTask, refreshAsanaToken } from '@/lib/asana';
+import { completeTask, addTaskComment, deleteTask, getTaskStories, refreshAsanaToken } from '@/lib/asana';
 import { getIntegrationById, updateIntegration } from '@/lib/integration-storage';
 import { AsanaIntegration } from '@/types';
+
+// GET - Fetch task stories/comments
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ taskId: string }> }
+) {
+  try {
+    const { taskId } = await params;
+    const { searchParams } = new URL(request.url);
+    const integrationId = searchParams.get('integrationId');
+
+    if (!integrationId) {
+      return NextResponse.json({ error: 'integrationId is required' }, { status: 400 });
+    }
+
+    const integration = await getIntegrationById(integrationId) as AsanaIntegration | null;
+    if (!integration || integration.type !== 'asana') {
+      return NextResponse.json({ error: 'Asana integration not found' }, { status: 404 });
+    }
+
+    if (!integration.credentials) {
+      return NextResponse.json({ error: 'Integration not authenticated' }, { status: 401 });
+    }
+
+    let credentials = integration.credentials;
+
+    // Check if token needs refresh
+    if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
+      credentials = await refreshAsanaToken(
+        credentials.refreshToken!,
+        integration.clientId,
+        integration.clientSecret
+      );
+      await updateIntegration(integration.id, { credentials });
+    }
+
+    const stories = await getTaskStories(credentials.accessToken, taskId);
+
+    return NextResponse.json({ stories });
+  } catch (error) {
+    console.error('Error fetching stories:', error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to fetch stories' },
+      { status: 500 }
+    );
+  }
+}
 
 // PATCH - Mark task complete/incomplete
 export async function PATCH(

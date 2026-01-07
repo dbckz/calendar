@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, memo, useMemo, useCallback, useRef, useEffect, forwardRef } from 'react';
-import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDateFilter, AsanaSortField, AsanaSortDirection, AsanaFilterLogic, ScheduledAsanaTask } from '@/types';
-import { Calendar, GripVertical, Filter, X, ChevronDown, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle, Plus, Trash2 } from 'lucide-react';
+import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDateFilter, AsanaSortField, AsanaSortDirection, AsanaFilterLogic, ScheduledAsanaTask, AsanaStory } from '@/types';
+import { Calendar, GripVertical, Filter, X, ChevronDown, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle, Plus, Trash2, MessageSquare, Loader2, Link as LinkIcon } from 'lucide-react';
 import { format, parseISO, isToday, isPast } from 'date-fns';
 import { getAsanaTaskUrl } from '@/lib/asana';
+import { api } from '@/lib/api';
 
 interface ColorScheme {
   headerBg: string;
@@ -543,6 +544,54 @@ function TaskDetailDialog({
   const [isToggling, setIsToggling] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [stories, setStories] = useState<AsanaStory[]>([]);
+  const [isLoadingStories, setIsLoadingStories] = useState(false);
+  const [storiesError, setStoriesError] = useState<string | null>(null);
+
+  // Fetch stories when dialog opens
+  useEffect(() => {
+    if (task.integrationId) {
+      setIsLoadingStories(true);
+      setStoriesError(null);
+      api.getTaskStories(task.id, task.integrationId)
+        .then(({ stories }) => {
+          // Filter to only show comments (not system-generated stories)
+          const comments = stories.filter(s => s.resourceSubtype === 'comment_added');
+          setStories(comments);
+        })
+        .catch((err) => {
+          console.error('Failed to fetch stories:', err);
+          setStoriesError('Failed to load comments');
+        })
+        .finally(() => {
+          setIsLoadingStories(false);
+        });
+    }
+  }, [task.id, task.integrationId]);
+
+  // Helper to render text with clickable links
+  const renderTextWithLinks = (text: string) => {
+    // Regex to match URLs
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const parts = text.split(urlRegex);
+
+    return parts.map((part, index) => {
+      if (part.match(urlRegex)) {
+        return (
+          <a
+            key={index}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:text-blue-800 hover:underline break-all"
+          >
+            {part}
+          </a>
+        );
+      }
+      return part;
+    });
+  };
 
   const handleSubmitComment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -552,6 +601,10 @@ function TaskDetailDialog({
     try {
       await onAddComment(task.id, task.integrationId, comment.trim());
       setComment('');
+      // Refresh stories to show the new comment
+      const { stories } = await api.getTaskStories(task.id, task.integrationId);
+      const comments = stories.filter(s => s.resourceSubtype === 'comment_added');
+      setStories(comments);
     } finally {
       setIsSubmitting(false);
     }
@@ -695,6 +748,44 @@ function TaskDetailDialog({
               </div>
             </div>
           )}
+
+          {/* Comments Section */}
+          <div>
+            <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1">
+              <MessageSquare className="w-3 h-3" /> Comments
+              {stories.length > 0 && (
+                <span className="text-gray-400">({stories.length})</span>
+              )}
+            </label>
+
+            {isLoadingStories ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
+              </div>
+            ) : storiesError ? (
+              <p className="text-sm text-red-500 mt-1">{storiesError}</p>
+            ) : stories.length === 0 ? (
+              <p className="text-sm text-gray-500 mt-1 italic">No comments yet</p>
+            ) : (
+              <div className="mt-2 space-y-3 max-h-48 overflow-y-auto">
+                {stories.map((story) => (
+                  <div key={story.gid} className="bg-gray-50 rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-medium text-gray-700">
+                        {story.createdBy?.name || 'Unknown'}
+                      </span>
+                      <span className="text-xs text-gray-400">
+                        {format(parseISO(story.createdAt), 'MMM d, h:mm a')}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">
+                      {renderTextWithLinks(story.text)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Actions - fixed at bottom */}

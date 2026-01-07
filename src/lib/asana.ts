@@ -361,6 +361,50 @@ export async function addTaskComment(
   }
 }
 
+export interface AsanaStory {
+  gid: string;
+  type: string;
+  text: string;
+  createdAt: string;
+  createdBy?: {
+    gid: string;
+    name: string;
+  };
+  resourceSubtype: string;
+}
+
+export async function getTaskStories(
+  accessToken: string,
+  taskGid: string
+): Promise<AsanaStory[]> {
+  const response = await fetch(
+    `${ASANA_API_BASE}/tasks/${taskGid}/stories?opt_fields=type,text,created_at,created_by.name,resource_subtype`,
+    {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Failed to fetch stories: ${response.status} - ${errorBody}`);
+  }
+
+  const data = await response.json();
+  return data.data.map((story: Record<string, unknown>) => ({
+    gid: story.gid as string,
+    type: story.type as string,
+    text: story.text as string || '',
+    createdAt: story.created_at as string,
+    createdBy: story.created_by ? {
+      gid: (story.created_by as Record<string, string>).gid,
+      name: (story.created_by as Record<string, string>).name,
+    } : undefined,
+    resourceSubtype: story.resource_subtype as string,
+  }));
+}
+
 export function getAsanaTaskUrl(taskGid: string): string {
   return `https://app.asana.com/0/0/${taskGid}`;
 }

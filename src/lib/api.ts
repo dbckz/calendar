@@ -1,6 +1,6 @@
 // API utilities with retry logic and proper typing
 
-import { ApiError, AsanaProject, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, SettingsResponse } from '@/types';
+import { ApiError, AsanaProject, AsanaStory, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, SettingsResponse } from '@/types';
 
 interface RetryOptions {
   maxRetries?: number;
@@ -187,6 +187,15 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ integrationId }),
       }
+    );
+  },
+
+  async getTaskStories(
+    taskId: string,
+    integrationId: string
+  ): Promise<{ stories: AsanaStory[] }> {
+    return fetchWithRetry<{ stories: AsanaStory[] }>(
+      `/api/asana-tasks/${taskId}?integrationId=${encodeURIComponent(integrationId)}`
     );
   },
 

@@ -60,6 +60,18 @@ export interface AsanaProject {
   integrationName: string;
 }
 
+export interface AsanaStory {
+  gid: string;
+  type: string;
+  text: string;
+  createdAt: string;
+  createdBy?: {
+    gid: string;
+    name: string;
+  };
+  resourceSubtype: string;
+}
+
 export type AsanaDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'no_date';
 
 export type AsanaSortField = 'dueOn' | 'startOn' | 'createdAt' | 'title' | 'type';
