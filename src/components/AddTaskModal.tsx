@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { X, ChevronDown, PlusCircle } from 'lucide-react';
 import { AdHocTask, TaskType, TaskTypeSelection, BuiltInTaskType, CustomTaskType, BUILT_IN_TASK_TYPE_EMOJIS, BUILT_IN_TASK_TYPE_LABELS, isCustomTaskType, getCustomTaskTypeId } from '@/types';
 import { format } from 'date-fns';
-import { getCustomTaskTypes, addCustomTaskType } from '@/lib/storage';
+import { api } from '@/lib/api';
 import { EmojiPicker } from './EmojiPicker';
 
 const BUILT_IN_TASK_TYPES: BuiltInTaskType[] = ['flight', 'train', 'car', 'walk', 'writing', 'reading', 'focus', 'email', 'batch'];
@@ -35,7 +35,7 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
 
   // Load custom types on mount
   useEffect(() => {
-    setCustomTypes(getCustomTaskTypes());
+    api.getCustomTaskTypes().then(({ customTypes }) => setCustomTypes(customTypes)).catch(console.error);
   }, []);
 
   // Helper to get emoji for any task type
@@ -73,19 +73,23 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
     return [...builtIn, ...custom];
   }, [customTypes]);
 
-  const handleCreateCustomType = useCallback(() => {
+  const handleCreateCustomType = useCallback(async () => {
     if (!customTypeLabel.trim() || !customTypeEmoji.trim()) return;
 
-    const newType = addCustomTaskType({
-      label: customTypeLabel.trim(),
-      emoji: customTypeEmoji.trim(),
-    });
-    setCustomTypes(prev => [...prev, newType]);
-    setTaskType(`custom:${newType.id}` as TaskType);
-    setCustomTypeLabel('');
-    setCustomTypeEmoji('');
-    setIsCreatingCustomType(false);
-    setShowTypeDropdown(false);
+    try {
+      const { customType: newType } = await api.addCustomTaskType({
+        label: customTypeLabel.trim(),
+        emoji: customTypeEmoji.trim(),
+      });
+      setCustomTypes(prev => [...prev, newType]);
+      setTaskType(`custom:${newType.id}` as TaskType);
+      setCustomTypeLabel('');
+      setCustomTypeEmoji('');
+      setIsCreatingCustomType(false);
+      setShowTypeDropdown(false);
+    } catch (error) {
+      console.error('Failed to create custom type:', error);
+    }
   }, [customTypeLabel, customTypeEmoji]);
 
   // Calculate duration from start/end times if provided

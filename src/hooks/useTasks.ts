@@ -2,45 +2,58 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { AdHocTask } from '@/types';
-import {
-  getAdHocTasks,
-  addAdHocTask,
-  updateAdHocTask,
-  deleteAdHocTask,
-} from '@/lib/storage';
+import { api } from '@/lib/api';
 
 export function useTasks() {
   const [tasks, setTasks] = useState<AdHocTask[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
-    setTasks(getAdHocTasks());
-    setIsLoaded(true);
+    api.getAdHocTasks()
+      .then(({ tasks }) => {
+        setTasks(tasks);
+        setIsLoaded(true);
+      })
+      .catch(error => {
+        console.error('Failed to load tasks:', error);
+        setIsLoaded(true);
+      });
   }, []);
 
-  const addTask = useCallback((task: Omit<AdHocTask, 'id' | 'createdAt' | 'updatedAt'>) => {
-    const newTask = addAdHocTask(task);
-    setTasks(prev => [...prev, newTask]);
-    return newTask;
+  const addTask = useCallback(async (task: Omit<AdHocTask, 'id' | 'createdAt' | 'updatedAt'>) => {
+    try {
+      const { task: newTask } = await api.addAdHocTask(task);
+      setTasks(prev => [...prev, newTask]);
+      return newTask;
+    } catch (error) {
+      console.error('Failed to add task:', error);
+      return null;
+    }
   }, []);
 
-  const updateTask = useCallback((id: string, updates: Partial<AdHocTask>) => {
-    const updated = updateAdHocTask(id, updates);
-    if (updated) {
+  const updateTask = useCallback(async (id: string, updates: Partial<AdHocTask>) => {
+    try {
+      const { task: updated } = await api.updateAdHocTask(id, updates);
       setTasks(prev => prev.map(t => (t.id === id ? updated : t)));
+      return updated;
+    } catch (error) {
+      console.error('Failed to update task:', error);
+      return null;
     }
-    return updated;
   }, []);
 
-  const removeTask = useCallback((id: string) => {
-    const success = deleteAdHocTask(id);
-    if (success) {
+  const removeTask = useCallback(async (id: string) => {
+    try {
+      await api.deleteAdHocTask(id);
       setTasks(prev => prev.filter(t => t.id !== id));
+      return true;
+    } catch (error) {
+      console.error('Failed to remove task:', error);
+      return false;
     }
-    return success;
   }, []);
 
-  const toggleComplete = useCallback((id: string) => {
+  const toggleComplete = useCallback(async (id: string) => {
     const task = tasks.find(t => t.id === id);
     if (task) {
       return updateTask(id, { completed: !task.completed });

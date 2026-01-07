@@ -1,6 +1,6 @@
 // API utilities with retry logic and proper typing
 
-import { ApiError, AsanaProject, AsanaStory, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, SettingsResponse } from '@/types';
+import { AdHocTask, ApiError, AsanaProject, AsanaStory, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, ScheduledAsanaTask, SettingsResponse, TaskTemplate } from '@/types';
 
 interface RetryOptions {
   maxRetries?: number;
@@ -229,6 +229,155 @@ export const api = {
   // Settings
   async getSettings(): Promise<SettingsResponse> {
     return fetchWithRetry<SettingsResponse>('/api/settings');
+  },
+
+  // Task Templates
+  async getTaskTemplates(): Promise<{ templates: TaskTemplate[] }> {
+    return fetchWithRetry<{ templates: TaskTemplate[] }>('/api/user-data/task-templates');
+  },
+
+  async addTaskTemplate(template: Omit<TaskTemplate, 'id' | 'createdAt'>): Promise<{ template: TaskTemplate }> {
+    return fetchWithRetry<{ template: TaskTemplate }>('/api/user-data/task-templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(template),
+    });
+  },
+
+  async updateTaskTemplate(id: string, updates: Partial<TaskTemplate>): Promise<{ template: TaskTemplate }> {
+    return fetchWithRetry<{ template: TaskTemplate }>('/api/user-data/task-templates', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, ...updates }),
+    });
+  },
+
+  async deleteTaskTemplate(id: string): Promise<{ success: true }> {
+    return fetchWithRetry<{ success: true }>('/api/user-data/task-templates', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+  },
+
+  // Custom Task Types
+  async getCustomTaskTypes(): Promise<{ customTypes: CustomTaskType[] }> {
+    return fetchWithRetry<{ customTypes: CustomTaskType[] }>('/api/user-data/custom-task-types');
+  },
+
+  async addCustomTaskType(customType: Omit<CustomTaskType, 'id' | 'createdAt'>): Promise<{ customType: CustomTaskType }> {
+    return fetchWithRetry<{ customType: CustomTaskType }>('/api/user-data/custom-task-types', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(customType),
+    });
+  },
+
+  async deleteCustomTaskType(id: string): Promise<{ success: true }> {
+    return fetchWithRetry<{ success: true }>('/api/user-data/custom-task-types', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+  },
+
+  // Ad-Hoc Tasks
+  async getAdHocTasks(): Promise<{ tasks: AdHocTask[] }> {
+    return fetchWithRetry<{ tasks: AdHocTask[] }>('/api/user-data/adhoc-tasks');
+  },
+
+  async addAdHocTask(task: Omit<AdHocTask, 'id' | 'createdAt' | 'updatedAt'>): Promise<{ task: AdHocTask }> {
+    return fetchWithRetry<{ task: AdHocTask }>('/api/user-data/adhoc-tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(task),
+    });
+  },
+
+  async updateAdHocTask(id: string, updates: Partial<AdHocTask>): Promise<{ task: AdHocTask }> {
+    return fetchWithRetry<{ task: AdHocTask }>('/api/user-data/adhoc-tasks', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, ...updates }),
+    });
+  },
+
+  async deleteAdHocTask(id: string): Promise<{ success: true }> {
+    return fetchWithRetry<{ success: true }>('/api/user-data/adhoc-tasks', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+  },
+
+  // Scheduled Asana Tasks
+  async getScheduledAsanaTasks(date?: string): Promise<{ tasks: ScheduledAsanaTask[] }> {
+    const url = date
+      ? `/api/user-data/scheduled-asana-tasks?date=${encodeURIComponent(date)}`
+      : '/api/user-data/scheduled-asana-tasks';
+    return fetchWithRetry<{ tasks: ScheduledAsanaTask[] }>(url);
+  },
+
+  async getScheduleByGoogleEventId(googleEventId: string): Promise<{ schedule: ScheduledAsanaTask | null }> {
+    return fetchWithRetry<{ schedule: ScheduledAsanaTask | null }>(
+      `/api/user-data/scheduled-asana-tasks?googleEventId=${encodeURIComponent(googleEventId)}`
+    );
+  },
+
+  async scheduleAsanaTask(
+    asanaTaskId: string,
+    integrationId: string | undefined,
+    scheduledDate: string,
+    scheduledTime: string,
+    duration: number,
+    googleEventId?: string,
+    googleIntegrationId?: string
+  ): Promise<{ scheduled: ScheduledAsanaTask }> {
+    return fetchWithRetry<{ scheduled: ScheduledAsanaTask }>('/api/user-data/scheduled-asana-tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        asanaTaskId,
+        integrationId,
+        scheduledDate,
+        scheduledTime,
+        duration,
+        googleEventId,
+        googleIntegrationId,
+      }),
+    });
+  },
+
+  async updateScheduledAsanaTask(id: string, updates: Partial<ScheduledAsanaTask>): Promise<{ schedule: ScheduledAsanaTask }> {
+    return fetchWithRetry<{ schedule: ScheduledAsanaTask }>('/api/user-data/scheduled-asana-tasks', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, ...updates }),
+    });
+  },
+
+  async updateScheduledAsanaTaskByGoogleEvent(googleEventId: string, updates: Partial<ScheduledAsanaTask>): Promise<{ schedule: ScheduledAsanaTask }> {
+    return fetchWithRetry<{ schedule: ScheduledAsanaTask }>('/api/user-data/scheduled-asana-tasks', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ googleEventId, ...updates }),
+    });
+  },
+
+  async unscheduleAsanaTask(id: string): Promise<{ success: true }> {
+    return fetchWithRetry<{ success: true }>('/api/user-data/scheduled-asana-tasks', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+  },
+
+  async unscheduleAllAsanaTaskInstances(asanaTaskId: string): Promise<{ success: true; removedCount: number }> {
+    return fetchWithRetry<{ success: true; removedCount: number }>('/api/user-data/scheduled-asana-tasks', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ asanaTaskId, all: true }),
+    });
   },
 };
 

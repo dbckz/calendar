@@ -3,7 +3,7 @@
 import { useState, useEffect, memo, useCallback, useMemo } from 'react';
 import { DragItem, CalendarEvent, TaskType, TaskTypeSelection, TaskTemplate, CustomTaskType, BuiltInTaskType, BUILT_IN_TASK_TYPE_EMOJIS, BUILT_IN_TASK_TYPE_LABELS, isCustomTaskType, getCustomTaskTypeId } from '@/types';
 import { Plus, GripVertical, Calendar, X, ChevronDown, Star, PlusCircle } from 'lucide-react';
-import { getTaskTemplates, addTaskTemplate, deleteTaskTemplate, getCustomTaskTypes, addCustomTaskType } from '@/lib/storage';
+import { api } from '@/lib/api';
 import { EmojiPicker } from './EmojiPicker';
 
 interface ColorScheme {
@@ -35,8 +35,8 @@ export function TaskSidebar({ allDayEvents = [], colorScheme }: TaskSidebarProps
 
   // Load templates and custom types on mount
   useEffect(() => {
-    setTemplates(getTaskTemplates());
-    setCustomTypes(getCustomTaskTypes());
+    api.getTaskTemplates().then(({ templates }) => setTemplates(templates)).catch(console.error);
+    api.getCustomTaskTypes().then(({ customTypes }) => setCustomTypes(customTypes)).catch(console.error);
   }, []);
 
   // Helper to get emoji for any task type
@@ -74,45 +74,57 @@ export function TaskSidebar({ allDayEvents = [], colorScheme }: TaskSidebarProps
     return [...builtIn, ...custom];
   }, [customTypes]);
 
-  const handleCreateCustomType = useCallback(() => {
+  const handleCreateCustomType = useCallback(async () => {
     if (!customTypeLabel.trim() || !customTypeEmoji.trim()) return;
 
-    const newType = addCustomTaskType({
-      label: customTypeLabel.trim(),
-      emoji: customTypeEmoji.trim(),
-    });
-    setCustomTypes(prev => [...prev, newType]);
-    setTaskType(`custom:${newType.id}` as TaskType);
-    setCustomTypeLabel('');
-    setCustomTypeEmoji('');
-    setIsCreatingCustomType(false);
-    setShowTypeDropdown(false);
+    try {
+      const { customType: newType } = await api.addCustomTaskType({
+        label: customTypeLabel.trim(),
+        emoji: customTypeEmoji.trim(),
+      });
+      setCustomTypes(prev => [...prev, newType]);
+      setTaskType(`custom:${newType.id}` as TaskType);
+      setCustomTypeLabel('');
+      setCustomTypeEmoji('');
+      setIsCreatingCustomType(false);
+      setShowTypeDropdown(false);
+    } catch (error) {
+      console.error('Failed to create custom type:', error);
+    }
   }, [customTypeLabel, customTypeEmoji]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !taskType) return;
 
     const emoji = getTaskTypeEmoji(taskType);
 
-    // Add as template
-    const newTemplate = addTaskTemplate({
-      title: `${emoji} ${title.trim()}`,
-      priority: 'medium',
-      taskType,
-      duration,
-    });
-    setTemplates(prev => [...prev, newTemplate]);
+    try {
+      // Add as template via API
+      const { template: newTemplate } = await api.addTaskTemplate({
+        title: `${emoji} ${title.trim()}`,
+        priority: 'medium',
+        taskType,
+        duration,
+      });
+      setTemplates(prev => [...prev, newTemplate]);
 
-    setTitle('');
-    setTaskType(null);
-    setDuration(30);
-    setIsAdding(false);
+      setTitle('');
+      setTaskType(null);
+      setDuration(30);
+      setIsAdding(false);
+    } catch (error) {
+      console.error('Failed to add template:', error);
+    }
   };
 
-  const handleDeleteTemplate = useCallback((templateId: string) => {
-    deleteTaskTemplate(templateId);
-    setTemplates(prev => prev.filter(t => t.id !== templateId));
+  const handleDeleteTemplate = useCallback(async (templateId: string) => {
+    try {
+      await api.deleteTaskTemplate(templateId);
+      setTemplates(prev => prev.filter(t => t.id !== templateId));
+    } catch (error) {
+      console.error('Failed to delete template:', error);
+    }
   }, []);
 
   const handleTemplateDragStart = useCallback((e: React.DragEvent, template: TaskTemplate) => {

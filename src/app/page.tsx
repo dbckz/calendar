@@ -377,32 +377,34 @@ export default function Home() {
       }
     } else if (dragItem.type === 'task-template') {
       // Create a new ad-hoc task from the template
-      const newTask = addTask({
+      addTask({
         title: dragItem.title,
         dueDate: dateStr,
         dueTime: timeStr,
         priority: dragItem.priority || 'medium',
         taskType: dragItem.taskType!,
         completed: false,
+      }).then(newTask => {
+        if (!newTask) return;
+
+        // Update with duration
+        updateTask(newTask.id, { duration });
+
+        // Also create in Google Calendar if connected
+        if (integrationId) {
+          createGoogleEvent(integrationId, dragItem.title, startTime, endTime).then(googleEvent => {
+            if (googleEvent) {
+              updateTask(newTask.id, {
+                googleEventId: googleEvent.id,
+                googleIntegrationId: integrationId,
+              });
+              toast.success('Event added to Google Calendar');
+            } else {
+              toast.error('Failed to sync with Google Calendar');
+            }
+          });
+        }
       });
-
-      // Update with duration
-      updateTask(newTask.id, { duration });
-
-      // Also create in Google Calendar if connected
-      if (integrationId) {
-        createGoogleEvent(integrationId, dragItem.title, startTime, endTime).then(googleEvent => {
-          if (googleEvent) {
-            updateTask(newTask.id, {
-              googleEventId: googleEvent.id,
-              googleIntegrationId: integrationId,
-            });
-            toast.success('Event added to Google Calendar');
-          } else {
-            toast.error('Failed to sync with Google Calendar');
-          }
-        });
-      }
     }
   }, [updateTask, addTask, scheduleAsana, allAsanaTasks, connectedGoogleIntegrations, createGoogleEvent, toast]);
 
@@ -465,28 +467,30 @@ export default function Home() {
       }
     } else if (dragItem.type === 'task-template') {
       // Create a new ad-hoc task from the template
-      const newTask = addTask({
+      addTask({
         title: dragItem.title,
         dueDate: dateStr,
         dueTime: timeStr,
         priority: dragItem.priority || 'medium',
         taskType: dragItem.taskType!,
         completed: false,
-      });
+      }).then(newTask => {
+        if (!newTask) return;
 
-      // Update with duration
-      updateTask(newTask.id, { duration });
+        // Update with duration
+        updateTask(newTask.id, { duration });
 
-      createGoogleEvent(integrationId, dragItem.title, startTime, endTime).then(googleEvent => {
-        if (googleEvent) {
-          updateTask(newTask.id, {
-            googleEventId: googleEvent.id,
-            googleIntegrationId: integrationId,
-          });
-          toast.success('Event added to Google Calendar');
-        } else {
-          toast.error('Failed to sync with Google Calendar');
-        }
+        createGoogleEvent(integrationId, dragItem.title, startTime, endTime).then(googleEvent => {
+          if (googleEvent) {
+            updateTask(newTask.id, {
+              googleEventId: googleEvent.id,
+              googleIntegrationId: integrationId,
+            });
+            toast.success('Event added to Google Calendar');
+          } else {
+            toast.error('Failed to sync with Google Calendar');
+          }
+        });
       });
     }
 
@@ -566,7 +570,7 @@ export default function Home() {
   }, [updateTask, unscheduleAsana]);
 
   // Handle adding a new task from the sidebar or creation modal
-  const handleAddTask = useCallback((task: {
+  const handleAddTask = useCallback(async (task: {
     title: string;
     description?: string;
     dueDate?: string;
@@ -576,7 +580,8 @@ export default function Home() {
     taskType: TaskType;
     completed: boolean;
   }) => {
-    const newTask = addTask(task);
+    const newTask = await addTask(task);
+    if (!newTask) return null;
 
     // If created with time and we have Google Calendar, sync it
     if (task.dueDate && task.dueTime && task.duration && connectedGoogleIntegrations.length > 0) {

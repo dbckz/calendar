@@ -3,14 +3,6 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { CalendarEvent, ScheduledAsanaTask, AsanaProject, AsanaFilterState, AsanaDateFilter } from '@/types';
 import { api, parseCalendarEvents, ApiRequestError } from '@/lib/api';
-import {
-  getScheduledAsanaTasks,
-  scheduleAsanaTask,
-  updateScheduledAsanaTask,
-  updateScheduledAsanaTaskByGoogleEvent,
-  unscheduleAsanaTask,
-  unscheduleAllAsanaTaskInstances,
-} from '@/lib/storage';
 import { isToday, isPast, isThisWeek, parseISO, compareAsc, compareDesc } from 'date-fns';
 
 interface CreateAsanaTaskOptions {
@@ -42,17 +34,17 @@ interface UseAsanaTasksReturn {
     duration: number,
     googleEventId?: string,
     googleIntegrationId?: string
-  ) => ScheduledAsanaTask;
+  ) => Promise<ScheduledAsanaTask | null>;
   updateScheduledAsana: (
     scheduleId: string,
     updates: Partial<ScheduledAsanaTask>
-  ) => ScheduledAsanaTask | null;
+  ) => Promise<ScheduledAsanaTask | null>;
   updateScheduledAsanaByGoogleEvent: (
     googleEventId: string,
     updates: Partial<ScheduledAsanaTask>
-  ) => ScheduledAsanaTask | null;
-  unscheduleAsana: (scheduleId: string) => boolean;
-  unscheduleAllAsanaInstances: (asanaTaskId: string) => boolean;
+  ) => Promise<ScheduledAsanaTask | null>;
+  unscheduleAsana: (scheduleId: string) => Promise<boolean>;
+  unscheduleAllAsanaInstances: (asanaTaskId: string) => Promise<boolean>;
   getScheduledAsanaEventsForDate: (date: string) => CalendarEvent[];
   completeAsanaTask: (taskId: string, integrationId: string, completed: boolean) => Promise<void>;
   addAsanaComment: (taskId: string, integrationId: string, comment: string) => Promise<void>;
@@ -145,9 +137,11 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     saveFiltersToStorage(newFilters);
   }, []);
 
-  // Load scheduled Asana tasks from localStorage
+  // Load scheduled Asana tasks from server
   useEffect(() => {
-    setScheduledAsanaTasks(getScheduledAsanaTasks());
+    api.getScheduledAsanaTasks()
+      .then(({ tasks }) => setScheduledAsanaTasks(tasks))
+      .catch(error => console.error('Failed to load scheduled asana tasks:', error));
   }, []);
 
   const fetchAllAsanaTasks = useCallback(async () => {
@@ -312,7 +306,7 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     saveFiltersToStorage(DEFAULT_FILTERS);
   }, []);
 
-  const scheduleAsana = useCallback((
+  const scheduleAsana = useCallback(async (
     asanaTaskId: string,
     integrationId: string | undefined,
     scheduledDate: string,
@@ -320,40 +314,73 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     duration: number,
     googleEventId?: string,
     googleIntegrationId?: string
-  ) => {
-    const scheduled = scheduleAsanaTask(asanaTaskId, integrationId, scheduledDate, scheduledTime, duration, googleEventId, googleIntegrationId);
-    setScheduledAsanaTasks(getScheduledAsanaTasks());
-    return scheduled;
+  ): Promise<ScheduledAsanaTask | null> => {
+    try {
+      const { scheduled } = await api.scheduleAsanaTask(
+        asanaTaskId,
+        integrationId,
+        scheduledDate,
+        scheduledTime,
+        duration,
+        googleEventId,
+        googleIntegrationId
+      );
+      setScheduledAsanaTasks(prev => [...prev, scheduled]);
+      return scheduled;
+    } catch (error) {
+      console.error('Failed to schedule asana task:', error);
+      return null;
+    }
   }, []);
 
-  const updateScheduledAsana = useCallback((
+  const updateScheduledAsana = useCallback(async (
     scheduleId: string,
     updates: Partial<ScheduledAsanaTask>
-  ) => {
-    const updated = updateScheduledAsanaTask(scheduleId, updates);
-    setScheduledAsanaTasks(getScheduledAsanaTasks());
-    return updated;
+  ): Promise<ScheduledAsanaTask | null> => {
+    try {
+      const { schedule: updated } = await api.updateScheduledAsanaTask(scheduleId, updates);
+      setScheduledAsanaTasks(prev => prev.map(s => s.id === scheduleId ? updated : s));
+      return updated;
+    } catch (error) {
+      console.error('Failed to update scheduled asana task:', error);
+      return null;
+    }
   }, []);
 
-  const updateScheduledAsanaByGoogleEvent = useCallback((
+  const updateScheduledAsanaByGoogleEvent = useCallback(async (
     googleEventId: string,
     updates: Partial<ScheduledAsanaTask>
-  ) => {
-    const updated = updateScheduledAsanaTaskByGoogleEvent(googleEventId, updates);
-    setScheduledAsanaTasks(getScheduledAsanaTasks());
-    return updated;
+  ): Promise<ScheduledAsanaTask | null> => {
+    try {
+      const { schedule: updated } = await api.updateScheduledAsanaTaskByGoogleEvent(googleEventId, updates);
+      setScheduledAsanaTasks(prev => prev.map(s => s.googleEventId === googleEventId ? updated : s));
+      return updated;
+    } catch (error) {
+      console.error('Failed to update scheduled asana task by google event:', error);
+      return null;
+    }
   }, []);
 
-  const unscheduleAsana = useCallback((scheduleId: string) => {
-    const result = unscheduleAsanaTask(scheduleId);
-    setScheduledAsanaTasks(getScheduledAsanaTasks());
-    return result;
+  const unscheduleAsana = useCallback(async (scheduleId: string): Promise<boolean> => {
+    try {
+      await api.unscheduleAsanaTask(scheduleId);
+      setScheduledAsanaTasks(prev => prev.filter(s => s.id !== scheduleId));
+      return true;
+    } catch (error) {
+      console.error('Failed to unschedule asana task:', error);
+      return false;
+    }
   }, []);
 
-  const unscheduleAllAsanaInstances = useCallback((asanaTaskId: string) => {
-    const result = unscheduleAllAsanaTaskInstances(asanaTaskId);
-    setScheduledAsanaTasks(getScheduledAsanaTasks());
-    return result;
+  const unscheduleAllAsanaInstances = useCallback(async (asanaTaskId: string): Promise<boolean> => {
+    try {
+      await api.unscheduleAllAsanaTaskInstances(asanaTaskId);
+      setScheduledAsanaTasks(prev => prev.filter(s => s.asanaTaskId !== asanaTaskId));
+      return true;
+    } catch (error) {
+      console.error('Failed to unschedule all asana task instances:', error);
+      return false;
+    }
   }, []);
 
   const getScheduledAsanaEventsForDate = useCallback((date: string): CalendarEvent[] => {
