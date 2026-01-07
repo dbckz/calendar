@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getTasksForDate, asanaTaskToCalendarEvent, refreshAsanaToken } from '@/lib/asana';
-import { getEnabledAsanaIntegrations, updateIntegration } from '@/lib/integration-storage';
+import { getTasksForDate, asanaTaskToCalendarEvent, refreshAsanaToken, createTask, CreateTaskParams } from '@/lib/asana';
+import { getEnabledAsanaIntegrations, updateIntegration, getIntegrationById } from '@/lib/integration-storage';
 import { CalendarEvent, AsanaIntegration } from '@/types';
 
 export async function GET(request: NextRequest) {
@@ -80,4 +80,85 @@ async function fetchTasksFromIntegration(
     integrationId: integration.id,
     integrationName: integration.name,
   }));
+}
+
+// Create a new Asana task
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { integrationId, name, notes, dueOn, projectGid } = body;
+
+    if (!integrationId) {
+      return NextResponse.json({ error: 'integrationId is required' }, { status: 400 });
+    }
+
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      return NextResponse.json({ error: 'name is required' }, { status: 400 });
+    }
+
+    const integration = await getIntegrationById(integrationId);
+
+    if (!integration || integration.type !== 'asana') {
+      return NextResponse.json({ error: 'Invalid Asana integration' }, { status: 400 });
+    }
+
+    // Type assertion after checking type
+    const asanaIntegration = integration as AsanaIntegration;
+
+    if (!asanaIntegration.credentials || !asanaIntegration.workspaceId) {
+      return NextResponse.json({ error: 'Integration not properly configured' }, { status: 400 });
+    }
+
+    let credentials = asanaIntegration.credentials;
+
+    // Check if token needs refresh
+    if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
+      credentials = await refreshAsanaToken(
+        credentials.refreshToken!,
+        asanaIntegration.clientId,
+        asanaIntegration.clientSecret
+      );
+      await updateIntegration(asanaIntegration.id, { credentials });
+    }
+
+    const taskParams: CreateTaskParams = {
+      name: name.trim(),
+    };
+
+    if (notes && typeof notes === 'string') {
+      taskParams.notes = notes;
+    }
+
+    if (dueOn && typeof dueOn === 'string') {
+      taskParams.dueOn = dueOn;
+    }
+
+    if (projectGid && typeof projectGid === 'string') {
+      taskParams.projectGid = projectGid;
+    }
+
+    const task = await createTask(
+      credentials.accessToken,
+      asanaIntegration.workspaceId,
+      taskParams
+    );
+
+    // Convert to calendar event format for consistency
+    const event = asanaTaskToCalendarEvent(task);
+
+    return NextResponse.json({
+      success: true,
+      task: {
+        ...event,
+        integrationId: asanaIntegration.id,
+        integrationName: asanaIntegration.name,
+      },
+    });
+  } catch (error) {
+    console.error('Error creating Asana task:', error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to create task' },
+      { status: 500 }
+    );
+  }
 }

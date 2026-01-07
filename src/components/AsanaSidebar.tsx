@@ -2,7 +2,7 @@
 
 import { useState, memo, useMemo, useCallback, useRef, useEffect, forwardRef } from 'react';
 import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDateFilter, AsanaSortField, AsanaSortDirection, AsanaFilterLogic, ScheduledAsanaTask } from '@/types';
-import { Calendar, GripVertical, Filter, X, ChevronDown, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle } from 'lucide-react';
+import { Calendar, GripVertical, Filter, X, ChevronDown, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle, Plus, Trash2 } from 'lucide-react';
 import { format, parseISO, isToday, isPast } from 'date-fns';
 import { getAsanaTaskUrl } from '@/lib/asana';
 
@@ -30,6 +30,8 @@ interface AsanaSidebarProps {
   // Asana actions
   onToggleComplete?: (taskId: string, integrationId: string, completed: boolean) => void;
   onAddComment?: (taskId: string, integrationId: string, comment: string) => void;
+  onCreateTask?: (integrationId: string, name: string, options?: { notes?: string; dueOn?: string; projectGid?: string }) => Promise<CalendarEvent | null>;
+  onDeleteTask?: (taskId: string, integrationId: string) => Promise<boolean>;
   // Highlight task from calendar click
   highlightedTaskId?: string | null;
   onClearHighlight?: () => void;
@@ -65,6 +67,8 @@ export function AsanaSidebar({
   onClearFilters,
   onToggleComplete,
   onAddComment,
+  onCreateTask,
+  onDeleteTask,
   highlightedTaskId,
   onClearHighlight,
 }: AsanaSidebarProps) {
@@ -72,6 +76,7 @@ export function AsanaSidebar({
   const [showFilters, setShowFilters] = useState(false);
   const [showSort, setShowSort] = useState(false);
   const [selectedTask, setSelectedTask] = useState<CalendarEvent | null>(null);
+  const [showCreateTask, setShowCreateTask] = useState(false);
   const taskRefs = useRef<Map<string, HTMLLIElement>>(new Map());
   const listRef = useRef<HTMLUListElement>(null);
 
@@ -231,6 +236,15 @@ export function AsanaSidebar({
             <h2 className={`font-semibold ${colorScheme?.sidebarHeaderText || 'text-gray-900'}`}>Asana Tasks</h2>
           </div>
           <div className="flex items-center gap-1">
+            {onCreateTask && integrations.length > 0 && (
+              <button
+                onClick={() => setShowCreateTask(true)}
+                className="p-1.5 rounded-md transition-colors hover:bg-gray-100 text-gray-500 hover:text-orange-600"
+                title="Create new task"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            )}
             {filters && onFiltersChange && (
               <>
                 <button
@@ -487,6 +501,17 @@ export function AsanaSidebar({
           }}
           onToggleComplete={onToggleComplete}
           onAddComment={onAddComment}
+          onDeleteTask={onDeleteTask}
+        />
+      )}
+
+      {/* Create Task Modal */}
+      {showCreateTask && onCreateTask && (
+        <CreateTaskModal
+          integrations={integrations}
+          projects={projects}
+          onClose={() => setShowCreateTask(false)}
+          onCreateTask={onCreateTask}
         />
       )}
     </div>
@@ -501,6 +526,7 @@ interface TaskDetailDialogProps {
   onClose: () => void;
   onToggleComplete?: (taskId: string, integrationId: string, completed: boolean) => void;
   onAddComment?: (taskId: string, integrationId: string, comment: string) => void;
+  onDeleteTask?: (taskId: string, integrationId: string) => Promise<boolean>;
 }
 
 function TaskDetailDialog({
@@ -510,10 +536,13 @@ function TaskDetailDialog({
   onClose,
   onToggleComplete,
   onAddComment,
+  onDeleteTask,
 }: TaskDetailDialogProps) {
   const [comment, setComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isToggling, setIsToggling] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const handleSubmitComment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -536,6 +565,21 @@ function TaskDetailDialog({
       await onToggleComplete(task.id, task.integrationId, !task.completed);
     } finally {
       setIsToggling(false);
+    }
+  };
+
+  const handleDeleteTask = async () => {
+    if (!onDeleteTask || !task.integrationId) return;
+
+    setIsDeleting(true);
+    try {
+      await onDeleteTask(task.id, task.integrationId);
+      onClose();
+    } catch (error) {
+      console.error('Failed to delete task:', error);
+      setShowDeleteConfirm(false);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -705,7 +749,234 @@ function TaskDetailDialog({
             <ExternalLink className="w-4 h-4" />
             Open in Asana
           </a>
+
+          {/* Delete Task */}
+          {onDeleteTask && task.integrationId && (
+            <button
+              onClick={() => setShowDeleteConfirm(true)}
+              className="flex items-center justify-center gap-2 w-full px-4 py-2.5 border border-red-300 rounded-lg text-red-600 hover:bg-red-50 transition-colors"
+            >
+              <Trash2 className="w-4 h-4" />
+              Delete Task
+            </button>
+          )}
         </div>
+      </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]"
+          onClick={() => setShowDeleteConfirm(false)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl w-full max-w-sm mx-4 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Delete Task?</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Are you sure you want to delete &quot;{task.title}&quot;? This will permanently remove the task from Asana and cannot be undone.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={isDeleting}
+                className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteTask}
+                disabled={isDeleting}
+                className="flex-1 px-4 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
+              >
+                {isDeleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Create Task Modal Component
+interface CreateTaskModalProps {
+  integrations: { id: string; name: string }[];
+  projects: AsanaProject[];
+  onClose: () => void;
+  onCreateTask: (integrationId: string, name: string, options?: { notes?: string; dueOn?: string; projectGid?: string }) => Promise<CalendarEvent | null>;
+}
+
+function CreateTaskModal({
+  integrations,
+  projects,
+  onClose,
+  onCreateTask,
+}: CreateTaskModalProps) {
+  const [name, setName] = useState('');
+  const [notes, setNotes] = useState('');
+  const [dueOn, setDueOn] = useState('');
+  const [selectedIntegration, setSelectedIntegration] = useState(integrations[0]?.id || '');
+  const [selectedProject, setSelectedProject] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Filter projects by selected integration
+  const filteredProjects = useMemo(() => {
+    return projects.filter(p => p.integrationId === selectedIntegration);
+  }, [projects, selectedIntegration]);
+
+  // Reset project when integration changes
+  useEffect(() => {
+    setSelectedProject('');
+  }, [selectedIntegration]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !selectedIntegration) return;
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      const options: { notes?: string; dueOn?: string; projectGid?: string } = {};
+      if (notes.trim()) options.notes = notes.trim();
+      if (dueOn) options.dueOn = dueOn;
+      if (selectedProject) options.projectGid = selectedProject;
+
+      await onCreateTask(selectedIntegration, name.trim(), options);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create task');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div
+        className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+          <h3 className="font-semibold text-gray-900">Create Asana Task</h3>
+          <button
+            onClick={onClose}
+            className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+              {error}
+            </div>
+          )}
+
+          {/* Integration selector */}
+          {integrations.length > 1 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Workspace
+              </label>
+              <select
+                value={selectedIntegration}
+                onChange={(e) => setSelectedIntegration(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+              >
+                {integrations.map(int => (
+                  <option key={int.id} value={int.id}>{int.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Task name */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Task name <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Enter task name"
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+              autoFocus
+              required
+            />
+          </div>
+
+          {/* Notes */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Notes
+            </label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Add notes (optional)"
+              rows={3}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none resize-none"
+            />
+          </div>
+
+          {/* Due date */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Due date
+            </label>
+            <input
+              type="date"
+              value={dueOn}
+              onChange={(e) => setDueOn(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+            />
+          </div>
+
+          {/* Project selector */}
+          {filteredProjects.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Project
+              </label>
+              <select
+                value={selectedProject}
+                onChange={(e) => setSelectedProject(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+              >
+                <option value="">No project</option>
+                {filteredProjects.map(project => (
+                  <option key={project.gid} value={project.gid}>{project.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!name.trim() || isSubmitting}
+              className="flex-1 px-4 py-2.5 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {isSubmitting ? 'Creating...' : 'Create Task'}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

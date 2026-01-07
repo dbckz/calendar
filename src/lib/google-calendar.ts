@@ -88,12 +88,29 @@ export async function getCalendarEvents(
   return events.map((event): CalendarEvent => {
     const isAllDay = !!event.start?.date;
 
+    // For all-day events, Google returns date strings like "2024-01-15".
+    // new Date("2024-01-15") parses as midnight UTC, which can shift to the
+    // previous day in local timezones. We need to parse as local date instead.
+    let startTime: Date;
+    let endTime: Date;
+
+    if (isAllDay) {
+      // Parse date-only strings as local dates by adding time component
+      const startDateParts = (event.start?.date || '').split('-').map(Number);
+      const endDateParts = (event.end?.date || '').split('-').map(Number);
+      startTime = new Date(startDateParts[0], startDateParts[1] - 1, startDateParts[2], 0, 0, 0);
+      endTime = new Date(endDateParts[0], endDateParts[1] - 1, endDateParts[2], 0, 0, 0);
+    } else {
+      startTime = new Date(event.start?.dateTime || '');
+      endTime = new Date(event.end?.dateTime || '');
+    }
+
     return {
       id: event.id!,
       title: event.summary || 'Untitled Event',
       description: event.description || undefined,
-      startTime: new Date(event.start?.dateTime || event.start?.date || ''),
-      endTime: new Date(event.end?.dateTime || event.end?.date || ''),
+      startTime,
+      endTime,
       source: 'google',
       color: event.colorId ? getGoogleColor(event.colorId) : '#4285f4',
       location: event.location || undefined,

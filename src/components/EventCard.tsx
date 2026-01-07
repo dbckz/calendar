@@ -33,7 +33,7 @@ export function EventCard({ event, onDelete, onUnschedule, onDeleteEvent, compac
 
   // Compact view for timeline
   if (compact) {
-    // Very small events (15 min) - single line with just title
+    // Very small events (15 min) - single line with just title and delete button
     if (isVerySmall) {
       return (
         <div
@@ -47,20 +47,33 @@ export function EventCard({ event, onDelete, onUnschedule, onDeleteEvent, compac
           }}
           title={`${event.title} (${format(event.startTime, 'h:mm a')} - ${format(event.endTime, 'h:mm a')})`}
         >
-          <div className="px-1.5 h-full flex items-center">
+          <div className="px-1.5 h-full flex items-center justify-between gap-1">
             <span
-              className={`text-xs font-medium text-gray-900 truncate ${
+              className={`text-xs font-medium text-gray-900 truncate flex-1 ${
                 event.completed ? 'line-through text-gray-500' : ''
               }`}
             >
               {event.title}
             </span>
+            {onDeleteEvent && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeleteEvent();
+                }}
+                className="p-0.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors flex-shrink-0"
+                aria-label="Delete event"
+                title="Delete event"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
         </div>
       );
     }
 
-    // Small events (20-35 min) - title and time on same line
+    // Small events (20-35 min) - title, time, and delete button
     if (isSmall) {
       return (
         <div
@@ -73,7 +86,7 @@ export function EventCard({ event, onDelete, onUnschedule, onDeleteEvent, compac
             backgroundColor: event.color ? `${event.color}15` : 'white',
           }}
         >
-          <div className="px-2 py-1 h-full flex items-center justify-between gap-2">
+          <div className="px-2 py-1 h-full flex items-center justify-between gap-1">
             <span
               className={`text-xs font-medium text-gray-900 truncate flex-1 ${
                 event.completed ? 'line-through text-gray-500' : ''
@@ -84,6 +97,19 @@ export function EventCard({ event, onDelete, onUnschedule, onDeleteEvent, compac
             <span className="text-[10px] text-gray-500 flex-shrink-0">
               {format(event.startTime, 'h:mm a')}
             </span>
+            {onDeleteEvent && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeleteEvent();
+                }}
+                className="p-0.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors flex-shrink-0"
+                aria-label="Delete event"
+                title="Delete event"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
         </div>
       );
@@ -117,46 +143,19 @@ export function EventCard({ event, onDelete, onUnschedule, onDeleteEvent, compac
                 </span>
               </div>
             </div>
-            <div className="flex items-center gap-0.5">
-              {onUnschedule && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onUnschedule(event.id);
-                  }}
-                  className="p-0.5 text-gray-400 hover:text-orange-500 hover:bg-orange-50 rounded transition-colors opacity-0 group-hover:opacity-100"
-                  aria-label="Unschedule task"
-                  title="Remove from calendar"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
-              {event.source === 'adhoc' && onDelete && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDelete(event.id);
-                  }}
-                  className="p-0.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                  aria-label="Delete task"
-                >
-                  <Trash2 className="w-3 h-3" />
-                </button>
-              )}
-              {onDeleteEvent && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDeleteEvent();
-                  }}
-                  className="p-0.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                  aria-label="Delete event"
-                  title="Delete event"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
+            {onDeleteEvent && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeleteEvent();
+                }}
+                className="p-0.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors flex-shrink-0"
+                aria-label="Delete event"
+                title="Delete event"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         </div>
       </div>

@@ -595,6 +595,9 @@ export function Timeline({
             const canDrag = pos.event.source === 'adhoc' || pos.event.source === 'asana' || pos.event.source === 'google';
             const eventStyle = getEventStyle(pos);
             const eventHeight = parseFloat(eventStyle.height);
+            // For small events, hide top resize handle (overlaps delete button) but keep bottom handle for lengthening
+            const showTopResizeHandle = canDrag && eventHeight > 25;
+            const showBottomResizeHandle = canDrag;
 
             return (
               <div
@@ -602,8 +605,8 @@ export function Timeline({
                 style={eventStyle}
                 className="group event-card-wrapper"
               >
-                {/* Resize handle - top */}
-                {canDrag && (
+                {/* Resize handle - top (only for larger events to avoid overlapping delete button) */}
+                {showTopResizeHandle && (
                   <div
                     className="absolute top-0 left-0 right-0 h-2 cursor-ns-resize z-10 hover:bg-gray-400/20"
                     onMouseDown={(e) => handleEventMouseDown(e, pos.event, 'resize-top')}
@@ -633,18 +636,12 @@ export function Timeline({
                     compact
                     isPast={isEventPast(pos.event)}
                     height={eventHeight}
-                    onDelete={pos.event.source === 'adhoc' ? onDeleteTask : undefined}
-                    onUnschedule={
-                      canDrag
-                        ? () => onUnscheduleTask?.(pos.event.id, pos.event.source as 'adhoc' | 'asana')
-                        : undefined
-                    }
                     onDeleteEvent={onDeleteEvent ? () => onDeleteEvent(pos.event) : undefined}
                   />
                 </div>
 
-                {/* Resize handle - bottom */}
-                {canDrag && (
+                {/* Resize handle - bottom (always shown for lengthening events) */}
+                {showBottomResizeHandle && (
                   <div
                     className="absolute bottom-0 left-0 right-0 h-2 cursor-ns-resize z-10 hover:bg-gray-400/20"
                     onMouseDown={(e) => handleEventMouseDown(e, pos.event, 'resize-bottom')}

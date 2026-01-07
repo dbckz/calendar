@@ -176,6 +176,43 @@ export const api = {
     );
   },
 
+  async deleteAsanaTask(
+    taskId: string,
+    integrationId: string
+  ): Promise<{ success: true }> {
+    return fetchWithRetry<{ success: true }>(
+      `/api/asana-tasks/${taskId}`,
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ integrationId }),
+      }
+    );
+  },
+
+  async createAsanaTask(
+    integrationId: string,
+    name: string,
+    options?: {
+      notes?: string;
+      dueOn?: string;
+      projectGid?: string;
+    }
+  ): Promise<{ success: true; task: CalendarEventResponse }> {
+    return fetchWithRetry<{ success: true; task: CalendarEventResponse }>(
+      '/api/asana-tasks',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          integrationId,
+          name,
+          ...options,
+        }),
+      }
+    );
+  },
+
   async getAsanaProjects(): Promise<{ projects: AsanaProject[] }> {
     return fetchWithRetry<{ projects: AsanaProject[] }>('/api/asana-projects');
   },

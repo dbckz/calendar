@@ -106,6 +106,8 @@ export default function Home() {
     getScheduledAsanaEventsForDate,
     completeAsanaTask,
     addAsanaComment,
+    createAsanaTask,
+    deleteAsanaTask,
     // Asana filter state
     asanaProjects,
     asanaTypeValues,
@@ -170,11 +172,27 @@ export default function Home() {
   const allEvents = useMemo((): CalendarEvent[] => {
     const dateStr = format(selectedDate, 'yyyy-MM-dd');
 
+    // Helper to check if a date falls within an event's range
+    // For all-day/multi-day events, we need to check the full date range
+    const isEventOnDate = (event: CalendarEvent, targetDate: string): boolean => {
+      // For all-day events, the dates from Google are date-only strings
+      // which we've already parsed. Compare just the date portions.
+      const startDateStr = format(event.startTime, 'yyyy-MM-dd');
+      const endDateStr = format(event.endTime, 'yyyy-MM-dd');
+
+      // For all-day events, the end date is exclusive (e.g., a 1-day event on Jan 15
+      // has start: Jan 15, end: Jan 16). For multi-day, same logic applies.
+      // So we check: startDate <= targetDate < endDate for all-day events
+      // For timed events, we just check the start date
+      if (event.allDay) {
+        return targetDate >= startDateStr && targetDate < endDateStr;
+      }
+
+      return startDateStr === targetDate;
+    };
+
     // Filter Google events to only show events for the selected date
-    const filteredGoogleEvents = googleEvents.filter(event => {
-      const eventDateStr = format(event.startTime, 'yyyy-MM-dd');
-      return eventDateStr === dateStr;
-    });
+    const filteredGoogleEvents = googleEvents.filter(event => isEventOnDate(event, dateStr));
 
     // Enrich Google events with linked Asana task info (for unified display)
     const enrichedGoogleEvents = filteredGoogleEvents.map(event => {
@@ -253,6 +271,21 @@ export default function Home() {
       console.error('Error adding Asana comment:', err);
     }
   }, [addAsanaComment, toast]);
+
+  // Handle Asana task deletion from sidebar
+  const handleSidebarAsanaDelete = useCallback(async (taskId: string, integrationId: string): Promise<boolean> => {
+    try {
+      // Also unschedule all instances of this task
+      unscheduleAllAsanaInstances(taskId);
+      await deleteAsanaTask(taskId, integrationId);
+      toast.success('Task deleted from Asana');
+      return true;
+    } catch (err) {
+      toast.error('Failed to delete task from Asana');
+      console.error('Error deleting Asana task:', err);
+      return false;
+    }
+  }, [deleteAsanaTask, unscheduleAllAsanaInstances, toast]);
 
   // Get connected Google integrations
   const connectedGoogleIntegrations = useMemo(() => {
@@ -673,6 +706,8 @@ export default function Home() {
             onClearFilters={clearAsanaFilters}
             onToggleComplete={handleSidebarAsanaComplete}
             onAddComment={handleSidebarAsanaComment}
+            onCreateTask={createAsanaTask}
+            onDeleteTask={handleSidebarAsanaDelete}
             highlightedTaskId={highlightedAsanaTaskId}
             onClearHighlight={handleClearHighlight}
           />

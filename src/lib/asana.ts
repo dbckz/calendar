@@ -21,7 +21,7 @@ export function getAsanaAuthUrl(clientId: string, redirectUri: string, state?: s
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: 'openid profile email workspaces:read users:read tasks:read tasks:write projects:read custom_fields:read',
+    scope: 'openid profile email workspaces:read users:read tasks:read tasks:write tasks:delete projects:read custom_fields:read',
   });
   if (state) {
     params.set('state', state);
@@ -322,6 +322,23 @@ export async function completeTask(
   }
 }
 
+export async function deleteTask(
+  accessToken: string,
+  taskGid: string
+): Promise<void> {
+  const response = await fetch(`${ASANA_API_BASE}/tasks/${taskGid}`, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Failed to delete task: ${response.status} - ${errorBody}`);
+  }
+}
+
 export async function addTaskComment(
   accessToken: string,
   taskGid: string,
@@ -346,6 +363,79 @@ export async function addTaskComment(
 
 export function getAsanaTaskUrl(taskGid: string): string {
   return `https://app.asana.com/0/0/${taskGid}`;
+}
+
+export interface CreateTaskParams {
+  name: string;
+  notes?: string;
+  dueOn?: string; // YYYY-MM-DD format
+  projectGid?: string;
+}
+
+export async function createTask(
+  accessToken: string,
+  workspaceId: string,
+  params: CreateTaskParams
+): Promise<AsanaTask> {
+  // First get the user's gid for assignment
+  const meResponse = await fetch(`${ASANA_API_BASE}/users/me`, {
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!meResponse.ok) {
+    throw new Error('Failed to fetch user info');
+  }
+
+  const meData: AsanaApiResponse<{ gid: string }> = await meResponse.json();
+  const userGid = meData.data.gid;
+
+  // Build task data
+  const taskData: Record<string, unknown> = {
+    name: params.name,
+    workspace: workspaceId,
+    assignee: userGid, // Assign to current user
+  };
+
+  if (params.notes) {
+    taskData.notes = params.notes;
+  }
+
+  if (params.dueOn) {
+    taskData.due_on = params.dueOn;
+  }
+
+  if (params.projectGid) {
+    taskData.projects = [params.projectGid];
+  }
+
+  const response = await fetch(`${ASANA_API_BASE}/tasks`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ data: taskData }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    console.error('Asana create task error:', response.status, errorBody);
+    throw new Error(`Failed to create task: ${response.status} - ${errorBody.substring(0, 200)}`);
+  }
+
+  const data = await response.json();
+  const task = data.data;
+
+  return {
+    id: task.gid,
+    gid: task.gid,
+    name: task.name,
+    notes: task.notes,
+    dueOn: task.due_on,
+    completed: task.completed,
+  };
 }
 
 export interface AsanaProject {

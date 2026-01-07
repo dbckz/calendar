@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { completeTask, addTaskComment, refreshAsanaToken } from '@/lib/asana';
+import { completeTask, addTaskComment, deleteTask, refreshAsanaToken } from '@/lib/asana';
 import { getIntegrationById, updateIntegration } from '@/lib/integration-storage';
 import { AsanaIntegration } from '@/types';
 
@@ -98,6 +98,52 @@ export async function POST(
     console.error('Error adding comment:', error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to add comment' },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE - Delete task from Asana
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ taskId: string }> }
+) {
+  try {
+    const { taskId } = await params;
+    const { integrationId } = await request.json();
+
+    if (!integrationId) {
+      return NextResponse.json({ error: 'integrationId is required' }, { status: 400 });
+    }
+
+    const integration = await getIntegrationById(integrationId) as AsanaIntegration | null;
+    if (!integration || integration.type !== 'asana') {
+      return NextResponse.json({ error: 'Asana integration not found' }, { status: 404 });
+    }
+
+    if (!integration.credentials) {
+      return NextResponse.json({ error: 'Integration not authenticated' }, { status: 401 });
+    }
+
+    let credentials = integration.credentials;
+
+    // Check if token needs refresh
+    if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
+      credentials = await refreshAsanaToken(
+        credentials.refreshToken!,
+        integration.clientId,
+        integration.clientSecret
+      );
+      await updateIntegration(integration.id, { credentials });
+    }
+
+    await deleteTask(credentials.accessToken, taskId);
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting task:', error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to delete task' },
       { status: 500 }
     );
   }

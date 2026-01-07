@@ -13,6 +13,12 @@ import {
 } from '@/lib/storage';
 import { isToday, isPast, isThisWeek, parseISO, compareAsc, compareDesc } from 'date-fns';
 
+interface CreateAsanaTaskOptions {
+  notes?: string;
+  dueOn?: string;
+  projectGid?: string;
+}
+
 interface UseAsanaTasksReturn {
   allAsanaTasks: CalendarEvent[];
   filteredAsanaTasks: CalendarEvent[];
@@ -50,6 +56,8 @@ interface UseAsanaTasksReturn {
   getScheduledAsanaEventsForDate: (date: string) => CalendarEvent[];
   completeAsanaTask: (taskId: string, integrationId: string, completed: boolean) => Promise<void>;
   addAsanaComment: (taskId: string, integrationId: string, comment: string) => Promise<void>;
+  createAsanaTask: (integrationId: string, name: string, options?: CreateAsanaTaskOptions) => Promise<CalendarEvent | null>;
+  deleteAsanaTask: (taskId: string, integrationId: string) => Promise<boolean>;
 }
 
 const DEFAULT_FILTERS: AsanaFilterState = {
@@ -62,6 +70,34 @@ const DEFAULT_FILTERS: AsanaFilterState = {
   sortField: 'dueOn',
   sortDirection: 'asc',
 };
+
+const FILTERS_STORAGE_KEY = 'asana-filters';
+
+// Load filters from localStorage
+function loadFiltersFromStorage(): AsanaFilterState {
+  if (typeof window === 'undefined') return DEFAULT_FILTERS;
+  try {
+    const stored = localStorage.getItem(FILTERS_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      // Merge with defaults to handle any new filter fields
+      return { ...DEFAULT_FILTERS, ...parsed };
+    }
+  } catch (e) {
+    console.error('Failed to load filters from storage:', e);
+  }
+  return DEFAULT_FILTERS;
+}
+
+// Save filters to localStorage
+function saveFiltersToStorage(filters: AsanaFilterState): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters));
+  } catch (e) {
+    console.error('Failed to save filters to storage:', e);
+  }
+}
 
 // Helper to get "Type" custom field value from a task
 function getTaskTypeValue(task: CalendarEvent): string | null {
@@ -94,9 +130,20 @@ function matchesDateFilter(dateStr: string | undefined, filter: AsanaDateFilter)
 export function useAsanaTasks(): UseAsanaTasksReturn {
   const [allAsanaTasks, setAllAsanaTasks] = useState<CalendarEvent[]>([]);
   const [scheduledAsanaTasks, setScheduledAsanaTasks] = useState<ScheduledAsanaTask[]>([]);
-  const [filters, setFilters] = useState<AsanaFilterState>(DEFAULT_FILTERS);
+  const [filters, setFiltersState] = useState<AsanaFilterState>(DEFAULT_FILTERS);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Load filters from localStorage on mount
+  useEffect(() => {
+    setFiltersState(loadFiltersFromStorage());
+  }, []);
+
+  // Wrapper to save filters to localStorage when they change
+  const setFilters = useCallback((newFilters: AsanaFilterState) => {
+    setFiltersState(newFilters);
+    saveFiltersToStorage(newFilters);
+  }, []);
 
   // Load scheduled Asana tasks from localStorage
   useEffect(() => {
@@ -109,7 +156,13 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
 
     try {
       const tasks = await api.getAllAsanaTasks();
-      setAllAsanaTasks(parseCalendarEvents(tasks));
+      const parsedTasks = parseCalendarEvents(tasks);
+      // Filter out tasks with Type = "NOT A TASK"
+      const filteredTasks = parsedTasks.filter(task => {
+        const typeValue = getTaskTypeValue(task);
+        return typeValue !== 'NOT A TASK';
+      });
+      setAllAsanaTasks(filteredTasks);
     } catch (err) {
       if (err instanceof ApiRequestError && err.status === 401) {
         setAllAsanaTasks([]);
@@ -255,7 +308,8 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
   }, [allAsanaTasks, filters]);
 
   const clearFilters = useCallback(() => {
-    setFilters(DEFAULT_FILTERS);
+    setFiltersState(DEFAULT_FILTERS);
+    saveFiltersToStorage(DEFAULT_FILTERS);
   }, []);
 
   const scheduleAsana = useCallback((
@@ -347,6 +401,45 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     await api.addAsanaComment(taskId, integrationId, comment);
   }, []);
 
+  const createAsanaTask = useCallback(async (
+    integrationId: string,
+    name: string,
+    options?: CreateAsanaTaskOptions
+  ): Promise<CalendarEvent | null> => {
+    try {
+      const result = await api.createAsanaTask(integrationId, name, options);
+      if (result.success && result.task) {
+        const newTask: CalendarEvent = {
+          ...result.task,
+          startTime: new Date(result.task.startTime),
+          endTime: new Date(result.task.endTime),
+        };
+        // Add to local state
+        setAllAsanaTasks(prev => [...prev, newTask]);
+        return newTask;
+      }
+      return null;
+    } catch (error) {
+      console.error('Failed to create Asana task:', error);
+      throw error;
+    }
+  }, []);
+
+  const deleteAsanaTask = useCallback(async (
+    taskId: string,
+    integrationId: string
+  ): Promise<boolean> => {
+    try {
+      await api.deleteAsanaTask(taskId, integrationId);
+      // Remove from local state
+      setAllAsanaTasks(prev => prev.filter(t => t.id !== taskId));
+      return true;
+    } catch (error) {
+      console.error('Failed to delete Asana task:', error);
+      throw error;
+    }
+  }, []);
+
   return {
     allAsanaTasks,
     filteredAsanaTasks,
@@ -370,5 +463,7 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     getScheduledAsanaEventsForDate,
     completeAsanaTask,
     addAsanaComment,
+    createAsanaTask,
+    deleteAsanaTask,
   };
 }

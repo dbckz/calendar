@@ -47,6 +47,8 @@ export function useCalendarEvents() {
     getScheduledAsanaEventsForDate,
     completeAsanaTask,
     addAsanaComment,
+    createAsanaTask,
+    deleteAsanaTask,
   } = useAsanaTasks();
 
   // Combined loading and error state
@@ -168,5 +170,7 @@ export function useCalendarEvents() {
     getScheduledAsanaEventsForDate,
     completeAsanaTask,
     addAsanaComment,
+    createAsanaTask,
+    deleteAsanaTask,
   };
 }
