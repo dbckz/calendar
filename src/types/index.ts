@@ -177,7 +177,7 @@ export interface AdHocTask {
   updatedAt: string;
 }
 
-// Local schedule for Asana tasks (stored in localStorage)
+// Local schedule for Asana tasks (stored server-side in .data/user-data.json)
 // Each entry represents one scheduled time block - same task can have multiple entries
 export interface ScheduledAsanaTask {
   id: string; // Unique ID for this schedule entry

@@ -4,16 +4,23 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useAsanaTasks } from '@/hooks/useAsanaTasks';
 import * as api from '@/lib/api';
-import * as storage from '@/lib/storage';
 
 // Mock the api module
 jest.mock('@/lib/api', () => ({
   api: {
     getAllAsanaTasks: jest.fn(),
+    getScheduledAsanaTasks: jest.fn(),
+    scheduleAsanaTask: jest.fn(),
+    updateScheduledAsanaTask: jest.fn(),
+    updateScheduledAsanaTaskByGoogleEvent: jest.fn(),
+    unscheduleAsanaTask: jest.fn(),
+    unscheduleAllAsanaTaskInstances: jest.fn(),
     completeAsanaTask: jest.fn(),
     addAsanaComment: jest.fn(),
     createAsanaTask: jest.fn(),
     deleteAsanaTask: jest.fn(),
+    getAsanaFilterPreferences: jest.fn(),
+    saveAsanaFilterPreferences: jest.fn(),
   },
   parseCalendarEvents: jest.fn((events) => events),
   ApiRequestError: class ApiRequestError extends Error {
@@ -25,37 +32,28 @@ jest.mock('@/lib/api', () => ({
   },
 }));
 
-// Mock the storage module
-jest.mock('@/lib/storage', () => ({
-  getScheduledAsanaTasks: jest.fn(() => []),
-  scheduleAsanaTask: jest.fn(),
-  updateScheduledAsanaTask: jest.fn(),
-  updateScheduledAsanaTaskByGoogleEvent: jest.fn(),
-  unscheduleAsanaTask: jest.fn(),
-  unscheduleAllAsanaTaskInstances: jest.fn(),
-}));
-
 const mockApi = api.api as jest.Mocked<typeof api.api>;
-const mockStorage = storage as jest.Mocked<typeof storage>;
-
-// Mock localStorage
-const localStorageMock = (() => {
-  let store: Record<string, string> = {};
-  return {
-    getItem: jest.fn((key: string) => store[key] || null),
-    setItem: jest.fn((key: string, value: string) => { store[key] = value; }),
-    removeItem: jest.fn((key: string) => { delete store[key]; }),
-    clear: jest.fn(() => { store = {}; }),
-  };
-})();
-Object.defineProperty(window, 'localStorage', { value: localStorageMock });
 
 describe('useAsanaTasks hook', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    localStorageMock.clear();
     mockApi.getAllAsanaTasks.mockResolvedValue([]);
-    mockStorage.getScheduledAsanaTasks.mockReturnValue([]);
+    mockApi.getScheduledAsanaTasks.mockResolvedValue({ tasks: [] });
+    mockApi.getAsanaFilterPreferences.mockResolvedValue({
+      filters: {
+        integrationIds: [],
+        projectIds: [],
+        typeValues: [],
+        dueDateRange: 'all',
+        startDateRange: 'all',
+        filterLogic: 'and',
+        sortField: 'dueOn',
+        sortDirection: 'asc',
+        groupBy: 'none',
+        groupOrder: [],
+      }
+    });
+    mockApi.saveAsanaFilterPreferences.mockResolvedValue({ success: true, filters: {} as any });
   });
 
   describe('initialization', () => {
@@ -65,45 +63,51 @@ describe('useAsanaTasks hook', () => {
       expect(result.current.filteredAsanaTasks).toEqual([]);
     });
 
-    it('loads scheduled tasks from storage on mount', () => {
+    it('loads scheduled tasks from API on mount', async () => {
       const scheduledTasks = [
         { id: 'sched-1', asanaTaskId: 'task-1', integrationId: 'int-1', scheduledDate: '2024-01-15', scheduledTime: '09:00', duration: 60 },
       ];
-      mockStorage.getScheduledAsanaTasks.mockReturnValue(scheduledTasks);
+      mockApi.getScheduledAsanaTasks.mockResolvedValue({ tasks: scheduledTasks });
 
       const { result } = renderHook(() => useAsanaTasks());
 
-      expect(mockStorage.getScheduledAsanaTasks).toHaveBeenCalled();
-      expect(result.current.scheduledAsanaTasks).toEqual(scheduledTasks);
+      await waitFor(() => {
+        expect(mockApi.getScheduledAsanaTasks).toHaveBeenCalled();
+        expect(result.current.scheduledAsanaTasks).toEqual(scheduledTasks);
+      });
     });
 
-    it('loads filters from localStorage on mount', () => {
+    it('loads filters from API on mount', async () => {
       const savedFilters = {
         integrationIds: ['int-1'],
         projectIds: ['proj-1'],
         typeValues: ['Bug'],
-        dueDateRange: 'today',
-        startDateRange: 'all',
-        filterLogic: 'and',
-        sortField: 'title',
-        sortDirection: 'desc',
+        dueDateRange: 'today' as const,
+        startDateRange: 'all' as const,
+        filterLogic: 'and' as const,
+        sortField: 'title' as const,
+        sortDirection: 'desc' as const,
+        groupBy: 'none' as const,
+        groupOrder: [],
       };
-      localStorageMock.getItem.mockReturnValue(JSON.stringify(savedFilters));
+      mockApi.getAsanaFilterPreferences.mockResolvedValue({ filters: savedFilters });
 
       const { result } = renderHook(() => useAsanaTasks());
 
-      expect(result.current.filters.integrationIds).toEqual(['int-1']);
-      expect(result.current.filters.sortField).toBe('title');
+      await waitFor(() => {
+        expect(result.current.filters.integrationIds).toEqual(['int-1']);
+        expect(result.current.filters.sortField).toBe('title');
+      });
     });
 
-    it('uses default filters when localStorage is empty', () => {
-      localStorageMock.getItem.mockReturnValue(null);
-
+    it('uses default filters when API returns defaults', async () => {
       const { result } = renderHook(() => useAsanaTasks());
 
-      expect(result.current.filters.integrationIds).toEqual([]);
-      expect(result.current.filters.dueDateRange).toBe('all');
-      expect(result.current.filters.filterLogic).toBe('and');
+      await waitFor(() => {
+        expect(result.current.filters.integrationIds).toEqual([]);
+        expect(result.current.filters.dueDateRange).toBe('all');
+        expect(result.current.filters.filterLogic).toBe('and');
+      });
     });
   });
 
@@ -188,8 +192,13 @@ describe('useAsanaTasks hook', () => {
   });
 
   describe('setFilters', () => {
-    it('updates filters and saves to localStorage', () => {
+    it('updates filters and saves to API', async () => {
       const { result } = renderHook(() => useAsanaTasks());
+
+      // Wait for initial async setup to complete
+      await waitFor(() => {
+        expect(mockApi.getAsanaFilterPreferences).toHaveBeenCalled();
+      });
 
       act(() => {
         result.current.setFilters({
@@ -198,20 +207,19 @@ describe('useAsanaTasks hook', () => {
         });
       });
 
-      expect(result.current.filters.integrationIds).toEqual(['int-1']);
-      expect(localStorageMock.setItem).toHaveBeenCalledWith(
-        'asana-filters',
-        expect.stringContaining('"integrationIds":["int-1"]')
-      );
+      await waitFor(() => {
+        expect(result.current.filters.integrationIds).toEqual(['int-1']);
+      });
+      expect(mockApi.saveAsanaFilterPreferences).toHaveBeenCalled();
     });
   });
 
   describe('clearFilters', () => {
-    it('resets filters to defaults', () => {
+    it('resets filters to defaults', async () => {
       const { result } = renderHook(() => useAsanaTasks());
 
       // First set some filters
-      act(() => {
+      await act(async () => {
         result.current.setFilters({
           ...result.current.filters,
           integrationIds: ['int-1'],
@@ -220,7 +228,7 @@ describe('useAsanaTasks hook', () => {
       });
 
       // Then clear them
-      act(() => {
+      await act(async () => {
         result.current.clearFilters();
       });
 
@@ -361,7 +369,7 @@ describe('useAsanaTasks hook', () => {
   });
 
   describe('schedule management', () => {
-    it('schedules an Asana task', () => {
+    it('schedules an Asana task via API', async () => {
       const scheduledTask = {
         id: 'sched-1',
         asanaTaskId: 'task-1',
@@ -370,34 +378,34 @@ describe('useAsanaTasks hook', () => {
         scheduledTime: '09:00',
         duration: 60,
       };
-      mockStorage.scheduleAsanaTask.mockReturnValue(scheduledTask);
+      mockApi.scheduleAsanaTask.mockResolvedValue({ scheduled: scheduledTask });
 
       const { result } = renderHook(() => useAsanaTasks());
 
       let returned: any;
-      act(() => {
-        returned = result.current.scheduleAsana('task-1', 'int-1', '2024-01-15', '09:00', 60);
+      await act(async () => {
+        returned = await result.current.scheduleAsana('task-1', 'int-1', '2024-01-15', '09:00', 60);
       });
 
-      expect(mockStorage.scheduleAsanaTask).toHaveBeenCalledWith('task-1', 'int-1', '2024-01-15', '09:00', 60, undefined, undefined);
+      expect(mockApi.scheduleAsanaTask).toHaveBeenCalledWith('task-1', 'int-1', '2024-01-15', '09:00', 60, undefined, undefined);
       expect(returned).toEqual(scheduledTask);
     });
 
-    it('unschedules an Asana task', () => {
-      mockStorage.unscheduleAsanaTask.mockReturnValue(true);
+    it('unschedules an Asana task via API', async () => {
+      mockApi.unscheduleAsanaTask.mockResolvedValue({ success: true });
 
       const { result } = renderHook(() => useAsanaTasks());
 
       let success: boolean;
-      act(() => {
-        success = result.current.unscheduleAsana('sched-1');
+      await act(async () => {
+        success = await result.current.unscheduleAsana('sched-1');
       });
 
-      expect(mockStorage.unscheduleAsanaTask).toHaveBeenCalledWith('sched-1');
+      expect(mockApi.unscheduleAsanaTask).toHaveBeenCalledWith('sched-1');
       expect(success!).toBe(true);
     });
 
-    it('updates a scheduled task', () => {
+    it('updates a scheduled task via API', async () => {
       const updatedTask = {
         id: 'sched-1',
         asanaTaskId: 'task-1',
@@ -406,16 +414,16 @@ describe('useAsanaTasks hook', () => {
         scheduledTime: '10:00',
         duration: 90,
       };
-      mockStorage.updateScheduledAsanaTask.mockReturnValue(updatedTask);
+      mockApi.updateScheduledAsanaTask.mockResolvedValue({ schedule: updatedTask });
 
       const { result } = renderHook(() => useAsanaTasks());
 
       let returned: any;
-      act(() => {
-        returned = result.current.updateScheduledAsana('sched-1', { scheduledDate: '2024-01-16' });
+      await act(async () => {
+        returned = await result.current.updateScheduledAsana('sched-1', { scheduledDate: '2024-01-16' });
       });
 
-      expect(mockStorage.updateScheduledAsanaTask).toHaveBeenCalledWith('sched-1', { scheduledDate: '2024-01-16' });
+      expect(mockApi.updateScheduledAsanaTask).toHaveBeenCalledWith('sched-1', { scheduledDate: '2024-01-16' });
       expect(returned).toEqual(updatedTask);
     });
   });
@@ -448,7 +456,6 @@ describe('useAsanaTasks hook', () => {
     it('creates a new Asana task', async () => {
       const now = new Date();
       const newTask = { id: 'new-task', title: 'New Task', source: 'asana', startTime: now.toISOString(), endTime: now.toISOString() };
-      // The API returns { success: true, task: {...} }
       mockApi.createAsanaTask.mockResolvedValue({ success: true, task: newTask });
 
       const { result } = renderHook(() => useAsanaTasks());
