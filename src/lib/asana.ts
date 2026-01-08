@@ -535,6 +535,21 @@ export async function updateTask(
   taskGid: string,
   params: UpdateTaskParams
 ): Promise<AsanaTask> {
+  // If setting start_on, we need to ensure due_on is also set (Asana requirement)
+  // Fetch current task to get existing due_on if needed
+  let existingDueOn: string | null = null;
+  if (params.startOn !== undefined && params.dueOn === undefined) {
+    const fetchResponse = await fetch(`${ASANA_API_BASE}/tasks/${taskGid}?opt_fields=due_on`, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    });
+    if (fetchResponse.ok) {
+      const fetchData = await fetchResponse.json();
+      existingDueOn = fetchData.data.due_on;
+    }
+  }
+
   // Build update data
   const taskData: Record<string, unknown> = {};
 
@@ -548,9 +563,16 @@ export async function updateTask(
 
   if (params.dueOn !== undefined) {
     taskData.due_on = params.dueOn;
+  } else if (params.startOn !== undefined && params.startOn !== null && existingDueOn) {
+    // Include existing due_on when setting start_on (Asana requires this)
+    taskData.due_on = existingDueOn;
   }
 
   if (params.startOn !== undefined) {
+    // Only set start_on if we have a due_on (either new or existing)
+    if (params.startOn !== null && !taskData.due_on && !existingDueOn) {
+      throw new Error('Cannot set start date without a due date. Please set a due date first.');
+    }
     taskData.start_on = params.startOn;
   }
 

@@ -3,16 +3,30 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
-import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType } from '@/types';
+import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState } from '@/types';
 
 const DATA_DIR = path.join(process.cwd(), '.data');
 const USER_DATA_FILE = path.join(DATA_DIR, 'user-data.json');
+
+const DEFAULT_ASANA_FILTERS: AsanaFilterState = {
+  integrationIds: [],
+  projectIds: [],
+  typeValues: [],
+  dueDateRange: 'all',
+  startDateRange: 'all',
+  filterLogic: 'and',
+  sortField: 'dueOn',
+  sortDirection: 'asc',
+  groupBy: 'none',
+  groupOrder: [],
+};
 
 interface UserData {
   taskTemplates: TaskTemplate[];
   customTaskTypes: CustomTaskType[];
   adHocTasks: AdHocTask[];
   scheduledAsanaTasks: ScheduledAsanaTask[];
+  asanaFilterPreferences?: AsanaFilterState;
 }
 
 const DEFAULT_USER_DATA: UserData = {
@@ -20,6 +34,7 @@ const DEFAULT_USER_DATA: UserData = {
   customTaskTypes: [],
   adHocTasks: [],
   scheduledAsanaTasks: [],
+  asanaFilterPreferences: DEFAULT_ASANA_FILTERS,
 };
 
 async function ensureDataDir(): Promise<void> {
@@ -41,6 +56,9 @@ export async function getUserData(): Promise<UserData> {
       customTaskTypes: parsed.customTaskTypes || [],
       adHocTasks: parsed.adHocTasks || [],
       scheduledAsanaTasks: parsed.scheduledAsanaTasks || [],
+      asanaFilterPreferences: parsed.asanaFilterPreferences
+        ? { ...DEFAULT_ASANA_FILTERS, ...parsed.asanaFilterPreferences }
+        : DEFAULT_ASANA_FILTERS,
     };
   } catch {
     return { ...DEFAULT_USER_DATA };
@@ -300,4 +318,16 @@ export async function getScheduledAsanaTasksForDate(date: string): Promise<Sched
 export async function getScheduleByGoogleEventId(googleEventId: string): Promise<ScheduledAsanaTask | null> {
   const tasks = await getScheduledAsanaTasks();
   return tasks.find(t => t.googleEventId === googleEventId) || null;
+}
+
+// Asana Filter Preferences
+export async function getAsanaFilterPreferences(): Promise<AsanaFilterState> {
+  const data = await getUserData();
+  return data.asanaFilterPreferences || DEFAULT_ASANA_FILTERS;
+}
+
+export async function saveAsanaFilterPreferences(filters: AsanaFilterState): Promise<void> {
+  const data = await getUserData();
+  data.asanaFilterPreferences = filters;
+  await saveUserData(data);
 }

@@ -1,6 +1,6 @@
 // API utilities with retry logic and proper typing
 
-import { AdHocTask, ApiError, AsanaProject, AsanaStory, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, ScheduledAsanaTask, SettingsResponse, TaskTemplate } from '@/types';
+import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, ScheduledAsanaTask, SettingsResponse, TaskTemplate } from '@/types';
 
 interface RetryOptions {
   maxRetries?: number;
@@ -402,6 +402,19 @@ export const api = {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ asanaTaskId, all: true }),
+    });
+  },
+
+  // Asana Filter Preferences
+  async getAsanaFilterPreferences(): Promise<{ filters: AsanaFilterState }> {
+    return fetchWithRetry<{ filters: AsanaFilterState }>('/api/user-data/asana-filters');
+  },
+
+  async saveAsanaFilterPreferences(filters: AsanaFilterState): Promise<{ success: true; filters: AsanaFilterState }> {
+    return fetchWithRetry<{ success: true; filters: AsanaFilterState }>('/api/user-data/asana-filters', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filters }),
     });
   },
 };

@@ -81,33 +81,6 @@ const DEFAULT_FILTERS: AsanaFilterState = {
   groupOrder: [],
 };
 
-const FILTERS_STORAGE_KEY = 'asana-filters';
-
-// Load filters from localStorage
-function loadFiltersFromStorage(): AsanaFilterState {
-  if (typeof window === 'undefined') return DEFAULT_FILTERS;
-  try {
-    const stored = localStorage.getItem(FILTERS_STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      // Merge with defaults to handle any new filter fields
-      return { ...DEFAULT_FILTERS, ...parsed };
-    }
-  } catch (e) {
-    console.error('Failed to load filters from storage:', e);
-  }
-  return DEFAULT_FILTERS;
-}
-
-// Save filters to localStorage
-function saveFiltersToStorage(filters: AsanaFilterState): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters));
-  } catch (e) {
-    console.error('Failed to save filters to storage:', e);
-  }
-}
 
 // Helper to get "Type" custom field value from a task
 function getTaskTypeValue(task: CalendarEvent): string | null {
@@ -144,15 +117,18 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load filters from localStorage on mount
+  // Load filters from server on mount
   useEffect(() => {
-    setFiltersState(loadFiltersFromStorage());
+    api.getAsanaFilterPreferences()
+      .then(({ filters }) => setFiltersState(filters))
+      .catch(error => console.error('Failed to load filter preferences:', error));
   }, []);
 
-  // Wrapper to save filters to localStorage when they change
+  // Wrapper to save filters to server when they change
   const setFilters = useCallback((newFilters: AsanaFilterState) => {
     setFiltersState(newFilters);
-    saveFiltersToStorage(newFilters);
+    api.saveAsanaFilterPreferences(newFilters)
+      .catch(error => console.error('Failed to save filter preferences:', error));
   }, []);
 
   // Load scheduled Asana tasks from server
@@ -351,7 +327,8 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
 
   const clearFilters = useCallback(() => {
     setFiltersState(DEFAULT_FILTERS);
-    saveFiltersToStorage(DEFAULT_FILTERS);
+    api.saveAsanaFilterPreferences(DEFAULT_FILTERS)
+      .catch(error => console.error('Failed to save filter preferences:', error));
   }, []);
 
   const scheduleAsana = useCallback(async (
