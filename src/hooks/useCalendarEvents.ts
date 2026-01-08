@@ -33,6 +33,7 @@ export function useCalendarEvents() {
     // Filter state
     projects: asanaProjects,
     typeValues: asanaTypeValues,
+    typeFieldInfoByIntegration: asanaTypeFieldInfoByIntegration,
     integrations: asanaIntegrations,
     filters: asanaFilters,
     setFilters: setAsanaFilters,
@@ -48,6 +49,7 @@ export function useCalendarEvents() {
     completeAsanaTask,
     addAsanaComment,
     createAsanaTask,
+    updateAsanaTask,
     deleteAsanaTask,
   } = useAsanaTasks();
 
@@ -152,6 +154,7 @@ export function useCalendarEvents() {
     // Asana filter state
     asanaProjects,
     asanaTypeValues,
+    asanaTypeFieldInfoByIntegration,
     asanaIntegrations,
     asanaFilters,
     setAsanaFilters,
@@ -171,6 +174,7 @@ export function useCalendarEvents() {
     completeAsanaTask,
     addAsanaComment,
     createAsanaTask,
+    updateAsanaTask,
     deleteAsanaTask,
   };
 }

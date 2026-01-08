@@ -107,10 +107,12 @@ export default function Home() {
     completeAsanaTask,
     addAsanaComment,
     createAsanaTask,
+    updateAsanaTask,
     deleteAsanaTask,
     // Asana filter state
     asanaProjects,
     asanaTypeValues,
+    asanaTypeFieldInfoByIntegration,
     asanaIntegrations,
     asanaFilters,
     setAsanaFilters,
@@ -286,6 +288,31 @@ export default function Home() {
       return false;
     }
   }, [deleteAsanaTask, unscheduleAllAsanaInstances, toast]);
+
+  // Handle Asana task update from sidebar (dates, type, projects)
+  const handleSidebarAsanaUpdate = useCallback(async (
+    taskId: string,
+    integrationId: string,
+    updates: {
+      dueOn?: string | null;
+      startOn?: string | null;
+      customFields?: Record<string, string | null>;
+      addProjects?: string[];
+      removeProjects?: string[];
+    }
+  ): Promise<CalendarEvent | null> => {
+    try {
+      const updatedTask = await updateAsanaTask(taskId, integrationId, updates);
+      if (updatedTask) {
+        toast.success('Task updated in Asana');
+      }
+      return updatedTask;
+    } catch (err) {
+      toast.error('Failed to update task in Asana');
+      console.error('Error updating Asana task:', err);
+      return null;
+    }
+  }, [updateAsanaTask, toast]);
 
   // Get connected Google integrations
   const connectedGoogleIntegrations = useMemo(() => {
@@ -705,6 +732,7 @@ export default function Home() {
             colorScheme={colorScheme}
             projects={asanaProjects}
             typeValues={asanaTypeValues}
+            typeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
             integrations={asanaIntegrations}
             filters={asanaFilters}
             onFiltersChange={setAsanaFilters}
@@ -712,6 +740,7 @@ export default function Home() {
             onToggleComplete={handleSidebarAsanaComplete}
             onAddComment={handleSidebarAsanaComment}
             onCreateTask={createAsanaTask}
+            onUpdateTask={handleSidebarAsanaUpdate}
             onDeleteTask={handleSidebarAsanaDelete}
             highlightedTaskId={highlightedAsanaTaskId}
             onClearHighlight={handleClearHighlight}

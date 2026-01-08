@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, memo, useMemo, useCallback, useRef, useEffect, forwardRef } from 'react';
-import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDateFilter, AsanaSortField, AsanaSortDirection, AsanaFilterLogic, ScheduledAsanaTask, AsanaStory } from '@/types';
-import { Calendar, GripVertical, Filter, X, ChevronDown, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle, Plus, Trash2, MessageSquare, Loader2, Link as LinkIcon } from 'lucide-react';
+import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDateFilter, AsanaSortField, AsanaSortDirection, AsanaFilterLogic, AsanaGroupBy, ScheduledAsanaTask, AsanaStory } from '@/types';
+import { Calendar, GripVertical, Filter, X, ChevronDown, ChevronUp, ChevronRight, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle, Plus, Trash2, MessageSquare, Loader2, Link as LinkIcon, Layers } from 'lucide-react';
 import { format, parseISO, isToday, isPast } from 'date-fns';
 import { getAsanaTaskUrl } from '@/lib/asana';
 import { api } from '@/lib/api';
@@ -15,6 +15,19 @@ interface ColorScheme {
   mainBg: string;
 }
 
+interface AsanaSidebarTypeFieldInfo {
+  fieldGid: string;
+  enumOptions: Map<string, string>; // displayValue -> enumOptionGid
+}
+
+interface UpdateTaskOptions {
+  dueOn?: string | null;
+  startOn?: string | null;
+  customFields?: Record<string, string | null>;
+  addProjects?: string[];
+  removeProjects?: string[];
+}
+
 interface AsanaSidebarProps {
   tasks: CalendarEvent[];
   isLoading: boolean;
@@ -24,6 +37,7 @@ interface AsanaSidebarProps {
   // Filter props
   projects?: AsanaProject[];
   typeValues?: string[]; // Unique Type custom field values
+  typeFieldInfoByIntegration?: Map<string, AsanaSidebarTypeFieldInfo>; // Info for setting Type field, per integration
   integrations?: { id: string; name: string }[]; // Unique integrations from all tasks
   filters?: AsanaFilterState;
   onFiltersChange?: (filters: AsanaFilterState) => void;
@@ -31,7 +45,8 @@ interface AsanaSidebarProps {
   // Asana actions
   onToggleComplete?: (taskId: string, integrationId: string, completed: boolean) => void;
   onAddComment?: (taskId: string, integrationId: string, comment: string) => void;
-  onCreateTask?: (integrationId: string, name: string, options?: { notes?: string; dueOn?: string; projectGid?: string }) => Promise<CalendarEvent | null>;
+  onCreateTask?: (integrationId: string, name: string, options?: { notes?: string; dueOn?: string; projectGid?: string; customFields?: Record<string, string> }) => Promise<CalendarEvent | null>;
+  onUpdateTask?: (taskId: string, integrationId: string, updates: UpdateTaskOptions) => Promise<CalendarEvent | null>;
   onDeleteTask?: (taskId: string, integrationId: string) => Promise<boolean>;
   // Highlight task from calendar click
   highlightedTaskId?: string | null;
@@ -54,6 +69,11 @@ const SORT_OPTIONS: { value: AsanaSortField; label: string }[] = [
   { value: 'type', label: 'Type' },
 ];
 
+const GROUP_BY_OPTIONS: { value: AsanaGroupBy; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'type', label: 'Type' },
+];
+
 export function AsanaSidebar({
   tasks,
   isLoading,
@@ -62,6 +82,7 @@ export function AsanaSidebar({
   colorScheme,
   projects = [],
   typeValues = [],
+  typeFieldInfoByIntegration,
   integrations = [],
   filters,
   onFiltersChange,
@@ -69,6 +90,7 @@ export function AsanaSidebar({
   onToggleComplete,
   onAddComment,
   onCreateTask,
+  onUpdateTask,
   onDeleteTask,
   highlightedTaskId,
   onClearHighlight,
@@ -76,8 +98,10 @@ export function AsanaSidebar({
   const [isDragOver, setIsDragOver] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [showSort, setShowSort] = useState(false);
+  const [showGroupBy, setShowGroupBy] = useState(false);
   const [selectedTask, setSelectedTask] = useState<CalendarEvent | null>(null);
   const [showCreateTask, setShowCreateTask] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set()); // Track which groups are expanded (default: all collapsed)
   const taskRefs = useRef<Map<string, HTMLLIElement>>(new Map());
   const listRef = useRef<HTMLUListElement>(null);
 
@@ -99,6 +123,57 @@ export function AsanaSidebar({
     if (mins === 0) return `${hours}h`;
     return `${hours}h ${mins}m`;
   }, []);
+
+  // Helper to get Type custom field value from a task
+  const getTaskTypeValue = useCallback((task: CalendarEvent): string => {
+    const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
+    return typeField?.displayValue || 'No Type';
+  }, []);
+
+  // Group tasks by the selected groupBy field
+  const groupedTasks = useMemo(() => {
+    if (!filters?.groupBy || filters.groupBy === 'none') {
+      return null; // No grouping
+    }
+
+    const groups = new Map<string, CalendarEvent[]>();
+
+    tasks.forEach(task => {
+      let groupKey: string;
+
+      if (filters.groupBy === 'type') {
+        groupKey = getTaskTypeValue(task);
+      } else {
+        groupKey = 'Other';
+      }
+
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, []);
+      }
+      groups.get(groupKey)!.push(task);
+    });
+
+    // Sort groups using custom order if available, otherwise alphabetically
+    const groupOrder = filters.groupOrder || [];
+    const sortedGroups = Array.from(groups.entries()).sort((a, b) => {
+      const aIndex = groupOrder.indexOf(a[0]);
+      const bIndex = groupOrder.indexOf(b[0]);
+
+      // If both have custom order, use it
+      if (aIndex !== -1 && bIndex !== -1) {
+        return aIndex - bIndex;
+      }
+      // If only one has custom order, prioritize it
+      if (aIndex !== -1) return -1;
+      if (bIndex !== -1) return 1;
+      // Otherwise sort alphabetically, but "No Type" goes last
+      if (a[0] === 'No Type') return 1;
+      if (b[0] === 'No Type') return -1;
+      return a[0].localeCompare(b[0]);
+    });
+
+    return sortedGroups;
+  }, [tasks, filters?.groupBy, filters?.groupOrder, getTaskTypeValue]);
 
   // Scroll to and highlight task when highlightedTaskId changes
   useEffect(() => {
@@ -169,6 +244,45 @@ export function AsanaSidebar({
     } else {
       onFiltersChange({ ...filters, sortField: field, sortDirection: 'asc' });
     }
+  };
+
+  const handleGroupByChange = (groupBy: AsanaGroupBy) => {
+    if (!filters || !onFiltersChange) return;
+    onFiltersChange({ ...filters, groupBy });
+  };
+
+  const handleMoveGroup = (groupName: string, direction: 'up' | 'down') => {
+    if (!filters || !onFiltersChange || !groupedTasks) return;
+
+    // Get current group names in order
+    const currentOrder = groupedTasks.map(([name]) => name);
+
+    // Find current index
+    const currentIndex = currentOrder.indexOf(groupName);
+    if (currentIndex === -1) return;
+
+    // Calculate new index
+    const newIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (newIndex < 0 || newIndex >= currentOrder.length) return;
+
+    // Swap positions
+    const newOrder = [...currentOrder];
+    [newOrder[currentIndex], newOrder[newIndex]] = [newOrder[newIndex], newOrder[currentIndex]];
+
+    // Update filters with new order
+    onFiltersChange({ ...filters, groupOrder: newOrder });
+  };
+
+  const toggleGroupExpanded = (groupName: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(groupName)) {
+        next.delete(groupName);
+      } else {
+        next.add(groupName);
+      }
+      return next;
+    });
   };
 
   const handleDragStart = (e: React.DragEvent, task: CalendarEvent) => {
@@ -249,7 +363,18 @@ export function AsanaSidebar({
             {filters && onFiltersChange && (
               <>
                 <button
-                  onClick={() => { setShowSort(!showSort); setShowFilters(false); }}
+                  onClick={() => { setShowGroupBy(!showGroupBy); setShowSort(false); setShowFilters(false); }}
+                  className={`p-1.5 rounded-md transition-colors ${
+                    filters.groupBy !== 'none'
+                      ? 'bg-orange-100 text-orange-600'
+                      : showGroupBy ? 'bg-orange-100 text-orange-600' : 'hover:bg-gray-100 text-gray-500'
+                  }`}
+                  title="Group by"
+                >
+                  <Layers className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => { setShowSort(!showSort); setShowGroupBy(false); setShowFilters(false); }}
                   className={`p-1.5 rounded-md transition-colors ${
                     showSort ? 'bg-orange-100 text-orange-600' : 'hover:bg-gray-100 text-gray-500'
                   }`}
@@ -258,7 +383,7 @@ export function AsanaSidebar({
                   <ArrowUpDown className="w-4 h-4" />
                 </button>
                 <button
-                  onClick={() => { setShowFilters(!showFilters); setShowSort(false); }}
+                  onClick={() => { setShowFilters(!showFilters); setShowSort(false); setShowGroupBy(false); }}
                   className={`p-1.5 rounded-md transition-colors ${
                     hasActiveFilters
                       ? 'bg-orange-100 text-orange-600'
@@ -275,6 +400,28 @@ export function AsanaSidebar({
         <p className="text-sm mt-1 text-gray-500">
           {tasks.length} task{tasks.length !== 1 ? 's' : ''}
         </p>
+
+        {/* Group By Panel */}
+        {showGroupBy && filters && onFiltersChange && (
+          <div className="mt-3 pt-3 border-t border-gray-200 space-y-2">
+            <label className="text-xs font-medium text-gray-600 block">Group by</label>
+            <div className="flex flex-wrap gap-1.5">
+              {GROUP_BY_OPTIONS.map(option => (
+                <button
+                  key={option.value}
+                  onClick={() => handleGroupByChange(option.value)}
+                  className={`text-xs px-2 py-1 rounded-full transition-colors ${
+                    filters.groupBy === option.value
+                      ? 'bg-orange-100 text-orange-700'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Sort Panel */}
         {showSort && filters && onFiltersChange && (
@@ -469,7 +616,82 @@ export function AsanaSidebar({
           <div className="p-4 text-center text-gray-500 text-sm">
             No incomplete Asana tasks
           </div>
+        ) : groupedTasks ? (
+          // Grouped view
+          <div className="p-2 space-y-2">
+            {groupedTasks.map(([groupName, groupTasks], index) => {
+              const isExpanded = expandedGroups.has(groupName);
+              return (
+                <div key={groupName}>
+                  <div
+                    className="flex items-center gap-2 px-2 py-1.5 sticky top-0 bg-white/95 backdrop-blur-sm z-10 cursor-pointer hover:bg-gray-50 rounded-md transition-colors"
+                    onClick={() => toggleGroupExpanded(groupName)}
+                  >
+                    {/* Expand/collapse chevron */}
+                    {isExpanded ? (
+                      <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                    )}
+                    <span className="text-xs font-semibold text-gray-700 uppercase tracking-wide flex-1">
+                      {groupName}
+                    </span>
+                    <span className="text-xs text-gray-400">
+                      ({groupTasks.length})
+                    </span>
+                    {/* Reorder buttons */}
+                    {onFiltersChange && groupedTasks.length > 1 && (
+                      <div className="flex items-center gap-0.5 ml-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleMoveGroup(groupName, 'up');
+                          }}
+                          disabled={index === 0}
+                          className="p-0.5 text-gray-400 hover:text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="Move up"
+                        >
+                          <ChevronUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleMoveGroup(groupName, 'down');
+                          }}
+                          disabled={index === groupedTasks.length - 1}
+                          className="p-0.5 text-gray-400 hover:text-gray-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="Move down"
+                        >
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {isExpanded && (
+                    <ul className="space-y-1 mt-1">
+                      {groupTasks.map(task => (
+                        <MemoizedTaskItem
+                          key={`${task.integrationId || 'default'}-${task.id}`}
+                          task={task}
+                          onDragStart={handleDragStart}
+                          scheduledDuration={scheduledDurations.get(task.id)}
+                          formatDuration={formatDuration}
+                          onClick={() => setSelectedTask(task)}
+                          isHighlighted={highlightedTaskId === task.id}
+                          ref={(el) => {
+                            if (el) taskRefs.current.set(task.id, el);
+                            else taskRefs.current.delete(task.id);
+                          }}
+                        />
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         ) : (
+          // Flat list view
           <ul ref={listRef} className="p-2 space-y-1">
             {tasks.map(task => (
               <MemoizedTaskItem
@@ -502,7 +724,11 @@ export function AsanaSidebar({
           }}
           onToggleComplete={onToggleComplete}
           onAddComment={onAddComment}
+          onUpdateTask={onUpdateTask}
           onDeleteTask={onDeleteTask}
+          onTaskUpdated={(updatedTask) => setSelectedTask(updatedTask)}
+          projects={projects}
+          typeFieldInfoByIntegration={typeFieldInfoByIntegration}
         />
       )}
 
@@ -511,6 +737,7 @@ export function AsanaSidebar({
         <CreateTaskModal
           integrations={integrations}
           projects={projects}
+          typeFieldInfoByIntegration={typeFieldInfoByIntegration}
           onClose={() => setShowCreateTask(false)}
           onCreateTask={onCreateTask}
         />
@@ -527,7 +754,11 @@ interface TaskDetailDialogProps {
   onClose: () => void;
   onToggleComplete?: (taskId: string, integrationId: string, completed: boolean) => void;
   onAddComment?: (taskId: string, integrationId: string, comment: string) => void;
+  onUpdateTask?: (taskId: string, integrationId: string, updates: UpdateTaskOptions) => Promise<CalendarEvent | null>;
   onDeleteTask?: (taskId: string, integrationId: string) => Promise<boolean>;
+  onTaskUpdated?: (task: CalendarEvent) => void;
+  projects?: AsanaProject[];
+  typeFieldInfoByIntegration?: Map<string, AsanaSidebarTypeFieldInfo>;
 }
 
 function TaskDetailDialog({
@@ -537,7 +768,11 @@ function TaskDetailDialog({
   onClose,
   onToggleComplete,
   onAddComment,
+  onUpdateTask,
   onDeleteTask,
+  onTaskUpdated,
+  projects = [],
+  typeFieldInfoByIntegration,
 }: TaskDetailDialogProps) {
   const [comment, setComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -547,6 +782,44 @@ function TaskDetailDialog({
   const [stories, setStories] = useState<AsanaStory[]>([]);
   const [isLoadingStories, setIsLoadingStories] = useState(false);
   const [storiesError, setStoriesError] = useState<string | null>(null);
+
+  // Edit mode state
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [editDueOn, setEditDueOn] = useState(task.dueOn || '');
+  const [editStartOn, setEditStartOn] = useState(task.startOn || '');
+  const [editType, setEditType] = useState('');
+  const [editProjectIds, setEditProjectIds] = useState<string[]>(task.projects?.map(p => p.gid) || []);
+
+  // Get Type custom field info for this task's integration
+  const typeFieldInfo = useMemo(() => {
+    if (!typeFieldInfoByIntegration || !task.integrationId) return null;
+    return typeFieldInfoByIntegration.get(task.integrationId) || null;
+  }, [typeFieldInfoByIntegration, task.integrationId]);
+
+  // Available type values for dropdown
+  const typeValues = useMemo(() => {
+    if (!typeFieldInfo) return [];
+    return Array.from(typeFieldInfo.enumOptions.keys()).sort();
+  }, [typeFieldInfo]);
+
+  // Filter projects to only those from this task's integration
+  const availableProjects = useMemo(() => {
+    return projects.filter(p => p.integrationId === task.integrationId);
+  }, [projects, task.integrationId]);
+
+  // Get Type custom field
+  const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
+
+  // Initialize edit type when entering edit mode
+  useEffect(() => {
+    if (isEditing) {
+      setEditType(typeField?.displayValue || '');
+      setEditDueOn(task.dueOn || '');
+      setEditStartOn(task.startOn || '');
+      setEditProjectIds(task.projects?.map(p => p.gid) || []);
+    }
+  }, [isEditing, typeField?.displayValue, task.dueOn, task.startOn, task.projects]);
 
   // Fetch stories when dialog opens
   useEffect(() => {
@@ -636,8 +909,71 @@ function TaskDetailDialog({
     }
   };
 
-  // Get Type custom field
-  const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
+  const handleSaveChanges = async () => {
+    if (!onUpdateTask || !task.integrationId) return;
+
+    setIsSaving(true);
+    try {
+      const updates: UpdateTaskOptions = {};
+
+      // Due date
+      if (editDueOn !== (task.dueOn || '')) {
+        updates.dueOn = editDueOn || null;
+      }
+
+      // Start date
+      if (editStartOn !== (task.startOn || '')) {
+        updates.startOn = editStartOn || null;
+      }
+
+      // Type
+      if (editType !== (typeField?.displayValue || '')) {
+        if (typeFieldInfo && editType) {
+          const enumOptionGid = typeFieldInfo.enumOptions.get(editType);
+          if (enumOptionGid) {
+            updates.customFields = { [typeFieldInfo.fieldGid]: enumOptionGid };
+          }
+        } else if (typeFieldInfo && !editType) {
+          // Clear the type
+          updates.customFields = { [typeFieldInfo.fieldGid]: null };
+        }
+      }
+
+      // Projects
+      const currentProjectIds = task.projects?.map(p => p.gid) || [];
+      const addProjects = editProjectIds.filter(id => !currentProjectIds.includes(id));
+      const removeProjects = currentProjectIds.filter(id => !editProjectIds.includes(id));
+
+      if (addProjects.length > 0) {
+        updates.addProjects = addProjects;
+      }
+      if (removeProjects.length > 0) {
+        updates.removeProjects = removeProjects;
+      }
+
+      // Only update if there are changes
+      if (Object.keys(updates).length > 0) {
+        const updatedTask = await onUpdateTask(task.id, task.integrationId, updates);
+        if (updatedTask && onTaskUpdated) {
+          onTaskUpdated(updatedTask);
+        }
+      }
+
+      setIsEditing(false);
+    } catch (error) {
+      console.error('Failed to save changes:', error);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleProjectToggle = (projectGid: string) => {
+    setEditProjectIds(prev =>
+      prev.includes(projectGid)
+        ? prev.filter(id => id !== projectGid)
+        : [...prev, projectGid]
+    );
+  };
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
@@ -649,16 +985,29 @@ function TaskDetailDialog({
         <div className="p-4 border-b border-gray-200 flex-shrink-0">
           <div className="flex items-start justify-between gap-3">
             <h3 className="font-semibold text-gray-900 line-clamp-2">{task.title}</h3>
-            <button
-              onClick={onClose}
-              className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded flex-shrink-0"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              {onUpdateTask && task.integrationId && !isEditing && (
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="p-1 text-gray-400 hover:text-orange-600 hover:bg-gray-100 rounded"
+                  title="Edit task"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </button>
+              )}
+              <button
+                onClick={onClose}
+                className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
 
           {/* Type badge */}
-          {typeField?.displayValue && (
+          {typeField?.displayValue && !isEditing && (
             <span className="inline-flex items-center gap-1 mt-2 px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">
               <Tag className="w-3 h-3" />
               {typeField.displayValue}
@@ -666,7 +1015,7 @@ function TaskDetailDialog({
           )}
 
           {/* Scheduled duration */}
-          {scheduledDuration !== undefined && scheduledDuration > 0 && (
+          {scheduledDuration !== undefined && scheduledDuration > 0 && !isEditing && (
             <span className="inline-flex ml-2 mt-2 bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-xs">
               {formatDuration(scheduledDuration)} scheduled
             </span>
@@ -675,117 +1024,215 @@ function TaskDetailDialog({
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {/* Notes/Description */}
-          {task.description && (
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Notes</label>
-              <p className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">{task.description}</p>
-            </div>
-          )}
-
-          {/* Task Details Grid */}
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            {/* Start date */}
-            {task.startOn && (
-              <div>
-                <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1">
-                  <PlayCircle className="w-3 h-3" /> Start
-                </label>
-                <p className="text-gray-900 mt-0.5">{format(parseISO(task.startOn), 'MMM d, yyyy')}</p>
-              </div>
-            )}
-
-            {/* Due date */}
-            {task.dueOn && (
-              <div>
-                <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1">
-                  <Clock className="w-3 h-3" /> Due
-                </label>
-                <p className={`mt-0.5 ${
-                  isPast(parseISO(task.dueOn)) && !isToday(parseISO(task.dueOn))
-                    ? 'text-red-600 font-medium'
-                    : isToday(parseISO(task.dueOn))
-                    ? 'text-orange-600 font-medium'
-                    : 'text-gray-900'
-                }`}>
-                  {format(parseISO(task.dueOn), 'MMM d, yyyy')}
-                </p>
-              </div>
-            )}
-
-            {/* Created at */}
-            {task.createdAt && (
-              <div>
-                <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Created</label>
-                <p className="text-gray-900 mt-0.5">{format(parseISO(task.createdAt), 'MMM d, yyyy')}</p>
-              </div>
-            )}
-
-            {/* Integration */}
-            {task.integrationName && (
-              <div>
-                <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Integration</label>
-                <p className="text-gray-900 mt-0.5">{task.integrationName}</p>
-              </div>
-            )}
-          </div>
-
-          {/* Projects */}
-          {task.projects && task.projects.length > 0 && (
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1">
-                <Folder className="w-3 h-3" /> Projects
-              </label>
-              <div className="flex flex-wrap gap-1.5 mt-1">
-                {task.projects.map(project => (
-                  <span
-                    key={project.gid}
-                    className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded text-xs"
+          {isEditing ? (
+            /* Edit Mode Form */
+            <div className="space-y-4">
+              {/* Type selector */}
+              {typeValues.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                    <Tag className="w-3 h-3" /> Type
+                  </label>
+                  <select
+                    value={editType}
+                    onChange={(e) => setEditType(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
                   >
-                    {project.name}
-                  </span>
-                ))}
+                    <option value="">No type</option>
+                    {typeValues.map(type => (
+                      <option key={type} value={type}>{type}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Start date */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                  <PlayCircle className="w-3 h-3" /> Start date
+                </label>
+                <input
+                  type="date"
+                  value={editStartOn}
+                  onChange={(e) => setEditStartOn(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                />
+              </div>
+
+              {/* Due date */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                  <Clock className="w-3 h-3" /> Due date
+                </label>
+                <input
+                  type="date"
+                  value={editDueOn}
+                  onChange={(e) => setEditDueOn(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                />
+              </div>
+
+              {/* Projects */}
+              {availableProjects.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                    <Folder className="w-3 h-3" /> Projects
+                  </label>
+                  <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-2 bg-gray-50 rounded-lg border border-gray-200">
+                    {availableProjects.map(project => (
+                      <button
+                        key={project.gid}
+                        type="button"
+                        onClick={() => handleProjectToggle(project.gid)}
+                        className={`text-xs px-2 py-1 rounded-full transition-colors ${
+                          editProjectIds.includes(project.gid)
+                            ? 'bg-orange-100 text-orange-700 ring-1 ring-orange-300'
+                            : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
+                        }`}
+                      >
+                        {project.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Save/Cancel buttons */}
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={() => setIsEditing(false)}
+                  disabled={isSaving}
+                  className="flex-1 px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveChanges}
+                  disabled={isSaving}
+                  className="flex-1 px-4 py-2 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors disabled:opacity-50"
+                >
+                  {isSaving ? 'Saving...' : 'Save Changes'}
+                </button>
               </div>
             </div>
-          )}
-
-          {/* Comments Section */}
-          <div>
-            <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1">
-              <MessageSquare className="w-3 h-3" /> Comments
-              {stories.length > 0 && (
-                <span className="text-gray-400">({stories.length})</span>
+          ) : (
+            /* View Mode */
+            <>
+              {/* Notes/Description */}
+              {task.description && (
+                <div>
+                  <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Notes</label>
+                  <p className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">{task.description}</p>
+                </div>
               )}
-            </label>
 
-            {isLoadingStories ? (
-              <div className="flex items-center justify-center py-4">
-                <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
-              </div>
-            ) : storiesError ? (
-              <p className="text-sm text-red-500 mt-1">{storiesError}</p>
-            ) : stories.length === 0 ? (
-              <p className="text-sm text-gray-500 mt-1 italic">No comments yet</p>
-            ) : (
-              <div className="mt-2 space-y-3 max-h-48 overflow-y-auto">
-                {stories.map((story) => (
-                  <div key={story.gid} className="bg-gray-50 rounded-lg p-3">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-medium text-gray-700">
-                        {story.createdBy?.name || 'Unknown'}
-                      </span>
-                      <span className="text-xs text-gray-400">
-                        {format(parseISO(story.createdAt), 'MMM d, h:mm a')}
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">
-                      {renderTextWithLinks(story.text)}
+              {/* Task Details Grid */}
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                {/* Start date */}
+                <div>
+                  <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1">
+                    <PlayCircle className="w-3 h-3" /> Start
+                  </label>
+                  <p className="text-gray-900 mt-0.5">
+                    {task.startOn ? format(parseISO(task.startOn), 'MMM d, yyyy') : <span className="text-gray-400 italic">Not set</span>}
+                  </p>
+                </div>
+
+                {/* Due date */}
+                <div>
+                  <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1">
+                    <Clock className="w-3 h-3" /> Due
+                  </label>
+                  {task.dueOn ? (
+                    <p className={`mt-0.5 ${
+                      isPast(parseISO(task.dueOn)) && !isToday(parseISO(task.dueOn))
+                        ? 'text-red-600 font-medium'
+                        : isToday(parseISO(task.dueOn))
+                        ? 'text-orange-600 font-medium'
+                        : 'text-gray-900'
+                    }`}>
+                      {format(parseISO(task.dueOn), 'MMM d, yyyy')}
                     </p>
+                  ) : (
+                    <p className="text-gray-400 italic mt-0.5">Not set</p>
+                  )}
+                </div>
+
+                {/* Created at */}
+                {task.createdAt && (
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Created</label>
+                    <p className="text-gray-900 mt-0.5">{format(parseISO(task.createdAt), 'MMM d, yyyy')}</p>
                   </div>
-                ))}
+                )}
+
+                {/* Integration */}
+                {task.integrationName && (
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Integration</label>
+                    <p className="text-gray-900 mt-0.5">{task.integrationName}</p>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+
+              {/* Projects */}
+              {task.projects && task.projects.length > 0 && (
+                <div>
+                  <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1">
+                    <Folder className="w-3 h-3" /> Projects
+                  </label>
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    {task.projects.map(project => (
+                      <span
+                        key={project.gid}
+                        className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded text-xs"
+                      >
+                        {project.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Comments Section */}
+              <div>
+                <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1">
+                  <MessageSquare className="w-3 h-3" /> Comments
+                  {stories.length > 0 && (
+                    <span className="text-gray-400">({stories.length})</span>
+                  )}
+                </label>
+
+                {isLoadingStories ? (
+                  <div className="flex items-center justify-center py-4">
+                    <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
+                  </div>
+                ) : storiesError ? (
+                  <p className="text-sm text-red-500 mt-1">{storiesError}</p>
+                ) : stories.length === 0 ? (
+                  <p className="text-sm text-gray-500 mt-1 italic">No comments yet</p>
+                ) : (
+                  <div className="mt-2 space-y-3 max-h-48 overflow-y-auto">
+                    {stories.map((story) => (
+                      <div key={story.gid} className="bg-gray-50 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-medium text-gray-700">
+                            {story.createdBy?.name || 'Unknown'}
+                          </span>
+                          <span className="text-xs text-gray-400">
+                            {format(parseISO(story.createdAt), 'MMM d, h:mm a')}
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">
+                          {renderTextWithLinks(story.text)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Actions - fixed at bottom */}
@@ -892,16 +1339,23 @@ function TaskDetailDialog({
 }
 
 // Create Task Modal Component
+interface TypeFieldInfo {
+  fieldGid: string;
+  enumOptions: Map<string, string>; // displayValue -> enumOptionGid
+}
+
 interface CreateTaskModalProps {
   integrations: { id: string; name: string }[];
   projects: AsanaProject[];
+  typeFieldInfoByIntegration?: Map<string, TypeFieldInfo>;
   onClose: () => void;
-  onCreateTask: (integrationId: string, name: string, options?: { notes?: string; dueOn?: string; projectGid?: string }) => Promise<CalendarEvent | null>;
+  onCreateTask: (integrationId: string, name: string, options?: { notes?: string; dueOn?: string; projectGid?: string; customFields?: Record<string, string> }) => Promise<CalendarEvent | null>;
 }
 
 function CreateTaskModal({
   integrations,
   projects,
+  typeFieldInfoByIntegration,
   onClose,
   onCreateTask,
 }: CreateTaskModalProps) {
@@ -910,31 +1364,64 @@ function CreateTaskModal({
   const [dueOn, setDueOn] = useState('');
   const [selectedIntegration, setSelectedIntegration] = useState(integrations[0]?.id || '');
   const [selectedProject, setSelectedProject] = useState('');
+  const [selectedType, setSelectedType] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Get typeFieldInfo for the selected integration
+  const typeFieldInfo = useMemo(() => {
+    if (!typeFieldInfoByIntegration || !selectedIntegration) return null;
+    return typeFieldInfoByIntegration.get(selectedIntegration) || null;
+  }, [typeFieldInfoByIntegration, selectedIntegration]);
+
+  // Get type values for the selected integration
+  const typeValues = useMemo(() => {
+    if (!typeFieldInfo) return [];
+    return Array.from(typeFieldInfo.enumOptions.keys()).sort();
+  }, [typeFieldInfo]);
+
+  // Whether Type field is required (available and has options for this integration)
+  const typeRequired = typeFieldInfo && typeValues.length > 0;
 
   // Filter projects by selected integration
   const filteredProjects = useMemo(() => {
     return projects.filter(p => p.integrationId === selectedIntegration);
   }, [projects, selectedIntegration]);
 
-  // Reset project when integration changes
+  // Reset project and type when integration changes
   useEffect(() => {
     setSelectedProject('');
+    setSelectedType('');
   }, [selectedIntegration]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !selectedIntegration) return;
 
+    // Require Type selection if field is available for this integration
+    if (typeRequired && !selectedType) {
+      setError('Please select a Type for this task');
+      return;
+    }
+
     setIsSubmitting(true);
     setError(null);
 
     try {
-      const options: { notes?: string; dueOn?: string; projectGid?: string } = {};
+      const options: { notes?: string; dueOn?: string; projectGid?: string; customFields?: Record<string, string> } = {};
       if (notes.trim()) options.notes = notes.trim();
       if (dueOn) options.dueOn = dueOn;
       if (selectedProject) options.projectGid = selectedProject;
+
+      // Add custom field for Type if selected
+      if (selectedType && typeFieldInfo) {
+        const enumOptionGid = typeFieldInfo.enumOptions.get(selectedType);
+        if (enumOptionGid) {
+          options.customFields = {
+            [typeFieldInfo.fieldGid]: enumOptionGid,
+          };
+        }
+      }
 
       await onCreateTask(selectedIntegration, name.trim(), options);
       onClose();
@@ -1045,6 +1532,26 @@ function CreateTaskModal({
                 <option value="">No project</option>
                 {filteredProjects.map(project => (
                   <option key={project.gid} value={project.gid}>{project.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Type selector */}
+          {typeValues.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Type {typeRequired && <span className="text-red-500">*</span>}
+              </label>
+              <select
+                value={selectedType}
+                onChange={(e) => setSelectedType(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                required={!!typeRequired}
+              >
+                <option value="">Select type</option>
+                {typeValues.map(type => (
+                  <option key={type} value={type}>{type}</option>
                 ))}
               </select>
             </div>

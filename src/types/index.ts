@@ -30,6 +30,7 @@ export interface AsanaCustomField {
   name: string;
   displayValue: string | null;
   type: string;
+  enumValueGid?: string; // GID of the selected enum option (for enum fields)
 }
 
 export interface AsanaTask {
@@ -79,6 +80,8 @@ export type AsanaSortDirection = 'asc' | 'desc';
 
 export type AsanaFilterLogic = 'and' | 'or';
 
+export type AsanaGroupBy = 'none' | 'type';
+
 export interface AsanaFilterState {
   integrationIds: string[];
   projectIds: string[];
@@ -88,6 +91,8 @@ export interface AsanaFilterState {
   filterLogic: AsanaFilterLogic;
   sortField: AsanaSortField;
   sortDirection: AsanaSortDirection;
+  groupBy: AsanaGroupBy;
+  groupOrder: string[]; // Custom order of group names (when groupBy is active)
 }
 
 // Legacy alias for backwards compatibility

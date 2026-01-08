@@ -164,6 +164,8 @@ export async function getMyTasks(
     'custom_fields.name',
     'custom_fields.display_value',
     'custom_fields.type',
+    'custom_fields.enum_value',
+    'custom_fields.enum_value.name',
   ].join(',');
 
   const tasksResponse = await fetch(
@@ -195,11 +197,12 @@ export async function getMyTasks(
     completed: task.completed as boolean,
     assignee: task.assignee as { gid: string; name: string } | undefined,
     projects: task.projects as Array<{ gid: string; name: string }> | undefined,
-    customFields: (task.custom_fields as Array<{ gid: string; name: string; display_value: string | null; type: string }> | undefined)?.map(cf => ({
+    customFields: (task.custom_fields as Array<{ gid: string; name: string; display_value: string | null; type: string; enum_value?: { gid: string; name: string } }> | undefined)?.map(cf => ({
       gid: cf.gid,
       name: cf.name,
       displayValue: cf.display_value,
       type: cf.type,
+      enumValueGid: cf.enum_value?.gid,
     })),
   }));
 }
@@ -414,6 +417,7 @@ export interface CreateTaskParams {
   notes?: string;
   dueOn?: string; // YYYY-MM-DD format
   projectGid?: string;
+  customFields?: Record<string, string>; // fieldGid -> enumOptionGid (for enum fields)
 }
 
 export async function createTask(
@@ -454,7 +458,29 @@ export async function createTask(
     taskData.projects = [params.projectGid];
   }
 
-  const response = await fetch(`${ASANA_API_BASE}/tasks`, {
+  if (params.customFields && Object.keys(params.customFields).length > 0) {
+    taskData.custom_fields = params.customFields;
+  }
+
+  // Request all relevant fields in response
+  const optFields = [
+    'name',
+    'notes',
+    'due_on',
+    'due_at',
+    'start_on',
+    'completed',
+    'created_at',
+    'assignee.name',
+    'projects.name',
+    'custom_fields.name',
+    'custom_fields.display_value',
+    'custom_fields.type',
+    'custom_fields.enum_value',
+    'custom_fields.enum_value.name',
+  ].join(',');
+
+  const response = await fetch(`${ASANA_API_BASE}/tasks?opt_fields=${optFields}`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
@@ -478,7 +504,161 @@ export async function createTask(
     name: task.name,
     notes: task.notes,
     dueOn: task.due_on,
+    dueAt: task.due_at,
+    startOn: task.start_on,
+    createdAt: task.created_at,
     completed: task.completed,
+    assignee: task.assignee,
+    projects: task.projects,
+    customFields: task.custom_fields?.map((cf: { gid: string; name: string; display_value: string | null; type: string; enum_value?: { gid: string; name: string } }) => ({
+      gid: cf.gid,
+      name: cf.name,
+      displayValue: cf.display_value,
+      type: cf.type,
+      enumValueGid: cf.enum_value?.gid,
+    })),
+  };
+}
+
+export interface UpdateTaskParams {
+  name?: string;
+  notes?: string;
+  dueOn?: string | null; // YYYY-MM-DD format, null to clear
+  startOn?: string | null; // YYYY-MM-DD format, null to clear
+  customFields?: Record<string, string | null>; // fieldGid -> enumOptionGid (or null to clear)
+  addProjects?: string[]; // project gids to add
+  removeProjects?: string[]; // project gids to remove
+}
+
+export async function updateTask(
+  accessToken: string,
+  taskGid: string,
+  params: UpdateTaskParams
+): Promise<AsanaTask> {
+  // Build update data
+  const taskData: Record<string, unknown> = {};
+
+  if (params.name !== undefined) {
+    taskData.name = params.name;
+  }
+
+  if (params.notes !== undefined) {
+    taskData.notes = params.notes;
+  }
+
+  if (params.dueOn !== undefined) {
+    taskData.due_on = params.dueOn;
+  }
+
+  if (params.startOn !== undefined) {
+    taskData.start_on = params.startOn;
+  }
+
+  if (params.customFields && Object.keys(params.customFields).length > 0) {
+    taskData.custom_fields = params.customFields;
+  }
+
+  // Request all relevant fields in response
+  const optFields = [
+    'name',
+    'notes',
+    'due_on',
+    'due_at',
+    'start_on',
+    'completed',
+    'created_at',
+    'assignee.name',
+    'projects.name',
+    'custom_fields.name',
+    'custom_fields.display_value',
+    'custom_fields.type',
+    'custom_fields.enum_value',
+    'custom_fields.enum_value.name',
+  ].join(',');
+
+  const response = await fetch(`${ASANA_API_BASE}/tasks/${taskGid}?opt_fields=${optFields}`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ data: taskData }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    console.error('Asana update task error:', response.status, errorBody);
+    throw new Error(`Failed to update task: ${response.status} - ${errorBody.substring(0, 200)}`);
+  }
+
+  const data = await response.json();
+  const task = data.data;
+
+  // Handle project additions/removals separately (Asana API requires separate calls)
+  if (params.addProjects && params.addProjects.length > 0) {
+    for (const projectGid of params.addProjects) {
+      await fetch(`${ASANA_API_BASE}/tasks/${taskGid}/addProject`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ data: { project: projectGid } }),
+      });
+    }
+  }
+
+  if (params.removeProjects && params.removeProjects.length > 0) {
+    for (const projectGid of params.removeProjects) {
+      await fetch(`${ASANA_API_BASE}/tasks/${taskGid}/removeProject`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ data: { project: projectGid } }),
+      });
+    }
+  }
+
+  // If projects were changed, re-fetch to get updated project list
+  if ((params.addProjects && params.addProjects.length > 0) ||
+      (params.removeProjects && params.removeProjects.length > 0)) {
+    const refetchResponse = await fetch(`${ASANA_API_BASE}/tasks/${taskGid}?opt_fields=${optFields}`, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    });
+    if (refetchResponse.ok) {
+      const refetchData = await refetchResponse.json();
+      return mapAsanaTaskResponse(refetchData.data);
+    }
+  }
+
+  return mapAsanaTaskResponse(task);
+}
+
+// Helper to map Asana API task response to our AsanaTask type
+function mapAsanaTaskResponse(task: Record<string, unknown>): AsanaTask {
+  return {
+    id: task.gid as string,
+    gid: task.gid as string,
+    name: task.name as string,
+    notes: task.notes as string | undefined,
+    dueOn: task.due_on as string | undefined,
+    dueAt: task.due_at as string | undefined,
+    startOn: task.start_on as string | undefined,
+    createdAt: task.created_at as string | undefined,
+    completed: task.completed as boolean,
+    assignee: task.assignee as { gid: string; name: string } | undefined,
+    projects: task.projects as Array<{ gid: string; name: string }> | undefined,
+    customFields: (task.custom_fields as Array<{ gid: string; name: string; display_value: string | null; type: string; enum_value?: { gid: string; name: string } }> | undefined)?.map(cf => ({
+      gid: cf.gid,
+      name: cf.name,
+      displayValue: cf.display_value,
+      type: cf.type,
+      enumValueGid: cf.enum_value?.gid,
+    })),
   };
 }
 

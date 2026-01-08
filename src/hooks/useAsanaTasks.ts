@@ -9,6 +9,20 @@ interface CreateAsanaTaskOptions {
   notes?: string;
   dueOn?: string;
   projectGid?: string;
+  customFields?: Record<string, string>; // fieldGid -> enumOptionGid
+}
+
+interface UpdateAsanaTaskOptions {
+  dueOn?: string | null;
+  startOn?: string | null;
+  customFields?: Record<string, string | null>;
+  addProjects?: string[];
+  removeProjects?: string[];
+}
+
+interface TypeFieldInfo {
+  fieldGid: string;
+  enumOptions: Map<string, string>; // displayValue -> enumOptionGid
 }
 
 interface UseAsanaTasksReturn {
@@ -20,6 +34,7 @@ interface UseAsanaTasksReturn {
   // Filter state
   projects: AsanaProject[];
   typeValues: string[]; // Unique type values from tasks
+  typeFieldInfoByIntegration: Map<string, TypeFieldInfo>; // Info for setting Type field on new tasks, per integration
   integrations: { id: string; name: string }[]; // Unique integrations from tasks
   filters: AsanaFilterState;
   setFilters: (filters: AsanaFilterState) => void;
@@ -49,6 +64,7 @@ interface UseAsanaTasksReturn {
   completeAsanaTask: (taskId: string, integrationId: string, completed: boolean) => Promise<void>;
   addAsanaComment: (taskId: string, integrationId: string, comment: string) => Promise<void>;
   createAsanaTask: (integrationId: string, name: string, options?: CreateAsanaTaskOptions) => Promise<CalendarEvent | null>;
+  updateAsanaTask: (taskId: string, integrationId: string, updates: UpdateAsanaTaskOptions) => Promise<CalendarEvent | null>;
   deleteAsanaTask: (taskId: string, integrationId: string) => Promise<boolean>;
 }
 
@@ -61,6 +77,8 @@ const DEFAULT_FILTERS: AsanaFilterState = {
   filterLogic: 'and',
   sortField: 'dueOn',
   sortDirection: 'asc',
+  groupBy: 'none',
+  groupOrder: [],
 };
 
 const FILTERS_STORAGE_KEY = 'asana-filters';
@@ -197,6 +215,33 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
       if (typeValue) types.add(typeValue);
     });
     return Array.from(types).sort();
+  }, [allAsanaTasks]);
+
+  // Extract Type custom field info per integration (fieldGid and displayValue -> enumOptionGid mapping)
+  // Custom fields are workspace-specific, so we track them per integration
+  const typeFieldInfoByIntegration = useMemo(() => {
+    const infoMap = new Map<string, { fieldGid: string; enumOptions: Map<string, string> }>();
+
+    for (const task of allAsanaTasks) {
+      if (!task.integrationId) continue;
+
+      const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
+      if (typeField) {
+        if (!infoMap.has(task.integrationId)) {
+          infoMap.set(task.integrationId, {
+            fieldGid: typeField.gid,
+            enumOptions: new Map<string, string>(),
+          });
+        }
+
+        const info = infoMap.get(task.integrationId)!;
+        if (typeField.displayValue && typeField.enumValueGid) {
+          info.enumOptions.set(typeField.displayValue, typeField.enumValueGid);
+        }
+      }
+    }
+
+    return infoMap;
   }, [allAsanaTasks]);
 
   // Extract unique integrations from all tasks
@@ -452,6 +497,32 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     }
   }, []);
 
+  const updateAsanaTask = useCallback(async (
+    taskId: string,
+    integrationId: string,
+    updates: UpdateAsanaTaskOptions
+  ): Promise<CalendarEvent | null> => {
+    try {
+      const result = await api.updateAsanaTask(taskId, integrationId, updates);
+      if (result.success && result.task) {
+        const updatedTask: CalendarEvent = {
+          ...result.task,
+          startTime: new Date(result.task.startTime),
+          endTime: new Date(result.task.endTime),
+        };
+        // Update local state
+        setAllAsanaTasks(prev => prev.map(t =>
+          t.id === taskId ? updatedTask : t
+        ));
+        return updatedTask;
+      }
+      return null;
+    } catch (error) {
+      console.error('Failed to update Asana task:', error);
+      throw error;
+    }
+  }, []);
+
   const deleteAsanaTask = useCallback(async (
     taskId: string,
     integrationId: string
@@ -476,6 +547,7 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     // Filter state
     projects,
     typeValues,
+    typeFieldInfoByIntegration,
     integrations,
     filters,
     setFilters,
@@ -491,6 +563,7 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     completeAsanaTask,
     addAsanaComment,
     createAsanaTask,
+    updateAsanaTask,
     deleteAsanaTask,
   };
 }

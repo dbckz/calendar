@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { completeTask, addTaskComment, deleteTask, getTaskStories, refreshAsanaToken } from '@/lib/asana';
+import { completeTask, addTaskComment, deleteTask, getTaskStories, refreshAsanaToken, updateTask, asanaTaskToCalendarEvent, UpdateTaskParams } from '@/lib/asana';
 import { getIntegrationById, updateIntegration } from '@/lib/integration-storage';
 import { AsanaIntegration } from '@/types';
 
@@ -191,6 +191,84 @@ export async function DELETE(
     console.error('Error deleting task:', error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to delete task' },
+      { status: 500 }
+    );
+  }
+}
+
+// PUT - Update task fields (due date, start date, type, projects, etc.)
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ taskId: string }> }
+) {
+  try {
+    const { taskId } = await params;
+    const body = await request.json();
+    const { integrationId, ...updateParams } = body;
+
+    if (!integrationId) {
+      return NextResponse.json({ error: 'integrationId is required' }, { status: 400 });
+    }
+
+    const integration = await getIntegrationById(integrationId) as AsanaIntegration | null;
+    if (!integration || integration.type !== 'asana') {
+      return NextResponse.json({ error: 'Asana integration not found' }, { status: 404 });
+    }
+
+    if (!integration.credentials) {
+      return NextResponse.json({ error: 'Integration not authenticated' }, { status: 401 });
+    }
+
+    let credentials = integration.credentials;
+
+    // Check if token needs refresh
+    if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
+      credentials = await refreshAsanaToken(
+        credentials.refreshToken!,
+        integration.clientId,
+        integration.clientSecret
+      );
+      await updateIntegration(integration.id, { credentials });
+    }
+
+    // Build update params
+    const asanaUpdateParams: UpdateTaskParams = {};
+
+    if (updateParams.dueOn !== undefined) {
+      asanaUpdateParams.dueOn = updateParams.dueOn;
+    }
+
+    if (updateParams.startOn !== undefined) {
+      asanaUpdateParams.startOn = updateParams.startOn;
+    }
+
+    if (updateParams.customFields !== undefined) {
+      asanaUpdateParams.customFields = updateParams.customFields;
+    }
+
+    if (updateParams.addProjects !== undefined) {
+      asanaUpdateParams.addProjects = updateParams.addProjects;
+    }
+
+    if (updateParams.removeProjects !== undefined) {
+      asanaUpdateParams.removeProjects = updateParams.removeProjects;
+    }
+
+    const updatedTask = await updateTask(credentials.accessToken, taskId, asanaUpdateParams);
+    const event = asanaTaskToCalendarEvent(updatedTask);
+
+    return NextResponse.json({
+      success: true,
+      task: {
+        ...event,
+        integrationId: integration.id,
+        integrationName: integration.name,
+      },
+    });
+  } catch (error) {
+    console.error('Error updating task:', error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to update task' },
       { status: 500 }
     );
   }

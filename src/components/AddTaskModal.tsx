@@ -38,6 +38,19 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
     api.getCustomTaskTypes().then(({ customTypes }) => setCustomTypes(customTypes)).catch(console.error);
   }, []);
 
+  // Update form fields when modal opens with new default times (e.g., from timeline drag)
+  useEffect(() => {
+    if (isOpen) {
+      if (defaultStartTime) {
+        setDueDate(format(defaultStartTime, 'yyyy-MM-dd'));
+        setDueTime(format(defaultStartTime, 'HH:mm'));
+      } else if (defaultDate) {
+        setDueDate(format(defaultDate, 'yyyy-MM-dd'));
+        setDueTime('');
+      }
+    }
+  }, [isOpen, defaultStartTime, defaultDate]);
+
   // Helper to get emoji for any task type
   const getTaskTypeEmoji = useCallback((type: TaskType): string => {
     if (isCustomTaskType(type)) {

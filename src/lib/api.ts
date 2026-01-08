@@ -206,6 +206,7 @@ export const api = {
       notes?: string;
       dueOn?: string;
       projectGid?: string;
+      customFields?: Record<string, string>; // fieldGid -> enumOptionGid
     }
   ): Promise<{ success: true; task: CalendarEventResponse }> {
     return fetchWithRetry<{ success: true; task: CalendarEventResponse }>(
@@ -217,6 +218,30 @@ export const api = {
           integrationId,
           name,
           ...options,
+        }),
+      }
+    );
+  },
+
+  async updateAsanaTask(
+    taskId: string,
+    integrationId: string,
+    updates: {
+      dueOn?: string | null;
+      startOn?: string | null;
+      customFields?: Record<string, string | null>;
+      addProjects?: string[];
+      removeProjects?: string[];
+    }
+  ): Promise<{ success: true; task: CalendarEventResponse }> {
+    return fetchWithRetry<{ success: true; task: CalendarEventResponse }>(
+      `/api/asana-tasks/${taskId}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          integrationId,
+          ...updates,
         }),
       }
     );
