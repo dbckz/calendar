@@ -886,9 +886,14 @@ function TaskDetailDialog({
   const handleToggleComplete = async () => {
     if (!onToggleComplete || !task.integrationId) return;
 
+    const isCompleting = !task.completed;
     setIsToggling(true);
     try {
-      await onToggleComplete(task.id, task.integrationId, !task.completed);
+      await onToggleComplete(task.id, task.integrationId, isCompleting);
+      // Close the dialog immediately after marking complete (task will disappear from list)
+      if (isCompleting) {
+        onClose();
+      }
     } finally {
       setIsToggling(false);
     }

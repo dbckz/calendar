@@ -259,6 +259,9 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
   const filteredAsanaTasks = useMemo(() => {
     // Filter tasks
     const filtered = allAsanaTasks.filter(task => {
+      // Always exclude completed tasks
+      if (task.completed) return false;
+
       const conditions: boolean[] = [];
 
       // Filter by integration
