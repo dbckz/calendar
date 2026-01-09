@@ -17,6 +17,10 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 
 const DEFAULT_DURATION = 5000;
 
+// Simple ID generator that works in all browsers
+let toastIdCounter = 0;
+const generateToastId = () => `toast-${Date.now()}-${++toastIdCounter}`;
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
@@ -25,7 +29,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const addToast = useCallback((type: ToastType, message: string, duration = DEFAULT_DURATION) => {
-    const id = crypto.randomUUID();
+    const id = generateToastId();
     const toast: Toast = { id, type, message, duration };
 
     setToasts(prev => [...prev, toast]);

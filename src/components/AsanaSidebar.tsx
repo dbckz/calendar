@@ -102,6 +102,8 @@ export function AsanaSidebar({
   const [selectedTask, setSelectedTask] = useState<CalendarEvent | null>(null);
   const [showCreateTask, setShowCreateTask] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set()); // Track which groups are expanded (default: all collapsed)
+  const [dragOverGroup, setDragOverGroup] = useState<string | null>(null); // Track which group is being dragged over
+  const [optimisticTypeOverrides, setOptimisticTypeOverrides] = useState<Map<string, string>>(new Map()); // taskId -> newType for optimistic updates
   const taskRefs = useRef<Map<string, HTMLLIElement>>(new Map());
   const listRef = useRef<HTMLUListElement>(null);
 
@@ -124,11 +126,16 @@ export function AsanaSidebar({
     return `${hours}h ${mins}m`;
   }, []);
 
-  // Helper to get Type custom field value from a task
+  // Helper to get Type custom field value from a task (with optimistic override support)
   const getTaskTypeValue = useCallback((task: CalendarEvent): string => {
+    // Check for optimistic override first
+    const override = optimisticTypeOverrides.get(task.id);
+    if (override !== undefined) {
+      return override;
+    }
     const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
     return typeField?.displayValue || 'No Type';
-  }, []);
+  }, [optimisticTypeOverrides]);
 
   // Group tasks by the selected groupBy field
   const groupedTasks = useMemo(() => {
@@ -285,13 +292,114 @@ export function AsanaSidebar({
     });
   };
 
+  // Handle drag over a group header
+  const handleGroupDragOver = (e: React.DragEvent, groupName: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverGroup(groupName);
+  };
+
+  // Handle drag leave from a group header
+  const handleGroupDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverGroup(null);
+  };
+
+  // Handle drop on a group header - change task's Type
+  const handleGroupDrop = async (e: React.DragEvent, targetGroupName: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverGroup(null);
+
+    if (!onUpdateTask || !typeFieldInfoByIntegration) return;
+
+    try {
+      const data = e.dataTransfer.getData('application/json');
+      if (!data) return;
+
+      const dragItem: DragItem & { integrationId?: string } = JSON.parse(data);
+
+      // Only handle asana tasks
+      if (dragItem.source !== 'asana') return;
+
+      // Get integrationId from drag data or find task
+      let integrationId = dragItem.integrationId;
+      const taskTitle = dragItem.title;
+
+      if (!integrationId) {
+        // Fallback: find the task in our tasks list
+        const task = tasks.find(t => t.id === dragItem.id);
+        if (!task || !task.integrationId) return;
+        integrationId = task.integrationId;
+      }
+
+      // Find the task to get its current type (before any optimistic override)
+      const task = tasks.find(t => t.id === dragItem.id);
+      const typeField = task?.customFields?.find(cf => cf.name.toLowerCase() === 'type');
+      const currentType = typeField?.displayValue || 'No Type';
+
+      // Skip if dropping on the same group
+      if (currentType === targetGroupName) return;
+
+      // Get type field info for this task's integration
+      const typeFieldInfo = typeFieldInfoByIntegration.get(integrationId);
+      if (!typeFieldInfo) {
+        console.error('No type field info for integration:', integrationId);
+        return;
+      }
+
+      // Get the enum option GID for the target group
+      const enumOptionGid = typeFieldInfo.enumOptions.get(targetGroupName);
+      if (!enumOptionGid && targetGroupName !== 'No Type') {
+        console.error('No enum option found for type:', targetGroupName);
+        return;
+      }
+
+      console.log(`[AsanaSidebar] Moving task "${taskTitle}" from "${currentType}" to "${targetGroupName}"`);
+
+      // Optimistically update the UI immediately
+      setOptimisticTypeOverrides(prev => {
+        const next = new Map(prev);
+        next.set(dragItem.id, targetGroupName);
+        return next;
+      });
+
+      // Update the task's Type custom field in the background
+      const updates: UpdateTaskOptions = {
+        customFields: { [typeFieldInfo.fieldGid]: enumOptionGid || null }
+      };
+
+      try {
+        await onUpdateTask(dragItem.id, integrationId, updates);
+        // On success, clear the optimistic override (the real data will come from refresh)
+        setOptimisticTypeOverrides(prev => {
+          const next = new Map(prev);
+          next.delete(dragItem.id);
+          return next;
+        });
+      } catch (apiErr) {
+        // On failure, revert the optimistic update
+        console.error('Failed to update task in Asana:', apiErr);
+        setOptimisticTypeOverrides(prev => {
+          const next = new Map(prev);
+          next.delete(dragItem.id);
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to handle group drop:', err);
+    }
+  };
+
   const handleDragStart = (e: React.DragEvent, task: CalendarEvent) => {
-    const dragItem: DragItem = {
+    const dragItem: DragItem & { integrationId?: string } = {
       type: 'asana-task',
       id: task.id,
       source: 'asana',
       title: task.title,
       duration: 30, // Default 30 min duration
+      integrationId: task.integrationId,
     };
     e.dataTransfer.setData('application/json', JSON.stringify(dragItem));
     e.dataTransfer.effectAllowed = 'move';
@@ -624,8 +732,15 @@ export function AsanaSidebar({
               return (
                 <div key={groupName}>
                   <div
-                    className="flex items-center gap-2 px-2 py-1.5 sticky top-0 bg-white/95 backdrop-blur-sm z-10 cursor-pointer hover:bg-gray-50 rounded-md transition-colors"
+                    className={`flex items-center gap-2 px-2 py-1.5 sticky top-0 bg-white/95 backdrop-blur-sm z-10 cursor-pointer rounded-md transition-colors ${
+                      dragOverGroup === groupName
+                        ? 'bg-orange-100 ring-2 ring-orange-400'
+                        : 'hover:bg-gray-50'
+                    }`}
                     onClick={() => toggleGroupExpanded(groupName)}
+                    onDragOver={(e) => handleGroupDragOver(e, groupName)}
+                    onDragLeave={handleGroupDragLeave}
+                    onDrop={(e) => handleGroupDrop(e, groupName)}
                   >
                     {/* Expand/collapse chevron */}
                     {isExpanded ? (
