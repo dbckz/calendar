@@ -165,19 +165,52 @@ export function Timeline({
     return calculateEventPositions(sortedEvents);
   }, [sortedEvents]);
 
+  // Pre-compute all event styles to avoid recalculating during render
+  const eventStyles = useMemo(() => {
+    const styles = new Map<string, React.CSSProperties>();
+
+    for (const pos of positionedEvents) {
+      const { event, column, totalColumns } = pos;
+      const startHour = event.startTime.getHours() + event.startTime.getMinutes() / 60;
+      const endHour = event.endTime.getHours() + event.endTime.getMinutes() / 60;
+
+      const clampedStart = Math.max(startHour, START_HOUR);
+      const clampedEnd = Math.min(endHour, END_HOUR + 1);
+
+      const top = (clampedStart - START_HOUR) * HOUR_HEIGHT;
+      const height = Math.max((clampedEnd - clampedStart) * HOUR_HEIGHT, MIN_EVENT_HEIGHT);
+
+      const width = totalColumns > 1 ? `calc(${100 / totalColumns}% - 4px)` : 'calc(100% - 4px)';
+      const left = totalColumns > 1 ? `calc(${(column * 100) / totalColumns}% + 2px)` : '2px';
+
+      const eventKey = `${event.integrationId || event.source}-${event.id}`;
+      styles.set(eventKey, {
+        position: 'absolute' as const,
+        top: `${top}px`,
+        height: `${height}px`,
+        left,
+        width,
+        zIndex: 1,
+        opacity: 1,
+      });
+    }
+
+    return styles;
+  }, [positionedEvents]);
+
   // Current time for the indicator line - check if viewing today
   const isToday = useMemo(() => {
     const today = new Date();
     return selectedDate.toDateString() === today.toDateString();
   }, [selectedDate]);
 
-  // Current time state - updates every 2 minutes
+  // Current time state - updates every minute
   const [currentTime, setCurrentTime] = useState(() => new Date());
 
   useEffect(() => {
     const interval = setInterval(() => {
       setCurrentTime(new Date());
-    }, 2 * 60 * 1000); // Update every 2 minutes
+    }, 60 * 1000); // Update every minute
 
     return () => clearInterval(interval);
   }, []);
@@ -220,36 +253,32 @@ export function Timeline({
     return event.endTime < now;
   }, [isToday, selectedDate, now]);
 
-  const getEventStyle = useCallback((pos: PositionedEvent) => {
-    const { event, column, totalColumns } = pos;
-    const startHour = event.startTime.getHours() + event.startTime.getMinutes() / 60;
-    const endHour = event.endTime.getHours() + event.endTime.getMinutes() / 60;
+  // Get event style with drag offsets applied when needed
+  const getEventStyle = useCallback((pos: PositionedEvent): React.CSSProperties => {
+    const { event } = pos;
+    const eventKey = `${event.integrationId || event.source}-${event.id}`;
+    const baseStyle = eventStyles.get(eventKey);
 
-    const clampedStart = Math.max(startHour, START_HOUR);
-    const clampedEnd = Math.min(endHour, END_HOUR + 1);
-
-    let top = (clampedStart - START_HOUR) * HOUR_HEIGHT;
-    let height = Math.max((clampedEnd - clampedStart) * HOUR_HEIGHT, MIN_EVENT_HEIGHT);
-
-    // Apply drag offset if this event is being dragged
-    if (draggingEvent?.event.id === event.id) {
-      top += dragOffset.top;
-      height += dragOffset.height;
+    if (!baseStyle) {
+      return { position: 'absolute' as const };
     }
 
-    const width = totalColumns > 1 ? `calc(${100 / totalColumns}% - 4px)` : 'calc(100% - 4px)';
-    const left = totalColumns > 1 ? `calc(${(column * 100) / totalColumns}% + 2px)` : '2px';
+    // If this event is being dragged, apply offsets
+    if (draggingEvent?.event.id === event.id) {
+      const baseTop = parseFloat(baseStyle.top as string);
+      const baseHeight = parseFloat(baseStyle.height as string);
 
-    return {
-      position: 'absolute' as const,
-      top: `${top}px`,
-      height: `${height}px`,
-      left,
-      width,
-      zIndex: draggingEvent?.event.id === event.id ? 100 : 1,
-      opacity: draggingEvent?.event.id === event.id ? 0.8 : 1,
-    };
-  }, [draggingEvent, dragOffset]);
+      return {
+        ...baseStyle,
+        top: `${baseTop + dragOffset.top}px`,
+        height: `${baseHeight + dragOffset.height}px`,
+        zIndex: 100,
+        opacity: 0.8,
+      };
+    }
+
+    return baseStyle;
+  }, [eventStyles, draggingEvent, dragOffset]);
 
   // Handle external drop (from sidebars)
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -358,12 +387,12 @@ export function Timeline({
     setDragOffset({ top: 0, height: 0 });
   }, [draggingEvent, dragOffset, hours.length, selectedDate, onEventMove]);
 
-  // Format drop preview time
-  const getDropPreviewTime = () => {
+  // Format drop preview time - memoized
+  const dropPreviewTime = useMemo(() => {
     if (dropPreviewY === null) return '';
     const time = yToTime(dropPreviewY, selectedDate);
     return format(time, 'h:mm a');
-  };
+  }, [dropPreviewY, selectedDate]);
 
   // Check if a Y position overlaps with any existing event
   const doesOverlapWithEvents = useCallback((y: number, height: number = HOUR_HEIGHT / 2) => {
@@ -552,7 +581,7 @@ export function Timeline({
             >
               <div className="flex-1 h-0.5 bg-purple-500" />
               <span className="px-2 py-0.5 bg-purple-500 text-white text-xs rounded-full ml-2">
-                {getDropPreviewTime()}
+                {dropPreviewTime}
               </span>
             </div>
           )}
@@ -594,7 +623,7 @@ export function Timeline({
           {positionedEvents.map(pos => {
             const canDrag = pos.event.source === 'adhoc' || pos.event.source === 'asana' || pos.event.source === 'google';
             const eventStyle = getEventStyle(pos);
-            const eventHeight = parseFloat(eventStyle.height);
+            const eventHeight = parseFloat(String(eventStyle.height || '0'));
             // For small events, hide top resize handle (overlaps delete button) but keep bottom handle for lengthening
             const showTopResizeHandle = canDrag && eventHeight > 25;
             const showBottomResizeHandle = canDrag;

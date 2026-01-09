@@ -17,20 +17,26 @@ export async function GET() {
       return NextResponse.json([]);
     }
 
-    const allEvents: CalendarEvent[] = [];
-
-    // Fetch tasks from all enabled integrations
-    for (const integration of integrations) {
-      try {
+    // Fetch tasks from all enabled integrations in parallel
+    console.log(`[Asana Tasks API] Fetching from ${integrations.length} integrations in parallel`);
+    const results = await Promise.allSettled(
+      integrations.map(async (integration) => {
         console.log(`[Asana Tasks API] Fetching from "${integration.name}" (workspace: ${integration.workspaceId})`);
         const events = await fetchTasksFromIntegration(integration);
         console.log(`[Asana Tasks API] Got ${events.length} tasks from "${integration.name}"`);
-        allEvents.push(...events);
-      } catch (error) {
-        console.error(`Error fetching from integration ${integration.name}:`, error);
-        // Continue with other integrations even if one fails
+        return events;
+      })
+    );
+
+    // Collect successful results, log failures
+    const allEvents: CalendarEvent[] = [];
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        allEvents.push(...result.value);
+      } else {
+        console.error(`Error fetching from integration ${integrations[index].name}:`, result.reason);
       }
-    }
+    });
 
     // Sort by due date (tasks without due date go to the end)
     allEvents.sort((a, b) => {

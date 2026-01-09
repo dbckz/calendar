@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { CalendarEvent, ScheduledAsanaTask, AsanaProject, AsanaFilterState, AsanaDateFilter } from '@/types';
 import { api, parseCalendarEvents, ApiRequestError } from '@/lib/api';
 import { isToday, isPast, isThisWeek, parseISO, compareAsc, compareDesc } from 'date-fns';
@@ -110,12 +110,29 @@ function matchesDateFilter(dateStr: string | undefined, filter: AsanaDateFilter)
   }
 }
 
+const FILTER_SAVE_DEBOUNCE_MS = 500;
+
 export function useAsanaTasks(): UseAsanaTasksReturn {
   const [allAsanaTasks, setAllAsanaTasks] = useState<CalendarEvent[]>([]);
+  const [rawAsanaTasks, setRawAsanaTasks] = useState<CalendarEvent[]>([]); // Includes "NOT A TASK" for metadata extraction
   const [scheduledAsanaTasks, setScheduledAsanaTasks] = useState<ScheduledAsanaTask[]>([]);
   const [filters, setFiltersState] = useState<AsanaFilterState>(DEFAULT_FILTERS);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Ref for debouncing filter saves
+  const filterSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Ref for tracking mounted state to prevent memory leaks
+  const isMountedRef = useRef(true);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // Load filters from server on mount
   useEffect(() => {
@@ -124,11 +141,29 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
       .catch(error => console.error('Failed to load filter preferences:', error));
   }, []);
 
-  // Wrapper to save filters to server when they change
+  // Cleanup debounce timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (filterSaveTimeoutRef.current) {
+        clearTimeout(filterSaveTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Wrapper to save filters to server when they change (debounced)
   const setFilters = useCallback((newFilters: AsanaFilterState) => {
     setFiltersState(newFilters);
-    api.saveAsanaFilterPreferences(newFilters)
-      .catch(error => console.error('Failed to save filter preferences:', error));
+
+    // Clear any pending save
+    if (filterSaveTimeoutRef.current) {
+      clearTimeout(filterSaveTimeoutRef.current);
+    }
+
+    // Debounce the API save
+    filterSaveTimeoutRef.current = setTimeout(() => {
+      api.saveAsanaFilterPreferences(newFilters)
+        .catch(error => console.error('Failed to save filter preferences:', error));
+    }, FILTER_SAVE_DEBOUNCE_MS);
   }, []);
 
   // Load scheduled Asana tasks from server
@@ -144,22 +179,32 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
 
     try {
       const tasks = await api.getAllAsanaTasks();
+      if (!isMountedRef.current) return;
+
       const parsedTasks = parseCalendarEvents(tasks);
-      // Filter out tasks with Type = "NOT A TASK"
+      // Store raw tasks for metadata extraction (includes "NOT A TASK" for type dropdown)
+      setRawAsanaTasks(parsedTasks);
+      // Filter out tasks with Type = "NOT A TASK" for display
       const filteredTasks = parsedTasks.filter(task => {
         const typeValue = getTaskTypeValue(task);
         return typeValue !== 'NOT A TASK';
       });
       setAllAsanaTasks(filteredTasks);
     } catch (err) {
+      if (!isMountedRef.current) return;
+
       if (err instanceof ApiRequestError && err.status === 401) {
+        setRawAsanaTasks([]);
         setAllAsanaTasks([]);
         return;
       }
       setError(err instanceof Error ? err.message : 'Failed to fetch Asana tasks');
+      setRawAsanaTasks([]);
       setAllAsanaTasks([]);
     } finally {
-      setIsLoading(false);
+      if (isMountedRef.current) {
+        setIsLoading(false);
+      }
     }
   }, []);
 
@@ -183,22 +228,23 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     return Array.from(projectMap.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [allAsanaTasks]);
 
-  // Extract unique type values from all tasks
+  // Extract unique type values from all tasks (including "NOT A TASK" for the dropdown)
   const typeValues = useMemo(() => {
     const types = new Set<string>();
-    allAsanaTasks.forEach(task => {
+    rawAsanaTasks.forEach(task => {
       const typeValue = getTaskTypeValue(task);
       if (typeValue) types.add(typeValue);
     });
     return Array.from(types).sort();
-  }, [allAsanaTasks]);
+  }, [rawAsanaTasks]);
 
   // Extract Type custom field info per integration (fieldGid and displayValue -> enumOptionGid mapping)
   // Custom fields are workspace-specific, so we track them per integration
+  // Uses rawAsanaTasks to include "NOT A TASK" enum option
   const typeFieldInfoByIntegration = useMemo(() => {
     const infoMap = new Map<string, { fieldGid: string; enumOptions: Map<string, string> }>();
 
-    for (const task of allAsanaTasks) {
+    for (const task of rawAsanaTasks) {
       if (!task.integrationId) continue;
 
       const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
@@ -218,7 +264,7 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     }
 
     return infoMap;
-  }, [allAsanaTasks]);
+  }, [rawAsanaTasks]);
 
   // Extract unique integrations from all tasks
   const integrations = useMemo(() => {
@@ -327,6 +373,11 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
 
   const clearFilters = useCallback(() => {
     setFiltersState(DEFAULT_FILTERS);
+
+    // Clear any pending save and save immediately for clear action
+    if (filterSaveTimeoutRef.current) {
+      clearTimeout(filterSaveTimeoutRef.current);
+    }
     api.saveAsanaFilterPreferences(DEFAULT_FILTERS)
       .catch(error => console.error('Failed to save filter preferences:', error));
   }, []);

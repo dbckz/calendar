@@ -790,6 +790,7 @@ function TaskDetailDialog({
   const [editStartOn, setEditStartOn] = useState(task.startOn || '');
   const [editType, setEditType] = useState('');
   const [editProjectIds, setEditProjectIds] = useState<string[]>(task.projects?.map(p => p.gid) || []);
+  const wasEditingRef = useRef(false);
 
   // Get Type custom field info for this task's integration
   const typeFieldInfo = useMemo(() => {
@@ -811,14 +812,16 @@ function TaskDetailDialog({
   // Get Type custom field
   const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
 
-  // Initialize edit type when entering edit mode
+  // Initialize edit fields only when ENTERING edit mode (not on every task prop change)
   useEffect(() => {
-    if (isEditing) {
+    if (isEditing && !wasEditingRef.current) {
+      // Just entered edit mode - initialize fields
       setEditType(typeField?.displayValue || '');
       setEditDueOn(task.dueOn || '');
       setEditStartOn(task.startOn || '');
       setEditProjectIds(task.projects?.map(p => p.gid) || []);
     }
+    wasEditingRef.current = isEditing;
   }, [isEditing, typeField?.displayValue, task.dueOn, task.startOn, task.projects]);
 
   // Fetch stories when dialog opens
@@ -959,14 +962,26 @@ function TaskDetailDialog({
       // Only update if there are changes
       if (Object.keys(updates).length > 0) {
         const updatedTask = await onUpdateTask(task.id, task.integrationId, updates);
+        // If type was changed to "NOT A TASK", close the dialog entirely
+        // since the task will be filtered out of the view
+        if (editType === 'NOT A TASK') {
+          onClose();
+          return;
+        }
+        // Exit edit mode BEFORE updating parent state to avoid re-render issues
+        setIsEditing(false);
+        wasEditingRef.current = false;
         if (updatedTask && onTaskUpdated) {
           onTaskUpdated(updatedTask);
         }
+      } else {
+        // No changes, just exit edit mode
+        setIsEditing(false);
+        wasEditingRef.current = false;
       }
-
-      setIsEditing(false);
     } catch (error) {
       console.error('Failed to save changes:', error);
+      // Stay in edit mode on error so user can retry
     } finally {
       setIsSaving(false);
     }

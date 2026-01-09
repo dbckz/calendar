@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { CalendarEvent } from '@/types';
 import { api, parseCalendarEvents, ApiRequestError } from '@/lib/api';
 
@@ -35,7 +35,30 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Ref for tracking mounted state to prevent memory leaks
+  const isMountedRef = useRef(true);
+
+  // Ref for tracking pending requests to prevent duplicates
+  const pendingRequestsRef = useRef<Set<string>>(new Set());
+
+  // Cleanup on unmount
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
   const fetchGoogleEventsForDate = useCallback(async (date: Date): Promise<CalendarEvent[]> => {
+    const dateKey = date.toISOString().split('T')[0];
+
+    // Skip if already fetching this date
+    if (pendingRequestsRef.current.has(dateKey)) {
+      return [];
+    }
+
+    pendingRequestsRef.current.add(dateKey);
+
     try {
       const events = await api.getCalendarEvents(date);
       return parseCalendarEvents(events);
@@ -45,6 +68,8 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
       }
       console.error('Error fetching Google events:', err);
       return [];
+    } finally {
+      pendingRequestsRef.current.delete(dateKey);
     }
   }, []);
 
@@ -54,6 +79,8 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
 
     try {
       const eventArrays = await Promise.all(dates.map(fetchGoogleEventsForDate));
+      if (!isMountedRef.current) return;
+
       const allEvents = eventArrays.flat();
 
       // Deduplicate by ID
@@ -63,9 +90,12 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
 
       setGoogleEvents(uniqueEvents);
     } catch (err) {
+      if (!isMountedRef.current) return;
       setError(err instanceof Error ? err.message : 'Failed to fetch calendar events');
     } finally {
-      setIsLoading(false);
+      if (isMountedRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [fetchGoogleEventsForDate]);
 
