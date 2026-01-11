@@ -95,9 +95,6 @@ export interface AsanaFilterState {
   groupOrder: string[]; // Custom order of group names (when groupBy is active)
 }
 
-// Legacy alias for backwards compatibility
-export type AsanaDueDateFilter = AsanaDateFilter;
-
 // Built-in task types
 export type BuiltInTaskType =
   | 'flight'
@@ -156,10 +153,6 @@ export function isCustomTaskType(taskType: TaskType): taskType is `custom:${stri
 export function getCustomTaskTypeId(taskType: `custom:${string}`): string {
   return taskType.slice(7); // Remove 'custom:' prefix
 }
-
-// Legacy compatibility - these will be populated dynamically
-export const TASK_TYPE_EMOJIS: Record<string, string> = { ...BUILT_IN_TASK_TYPE_EMOJIS };
-export const TASK_TYPE_LABELS: Record<string, string> = { ...BUILT_IN_TASK_TYPE_LABELS };
 
 export interface AdHocTask {
   id: string;
@@ -264,14 +257,6 @@ export function isLegacySettings(settings: AppSettings): settings is LegacyAppSe
   return !('version' in settings) || settings.version === 1;
 }
 
-export interface TimeSlot {
-  time: string;
-  hour: number;
-  events: CalendarEvent[];
-}
-
-export type ViewMode = 'timeline' | 'list';
-
 // Drag and drop types
 export interface DragItem {
   type: 'asana-task' | 'adhoc-task' | 'calendar-event' | 'task-template';
@@ -286,10 +271,6 @@ export interface DragItem {
 // API Response types for proper typing
 export interface ApiError {
   error: string;
-}
-
-export interface ApiSuccess {
-  success: true;
 }
 
 // Calendar API responses

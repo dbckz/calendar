@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { CalendarEvent, ScheduledAsanaTask, AsanaProject, AsanaFilterState, AsanaDateFilter } from '@/types';
 import { api, parseCalendarEvents, ApiRequestError } from '@/lib/api';
-import { isToday, isPast, isThisWeek, parseISO, compareAsc, compareDesc } from 'date-fns';
+import { isToday, isPast, isThisWeek, parseISO, compareAsc } from 'date-fns';
 
 interface CreateAsanaTaskOptions {
   notes?: string;

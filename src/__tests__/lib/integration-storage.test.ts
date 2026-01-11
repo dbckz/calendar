@@ -3,7 +3,6 @@
  * Server-side storage for integration credentials
  */
 import { promises as fs } from 'fs';
-import path from 'path';
 import {
   getIntegrations,
   saveIntegrations,

@@ -7,14 +7,13 @@ import { CalendarEvent } from '@/types';
 interface EventCardProps {
   event: CalendarEvent;
   onDelete?: (id: string) => void;
-  onUnschedule?: (id: string) => void;
   onDeleteEvent?: () => void;
   compact?: boolean;
   isPast?: boolean;
   height?: number; // Height in pixels for compact view
 }
 
-export function EventCard({ event, onDelete, onUnschedule, onDeleteEvent, compact, isPast, height }: EventCardProps) {
+export function EventCard({ event, onDelete, onDeleteEvent, compact, isPast, height }: EventCardProps) {
   const sourceLabels = {
     google: 'Google Calendar',
     asana: 'Asana',

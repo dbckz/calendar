@@ -75,18 +75,15 @@ export default function Home() {
   const [settings, setSettings] = useState<SettingsState | null>(null);
   // Start with index 0 on server, then randomize on client to avoid hydration mismatch
   const [colorSchemeIndex, setColorSchemeIndex] = useState(0);
-  const [isClient, setIsClient] = useState(false);
-
   // Set random color scheme on client mount only
   useEffect(() => {
     setColorSchemeIndex(Math.floor(Math.random() * COLOR_SCHEMES.length));
-    setIsClient(true);
   }, []);
 
   const colorScheme = COLOR_SCHEMES[colorSchemeIndex];
 
   const toast = useToast();
-  const { tasks, addTask, updateTask, removeTask, getTasksForDate } = useTasks();
+  const { addTask, updateTask, removeTask, getTasksForDate } = useTasks();
   const {
     googleEvents,
     allAsanaTasks,
@@ -706,10 +703,6 @@ export default function Home() {
   const handleUnscheduleAsana = useCallback((asanaTaskId: string) => {
     unscheduleAllAsanaInstances(asanaTaskId);
   }, [unscheduleAllAsanaInstances]);
-
-  const handleUnscheduleAdhoc = useCallback((taskId: string) => {
-    handleUnscheduleTask(taskId, 'adhoc');
-  }, [handleUnscheduleTask]);
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">

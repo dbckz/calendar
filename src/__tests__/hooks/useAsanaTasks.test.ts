@@ -193,6 +193,7 @@ describe('useAsanaTasks hook', () => {
 
   describe('setFilters', () => {
     it('updates filters and saves to API', async () => {
+      jest.useFakeTimers();
       const { result } = renderHook(() => useAsanaTasks());
 
       // Wait for initial async setup to complete
@@ -210,7 +211,14 @@ describe('useAsanaTasks hook', () => {
       await waitFor(() => {
         expect(result.current.filters.integrationIds).toEqual(['int-1']);
       });
+
+      // Advance timers to trigger debounced save (500ms debounce)
+      await act(async () => {
+        jest.advanceTimersByTime(500);
+      });
+
       expect(mockApi.saveAsanaFilterPreferences).toHaveBeenCalled();
+      jest.useRealTimers();
     });
   });
 

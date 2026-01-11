@@ -68,11 +68,8 @@ export async function addGoogleIntegration(integration: GoogleIntegration): Prom
 
 export async function addAsanaIntegration(integration: AsanaIntegration): Promise<void> {
   const settings = await getIntegrations();
-  console.log('[Storage] Current Asana integrations before add:', settings.asanaIntegrations.map(i => i.id));
   settings.asanaIntegrations.push(integration);
-  console.log('[Storage] Asana integrations after add:', settings.asanaIntegrations.map(i => i.id));
   await saveIntegrations(settings);
-  console.log('[Storage] Saved to file');
 }
 
 export async function updateIntegration(

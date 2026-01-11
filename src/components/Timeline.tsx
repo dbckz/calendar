@@ -122,10 +122,10 @@ function timeToY(time: Date): number {
 export function Timeline({
   events,
   selectedDate,
-  onDeleteTask,
+  onDeleteTask: _onDeleteTask,
   onDropTask,
   onEventMove,
-  onUnscheduleTask,
+  onUnscheduleTask: _onUnscheduleTask,
   onDeleteEvent,
   onCreateTask,
   onEventClick,
@@ -367,7 +367,7 @@ export function Timeline({
   const handleMouseUp = useCallback(() => {
     if (!draggingEvent) return;
 
-    const { event, mode, originalTop, originalHeight } = draggingEvent;
+    const { event, mode: _mode, originalTop, originalHeight } = draggingEvent;
 
     let newTop = originalTop + dragOffset.top;
     let newHeight = originalHeight + dragOffset.height;
@@ -493,20 +493,6 @@ export function Timeline({
     };
   }, [isCreatingEvent, creationStartY, creationEndY, selectedDate]);
 
-  if (events.length === 0 && !isDraggingOver) {
-    return (
-      <div
-        className="text-center py-12 text-gray-500 min-h-[400px] border-2 border-dashed border-gray-200 rounded-lg"
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        <p className="text-lg">No events scheduled for this day</p>
-        <p className="text-sm mt-1">Drag a task here or add one from the sidebar</p>
-      </div>
-    );
-  }
-
   // Combined mouse move handler
   const handleCombinedMouseMove = useCallback((e: React.MouseEvent) => {
     if (draggingEvent) {
@@ -524,6 +510,20 @@ export function Timeline({
       handleCreationMouseUp();
     }
   }, [draggingEvent, handleMouseUp, isCreatingEvent, handleCreationMouseUp]);
+
+  if (events.length === 0 && !isDraggingOver) {
+    return (
+      <div
+        className="text-center py-12 text-gray-500 min-h-[400px] border-2 border-dashed border-gray-200 rounded-lg"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        <p className="text-lg">No events scheduled for this day</p>
+        <p className="text-sm mt-1">Drag a task here or add one from the sidebar</p>
+      </div>
+    );
+  }
 
   return (
     <div

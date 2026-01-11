@@ -409,7 +409,7 @@ function SettingsContent() {
             {/* Empty state */}
             {!showGoogleForm && settings?.googleIntegrations.length === 0 && (
               <div className="p-4 text-center text-gray-500 text-sm">
-                No Google Calendar integrations. Click "Add" to connect one.
+                No Google Calendar integrations. Click &quot;Add&quot; to connect one.
               </div>
             )}
           </div>
@@ -584,7 +584,7 @@ function SettingsContent() {
             {/* Empty state */}
             {!showAsanaForm && settings?.asanaIntegrations.length === 0 && (
               <div className="p-4 text-center text-gray-500 text-sm">
-                No Asana integrations. Click "Add" to connect one.
+                No Asana integrations. Click &quot;Add&quot; to connect one.
               </div>
             )}
           </div>
@@ -592,7 +592,7 @@ function SettingsContent() {
 
         {/* About */}
         <section className="bg-white rounded-lg border shadow-sm p-4">
-          <h2 className="font-semibold text-gray-900 mb-2">About Dave's Daily Planner</h2>
+          <h2 className="font-semibold text-gray-900 mb-2">About Dave&apos;s Daily Planner</h2>
           <p className="text-sm text-gray-600">
             A unified daily planner that brings together your Google Calendar events,
             Asana tasks, and ad-hoc tasks in one beautiful interface.

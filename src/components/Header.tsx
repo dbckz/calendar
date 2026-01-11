@@ -28,7 +28,6 @@ export function Header({ selectedDate, onDateChange, onRefresh, isLoading, color
   const tomorrow = addDays(today, 1);
 
   const selectedDateStr = format(selectedDate, 'yyyy-MM-dd');
-  const todayStr = format(today, 'yyyy-MM-dd');
   const yesterdayStr = format(yesterday, 'yyyy-MM-dd');
   const tomorrowStr = format(tomorrow, 'yyyy-MM-dd');
 
@@ -61,7 +60,7 @@ export function Header({ selectedDate, onDateChange, onRefresh, isLoading, color
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
               <Calendar className={`w-6 h-6 ${colorScheme ? 'text-white' : 'text-blue-600'}`} />
-              <h1 className={`text-xl font-semibold ${colorScheme?.headerText || 'text-gray-900'}`}>Dave's Daily Planner</h1>
+              <h1 className={`text-xl font-semibold ${colorScheme?.headerText || 'text-gray-900'}`}>Dave&apos;s Daily Planner</h1>
             </div>
           </div>
 

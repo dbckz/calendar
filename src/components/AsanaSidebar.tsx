@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, memo, useMemo, useCallback, useRef, useEffect, forwardRef } from 'react';
-import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDateFilter, AsanaSortField, AsanaSortDirection, AsanaFilterLogic, AsanaGroupBy, ScheduledAsanaTask, AsanaStory } from '@/types';
-import { Calendar, GripVertical, Filter, X, ChevronDown, ChevronUp, ChevronRight, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle, Plus, Trash2, MessageSquare, Loader2, Link as LinkIcon, Layers } from 'lucide-react';
+import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDateFilter, AsanaSortField, AsanaFilterLogic, AsanaGroupBy, ScheduledAsanaTask, AsanaStory } from '@/types';
+import { Calendar, GripVertical, Filter, X, ChevronDown, ChevronUp, ChevronRight, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle, Plus, Trash2, MessageSquare, Loader2, Layers } from 'lucide-react';
 import { format, parseISO, isToday, isPast } from 'date-fns';
 import { getAsanaTaskUrl } from '@/lib/asana';
 import { api } from '@/lib/api';
