@@ -281,6 +281,23 @@ export type CalendarEventResponse = CalendarEvent & {
 
 export type CalendarEventsResponse = CalendarEventResponse[];
 
+// Cache types
+export interface CacheMetadata {
+  version: number;
+  lastUpdated: string;
+}
+
+export interface GoogleCalendarCache {
+  events: CalendarEvent[];
+  metadata: CacheMetadata;
+}
+
+export interface AsanaTasksCache {
+  allTasks: CalendarEvent[];
+  scheduledTasks: ScheduledAsanaTask[];
+  metadata: CacheMetadata;
+}
+
 // Settings API response (sanitized, no secrets)
 export interface SettingsResponse {
   googleIntegrations: Array<{

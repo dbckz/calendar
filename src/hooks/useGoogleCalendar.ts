@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { CalendarEvent } from '@/types';
 import { api, parseCalendarEvents, ApiRequestError } from '@/lib/api';
+import { readGoogleCalendarCache, writeGoogleCalendarCache } from '@/lib/cache';
 
 interface UseGoogleCalendarReturn {
   googleEvents: CalendarEvent[];
@@ -74,10 +75,21 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
   }, []);
 
   const fetchGoogleEventsForDates = useCallback(async (dates: Date[]) => {
-    setIsLoading(true);
+    // ALWAYS restore from cache first if it exists
+    const cached = readGoogleCalendarCache();
+    if (cached) {
+      // Show cached data immediately (no loading state)
+      // Cached data is already parsed, so use it directly
+      setGoogleEvents(cached.events);
+    } else {
+      // No cache - show loading state
+      setIsLoading(true);
+    }
+
     setError(null);
 
     try {
+      // ALWAYS fetch fresh data (regardless of cache)
       const eventArrays = await Promise.all(dates.map(fetchGoogleEventsForDate));
       if (!isMountedRef.current) return;
 
@@ -89,6 +101,9 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
       );
 
       setGoogleEvents(uniqueEvents);
+
+      // Write to cache on success
+      writeGoogleCalendarCache(uniqueEvents);
     } catch (err) {
       if (!isMountedRef.current) return;
       setError(err instanceof Error ? err.message : 'Failed to fetch calendar events');
@@ -119,9 +134,13 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
       const updatedEvent = await api.updateCalendarEvent(eventId, integrationId, startTime, endTime);
 
       // Update with server response
-      setGoogleEvents(prev => prev.map(event =>
-        event.id === eventId ? { ...updatedEvent, startTime: new Date(updatedEvent.startTime), endTime: new Date(updatedEvent.endTime) } : event
-      ));
+      setGoogleEvents(prev => {
+        const updated = prev.map(event =>
+          event.id === eventId ? { ...updatedEvent, startTime: new Date(updatedEvent.startTime), endTime: new Date(updatedEvent.endTime) } : event
+        );
+        writeGoogleCalendarCache(updated);
+        return updated;
+      });
 
       return { success: true };
     } catch (err) {
@@ -153,7 +172,12 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
         endTime: new Date(createdEvent.endTime),
       };
 
-      setGoogleEvents(prev => [...prev, parsedEvent]);
+      setGoogleEvents(prev => {
+        const updated = [...prev, parsedEvent];
+        writeGoogleCalendarCache(updated);
+        return updated;
+      });
+
       return { event: parsedEvent };
     } catch (err) {
       const message = err instanceof ApiRequestError ? err.message : 'Failed to create event';
@@ -165,12 +189,20 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     eventId: string,
     integrationId: string
   ): Promise<{ success: boolean; error?: string }> => {
-    // Optimistically remove
-    const previousEvents = googleEvents;
-    setGoogleEvents(prev => prev.filter(e => e.id !== eventId));
+    // Optimistically remove and track previous state for rollback
+    let previousEvents: CalendarEvent[] = [];
+    setGoogleEvents(prev => {
+      previousEvents = prev;
+      return prev.filter(e => e.id !== eventId);
+    });
 
     try {
       await api.deleteCalendarEvent(eventId, integrationId);
+      // Write updated state to cache after successful delete
+      setGoogleEvents(prev => {
+        writeGoogleCalendarCache(prev);
+        return prev;
+      });
       return { success: true };
     } catch (err) {
       // Rollback
@@ -178,7 +210,7 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
       const message = err instanceof ApiRequestError ? err.message : 'Failed to delete event';
       return { success: false, error: message };
     }
-  }, [googleEvents]);
+  }, []);
 
   return {
     googleEvents,

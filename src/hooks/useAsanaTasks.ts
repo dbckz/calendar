@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { CalendarEvent, ScheduledAsanaTask, AsanaProject, AsanaFilterState, AsanaDateFilter } from '@/types';
 import { api, parseCalendarEvents, ApiRequestError } from '@/lib/api';
 import { isToday, isPast, isThisWeek, parseISO, compareAsc } from 'date-fns';
+import { readAsanaTasksCache, writeAsanaTasksCache } from '@/lib/cache';
 
 interface CreateAsanaTaskOptions {
   notes?: string;
@@ -187,10 +188,27 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
   }, []);
 
   const fetchAllAsanaTasks = useCallback(async () => {
-    setIsLoading(true);
+    // ALWAYS restore from cache first if it exists
+    const cached = readAsanaTasksCache();
+    if (cached) {
+      // Show cached data immediately (no loading state)
+      // Cached data is already parsed, so use it directly
+      setRawAsanaTasks(cached.allTasks);
+      const filteredTasks = cached.allTasks.filter(task => {
+        const typeValue = getTaskTypeValue(task);
+        return typeValue !== 'NOT A TASK';
+      });
+      setAllAsanaTasks(filteredTasks);
+      setScheduledAsanaTasks(cached.scheduledTasks);
+    } else {
+      // No cache - show loading state
+      setIsLoading(true);
+    }
+
     setError(null);
 
     try {
+      // ALWAYS fetch fresh data (regardless of cache)
       const tasks = await api.getAllAsanaTasks();
       if (!isMountedRef.current) return;
 
@@ -203,6 +221,13 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
         return typeValue !== 'NOT A TASK';
       });
       setAllAsanaTasks(filteredTasks);
+
+      // Fetch scheduled tasks
+      const { tasks: scheduled } = await api.getScheduledAsanaTasks();
+      setScheduledAsanaTasks(scheduled);
+
+      // Write to cache on success
+      writeAsanaTasksCache(tasks, scheduled);
     } catch (err) {
       if (!isMountedRef.current) return;
 
@@ -397,7 +422,14 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
         googleEventId,
         googleIntegrationId
       );
-      setScheduledAsanaTasks(prev => [...prev, scheduled]);
+      setScheduledAsanaTasks(prev => {
+        const updated = [...prev, scheduled];
+        const cached = readAsanaTasksCache();
+        if (cached) {
+          writeAsanaTasksCache(cached.allTasks, updated);
+        }
+        return updated;
+      });
       return scheduled;
     } catch (error) {
       console.error('Failed to schedule asana task:', error);
@@ -411,7 +443,14 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
   ): Promise<ScheduledAsanaTask | null> => {
     try {
       const { schedule: updated } = await api.updateScheduledAsanaTask(scheduleId, updates);
-      setScheduledAsanaTasks(prev => prev.map(s => s.id === scheduleId ? updated : s));
+      setScheduledAsanaTasks(prev => {
+        const updatedList = prev.map(s => s.id === scheduleId ? updated : s);
+        const cached = readAsanaTasksCache();
+        if (cached) {
+          writeAsanaTasksCache(cached.allTasks, updatedList);
+        }
+        return updatedList;
+      });
       return updated;
     } catch (error) {
       console.error('Failed to update scheduled asana task:', error);
@@ -436,7 +475,14 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
   const unscheduleAsana = useCallback(async (scheduleId: string): Promise<boolean> => {
     try {
       await api.unscheduleAsanaTask(scheduleId);
-      setScheduledAsanaTasks(prev => prev.filter(s => s.id !== scheduleId));
+      setScheduledAsanaTasks(prev => {
+        const updated = prev.filter(s => s.id !== scheduleId);
+        const cached = readAsanaTasksCache();
+        if (cached) {
+          writeAsanaTasksCache(cached.allTasks, updated);
+        }
+        return updated;
+      });
       return true;
     } catch (error) {
       console.error('Failed to unschedule asana task:', error);
@@ -447,7 +493,14 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
   const unscheduleAllAsanaInstances = useCallback(async (asanaTaskId: string): Promise<boolean> => {
     try {
       await api.unscheduleAllAsanaTaskInstances(asanaTaskId);
-      setScheduledAsanaTasks(prev => prev.filter(s => s.asanaTaskId !== asanaTaskId));
+      setScheduledAsanaTasks(prev => {
+        const updated = prev.filter(s => s.asanaTaskId !== asanaTaskId);
+        const cached = readAsanaTasksCache();
+        if (cached) {
+          writeAsanaTasksCache(cached.allTasks, updated);
+        }
+        return updated;
+      });
       return true;
     } catch (error) {
       console.error('Failed to unschedule all asana task instances:', error);
@@ -486,10 +539,19 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     completed: boolean
   ) => {
     await api.completeAsanaTask(taskId, integrationId, completed);
-    // Update local state
-    setAllAsanaTasks(prev => prev.map(t =>
-      t.id === taskId ? { ...t, completed } : t
-    ));
+    setAllAsanaTasks(prev => {
+      const updated = prev.map(t =>
+        t.id === taskId ? { ...t, completed } : t
+      );
+      const cached = readAsanaTasksCache();
+      if (cached) {
+        const updatedCachedTasks = cached.allTasks.map(t =>
+          t.id === taskId ? { ...t, completed } : t
+        );
+        writeAsanaTasksCache(updatedCachedTasks, cached.scheduledTasks);
+      }
+      return updated;
+    });
   }, []);
 
   const addAsanaComment = useCallback(async (
@@ -507,17 +569,23 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
   ): Promise<CalendarEvent | null> => {
     try {
       const result = await api.createAsanaTask(integrationId, name, options);
-      if (result.success && result.task) {
-        const newTask: CalendarEvent = {
-          ...result.task,
-          startTime: new Date(result.task.startTime),
-          endTime: new Date(result.task.endTime),
-        };
-        // Add to local state
-        setAllAsanaTasks(prev => [...prev, newTask]);
-        return newTask;
+      if (!result.success || !result.task) {
+        return null;
       }
-      return null;
+      const newTask: CalendarEvent = {
+        ...result.task,
+        startTime: new Date(result.task.startTime),
+        endTime: new Date(result.task.endTime),
+      };
+      setAllAsanaTasks(prev => {
+        const updated = [...prev, newTask];
+        const cached = readAsanaTasksCache();
+        if (cached) {
+          writeAsanaTasksCache([...cached.allTasks, result.task], cached.scheduledTasks);
+        }
+        return updated;
+      });
+      return newTask;
     } catch (error) {
       console.error('Failed to create Asana task:', error);
       throw error;
@@ -531,19 +599,26 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
   ): Promise<CalendarEvent | null> => {
     try {
       const result = await api.updateAsanaTask(taskId, integrationId, updates);
-      if (result.success && result.task) {
-        const updatedTask: CalendarEvent = {
-          ...result.task,
-          startTime: new Date(result.task.startTime),
-          endTime: new Date(result.task.endTime),
-        };
-        // Update local state
-        setAllAsanaTasks(prev => prev.map(t =>
-          t.id === taskId ? updatedTask : t
-        ));
-        return updatedTask;
+      if (!result.success || !result.task) {
+        return null;
       }
-      return null;
+      const updatedTask: CalendarEvent = {
+        ...result.task,
+        startTime: new Date(result.task.startTime),
+        endTime: new Date(result.task.endTime),
+      };
+      setAllAsanaTasks(prev => {
+        const updated = prev.map(t => t.id === taskId ? updatedTask : t);
+        const cached = readAsanaTasksCache();
+        if (cached) {
+          const updatedCachedTasks = cached.allTasks.map(t =>
+            t.id === taskId ? result.task : t
+          );
+          writeAsanaTasksCache(updatedCachedTasks, cached.scheduledTasks);
+        }
+        return updated;
+      });
+      return updatedTask;
     } catch (error) {
       console.error('Failed to update Asana task:', error);
       throw error;
@@ -556,8 +631,15 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
   ): Promise<boolean> => {
     try {
       await api.deleteAsanaTask(taskId, integrationId);
-      // Remove from local state
-      setAllAsanaTasks(prev => prev.filter(t => t.id !== taskId));
+      setAllAsanaTasks(prev => {
+        const updated = prev.filter(t => t.id !== taskId);
+        const cached = readAsanaTasksCache();
+        if (cached) {
+          const updatedCachedTasks = cached.allTasks.filter(t => t.id !== taskId);
+          writeAsanaTasksCache(updatedCachedTasks, cached.scheduledTasks);
+        }
+        return updated;
+      });
       return true;
     } catch (error) {
       console.error('Failed to delete Asana task:', error);
