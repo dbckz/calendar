@@ -90,6 +90,19 @@ function getTaskTypeValue(task: CalendarEvent): string | null {
   return typeField?.displayValue || null;
 }
 
+// Helper to compare optional date strings for sorting
+// Returns comparison result (-1, 0, 1) with nulls sorted to end when direction is positive
+function compareDateStrings(
+  dateA: string | undefined,
+  dateB: string | undefined,
+  direction: number
+): number {
+  if (!dateA && !dateB) return 0;
+  if (!dateA) return direction; // No date goes to end for asc
+  if (!dateB) return -direction;
+  return direction * compareAsc(parseISO(dateA), parseISO(dateB));
+}
+
 // Helper to check if date matches filter
 function matchesDateFilter(dateStr: string | undefined, filter: AsanaDateFilter): boolean {
   if (filter === 'all') return true;
@@ -337,34 +350,17 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
       switch (filters.sortField) {
         case 'title':
           return direction * a.title.localeCompare(b.title);
-
-        case 'dueOn': {
-          if (!a.dueOn && !b.dueOn) return 0;
-          if (!a.dueOn) return direction; // No date goes to end for asc
-          if (!b.dueOn) return -direction;
-          return direction * compareAsc(parseISO(a.dueOn), parseISO(b.dueOn));
-        }
-
-        case 'startOn': {
-          if (!a.startOn && !b.startOn) return 0;
-          if (!a.startOn) return direction;
-          if (!b.startOn) return -direction;
-          return direction * compareAsc(parseISO(a.startOn), parseISO(b.startOn));
-        }
-
-        case 'createdAt': {
-          if (!a.createdAt && !b.createdAt) return 0;
-          if (!a.createdAt) return direction;
-          if (!b.createdAt) return -direction;
-          return direction * compareAsc(parseISO(a.createdAt), parseISO(b.createdAt));
-        }
-
+        case 'dueOn':
+          return compareDateStrings(a.dueOn, b.dueOn, direction);
+        case 'startOn':
+          return compareDateStrings(a.startOn, b.startOn, direction);
+        case 'createdAt':
+          return compareDateStrings(a.createdAt, b.createdAt, direction);
         case 'type': {
           const typeA = getTaskTypeValue(a) || '';
           const typeB = getTaskTypeValue(b) || '';
           return direction * typeA.localeCompare(typeB);
         }
-
         default:
           return 0;
       }

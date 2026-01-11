@@ -8,10 +8,8 @@ import { EventCard } from './EventCard';
 interface TimelineProps {
   events: CalendarEvent[];
   selectedDate: Date;
-  onDeleteTask?: (id: string) => void;
   onDropTask?: (dragItem: DragItem, startTime: Date, endTime: Date) => void;
   onEventMove?: (eventId: string, source: 'adhoc' | 'asana' | 'google', startTime: Date, endTime: Date) => void;
-  onUnscheduleTask?: (eventId: string, source: 'adhoc' | 'asana') => void;
   onDeleteEvent?: (event: CalendarEvent) => void;
   onCreateTask?: (startTime: Date, endTime: Date) => void;
   onEventClick?: (event: CalendarEvent) => void;
@@ -122,10 +120,8 @@ function timeToY(time: Date): number {
 export function Timeline({
   events,
   selectedDate,
-  onDeleteTask: _onDeleteTask,
   onDropTask,
   onEventMove,
-  onUnscheduleTask: _onUnscheduleTask,
   onDeleteEvent,
   onCreateTask,
   onEventClick,
@@ -367,7 +363,7 @@ export function Timeline({
   const handleMouseUp = useCallback(() => {
     if (!draggingEvent) return;
 
-    const { event, mode: _mode, originalTop, originalHeight } = draggingEvent;
+    const { event, originalTop, originalHeight } = draggingEvent;
 
     let newTop = originalTop + dragOffset.top;
     let newHeight = originalHeight + dragOffset.height;

@@ -245,10 +245,6 @@ export default function Home() {
     fetchAllEvents();
   }, [fetchAllEvents]);
 
-  const handleDeleteTask = useCallback((id: string) => {
-    removeTask(id);
-  }, [removeTask]);
-
   // Handle Asana task completion from sidebar (with integration ID)
   const handleSidebarAsanaComplete = useCallback(async (taskId: string, integrationId: string, completed: boolean) => {
     try {
@@ -581,18 +577,6 @@ export default function Home() {
     }
   }, [updateTask, updateScheduledAsana, updateScheduledAsanaByGoogleEvent, updateGoogleEvent, googleEvents]);
 
-  // Handle unscheduling a task (dragging off calendar)
-  const handleUnscheduleTask = useCallback((eventId: string, source: 'adhoc' | 'asana') => {
-    if (source === 'adhoc') {
-      updateTask(eventId, {
-        dueTime: undefined,
-        duration: undefined,
-      });
-    } else if (source === 'asana') {
-      unscheduleAsana(eventId);
-    }
-  }, [updateTask, unscheduleAsana]);
-
   // Handle adding a new task from the sidebar or creation modal
   const handleAddTask = useCallback(async (task: {
     title: string;
@@ -757,10 +741,8 @@ export default function Home() {
                 <Timeline
                   events={timedEvents}
                   selectedDate={selectedDate}
-                  onDeleteTask={handleDeleteTask}
                   onDropTask={handleDropTask}
                   onEventMove={handleEventMove}
-                  onUnscheduleTask={handleUnscheduleTask}
                   onDeleteEvent={handleDeleteEventRequest}
                   onCreateTask={handleTimelineCreateTask}
                   onEventClick={handleEventClick}

@@ -473,9 +473,9 @@ export function AsanaSidebar({
                 <button
                   onClick={() => { setShowGroupBy(!showGroupBy); setShowSort(false); setShowFilters(false); }}
                   className={`p-1.5 rounded-md transition-colors ${
-                    filters.groupBy !== 'none'
+                    filters.groupBy !== 'none' || showGroupBy
                       ? 'bg-orange-100 text-orange-600'
-                      : showGroupBy ? 'bg-orange-100 text-orange-600' : 'hover:bg-gray-100 text-gray-500'
+                      : 'hover:bg-gray-100 text-gray-500'
                   }`}
                   title="Group by"
                 >
@@ -493,9 +493,9 @@ export function AsanaSidebar({
                 <button
                   onClick={() => { setShowFilters(!showFilters); setShowSort(false); setShowGroupBy(false); }}
                   className={`p-1.5 rounded-md transition-colors ${
-                    hasActiveFilters
+                    hasActiveFilters || showFilters
                       ? 'bg-orange-100 text-orange-600'
-                      : showFilters ? 'bg-orange-100 text-orange-600' : 'hover:bg-gray-100 text-gray-500'
+                      : 'hover:bg-gray-100 text-gray-500'
                   }`}
                   title={showFilters ? 'Hide filters' : 'Show filters'}
                 >
@@ -1474,15 +1474,10 @@ function TaskDetailDialog({
 }
 
 // Create Task Modal Component
-interface TypeFieldInfo {
-  fieldGid: string;
-  enumOptions: Map<string, string>; // displayValue -> enumOptionGid
-}
-
 interface CreateTaskModalProps {
   integrations: { id: string; name: string }[];
   projects: AsanaProject[];
-  typeFieldInfoByIntegration?: Map<string, TypeFieldInfo>;
+  typeFieldInfoByIntegration?: Map<string, AsanaSidebarTypeFieldInfo>;
   onClose: () => void;
   onCreateTask: (integrationId: string, name: string, options?: { notes?: string; dueOn?: string; projectGid?: string; customFields?: Record<string, string> }) => Promise<CalendarEvent | null>;
 }
