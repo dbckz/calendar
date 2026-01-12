@@ -588,7 +588,7 @@ export function Timeline({
               className="absolute z-20 pointer-events-none"
               style={{ top: `${currentTimePosition}px`, left: '-80px', right: '0' }}
             >
-              <div className="flex items-center">
+              <div className="flex items-center" style={{ transform: 'translateY(-50%)' }}>
                 <span className="text-xs font-medium text-red-500 w-[70px] text-right pr-2">
                   {currentTimeLabel}
                 </span>
