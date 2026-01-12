@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { CalendarEvent, ScheduledAsanaTask, AsanaProject, AsanaFilterState, AsanaDateFilter } from '@/types';
+import { CalendarEvent, CalendarEventResponse, ScheduledAsanaTask, AsanaProject, AsanaFilterState, AsanaDateFilter } from '@/types';
 import { api, parseCalendarEvents, ApiRequestError } from '@/lib/api';
 import { isToday, isPast, isThisWeek, parseISO, compareAsc } from 'date-fns';
 import { readAsanaTasksCache, writeAsanaTasksCache } from '@/lib/cache';
@@ -538,8 +538,13 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     integrationId: string,
     completed: boolean
   ) => {
-    await api.completeAsanaTask(taskId, integrationId, completed);
+    // Capture previous state for rollback
+    let previousCompleted: boolean | undefined;
+
+    // Optimistically update state immediately
     setAllAsanaTasks(prev => {
+      const task = prev.find(t => t.id === taskId);
+      previousCompleted = task?.completed;
       const updated = prev.map(t =>
         t.id === taskId ? { ...t, completed } : t
       );
@@ -552,6 +557,29 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
       }
       return updated;
     });
+
+    // Make API call in background - rollback on failure
+    try {
+      await api.completeAsanaTask(taskId, integrationId, completed);
+    } catch (error) {
+      // Rollback to previous state
+      if (previousCompleted !== undefined) {
+        setAllAsanaTasks(prev => {
+          const reverted = prev.map(t =>
+            t.id === taskId ? { ...t, completed: previousCompleted } : t
+          );
+          const cached = readAsanaTasksCache();
+          if (cached) {
+            const revertedCachedTasks = cached.allTasks.map(t =>
+              t.id === taskId ? { ...t, completed: previousCompleted } : t
+            );
+            writeAsanaTasksCache(revertedCachedTasks, cached.scheduledTasks);
+          }
+          return reverted;
+        });
+      }
+      throw error;
+    }
   }, []);
 
   const addAsanaComment = useCallback(async (
@@ -597,9 +625,34 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     integrationId: string,
     updates: UpdateAsanaTaskOptions
   ): Promise<CalendarEvent | null> => {
+    // Capture previous task for rollback
+    let previousTask: CalendarEvent | undefined;
+
+    // Apply optimistic updates immediately based on what we know
+    setAllAsanaTasks(prev => {
+      previousTask = prev.find(t => t.id === taskId);
+      if (!previousTask) return prev;
+
+      const optimisticTask: CalendarEvent = { ...previousTask };
+      if (updates.dueOn !== undefined) {
+        optimisticTask.dueOn = updates.dueOn || undefined;
+      }
+      if (updates.startOn !== undefined) {
+        optimisticTask.startOn = updates.startOn || undefined;
+      }
+      // Note: customFields and projects will be reconciled when API returns
+
+      const updated = prev.map(t => t.id === taskId ? optimisticTask : t);
+      return updated;
+    });
+
     try {
       const result = await api.updateAsanaTask(taskId, integrationId, updates);
       if (!result.success || !result.task) {
+        // Rollback on failure
+        if (previousTask) {
+          setAllAsanaTasks(prev => prev.map(t => t.id === taskId ? previousTask! : t));
+        }
         return null;
       }
       const updatedTask: CalendarEvent = {
@@ -607,6 +660,7 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
         startTime: new Date(result.task.startTime),
         endTime: new Date(result.task.endTime),
       };
+      // Reconcile with server response (replace optimistic update with actual data)
       setAllAsanaTasks(prev => {
         const updated = prev.map(t => t.id === taskId ? updatedTask : t);
         const cached = readAsanaTasksCache();
@@ -620,6 +674,10 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
       });
       return updatedTask;
     } catch (error) {
+      // Rollback to previous state
+      if (previousTask) {
+        setAllAsanaTasks(prev => prev.map(t => t.id === taskId ? previousTask! : t));
+      }
       console.error('Failed to update Asana task:', error);
       throw error;
     }
@@ -629,19 +687,49 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     taskId: string,
     integrationId: string
   ): Promise<boolean> => {
+    // Capture the task and its index for rollback
+    let deletedTask: CalendarEvent | undefined;
+    let deletedIndex: number = -1;
+
+    // Optimistically remove the task immediately
+    setAllAsanaTasks(prev => {
+      deletedIndex = prev.findIndex(t => t.id === taskId);
+      if (deletedIndex >= 0) {
+        deletedTask = prev[deletedIndex];
+      }
+      const updated = prev.filter(t => t.id !== taskId);
+      const cached = readAsanaTasksCache();
+      if (cached) {
+        const updatedCachedTasks = cached.allTasks.filter(t => t.id !== taskId);
+        writeAsanaTasksCache(updatedCachedTasks, cached.scheduledTasks);
+      }
+      return updated;
+    });
+
     try {
       await api.deleteAsanaTask(taskId, integrationId);
-      setAllAsanaTasks(prev => {
-        const updated = prev.filter(t => t.id !== taskId);
-        const cached = readAsanaTasksCache();
-        if (cached) {
-          const updatedCachedTasks = cached.allTasks.filter(t => t.id !== taskId);
-          writeAsanaTasksCache(updatedCachedTasks, cached.scheduledTasks);
-        }
-        return updated;
-      });
       return true;
     } catch (error) {
+      // Rollback: restore the deleted task
+      if (deletedTask) {
+        setAllAsanaTasks(prev => {
+          // Insert back at original position (or end if position is invalid)
+          const newList = [...prev];
+          const insertIndex = Math.min(deletedIndex, newList.length);
+          newList.splice(insertIndex, 0, deletedTask!);
+          const cached = readAsanaTasksCache();
+          if (cached) {
+            const restoredCachedTasks = [...cached.allTasks];
+            restoredCachedTasks.splice(insertIndex, 0, {
+              ...deletedTask!,
+              startTime: deletedTask!.startTime.toISOString(),
+              endTime: deletedTask!.endTime.toISOString(),
+            } as unknown as CalendarEventResponse);
+            writeAsanaTasksCache(restoredCachedTasks, cached.scheduledTasks);
+          }
+          return newList;
+        });
+      }
       console.error('Failed to delete Asana task:', error);
       throw error;
     }

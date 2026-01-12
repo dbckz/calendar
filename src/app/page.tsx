@@ -246,14 +246,12 @@ export default function Home() {
   }, [fetchAllEvents]);
 
   // Handle Asana task completion from sidebar (with integration ID)
-  const handleSidebarAsanaComplete = useCallback(async (taskId: string, integrationId: string, completed: boolean) => {
-    try {
-      await completeAsanaTask(taskId, integrationId, completed);
-      toast.success(completed ? 'Task completed in Asana' : 'Task reopened in Asana');
-    } catch (err) {
+  // Optimistic: returns immediately, shows error toast if API fails
+  const handleSidebarAsanaComplete = useCallback((taskId: string, integrationId: string, completed: boolean) => {
+    completeAsanaTask(taskId, integrationId, completed).catch(err => {
       toast.error('Failed to update task in Asana');
       console.error('Error completing Asana task:', err);
-    }
+    });
   }, [completeAsanaTask, toast]);
 
   // Handle Asana comment from sidebar (with integration ID)
@@ -268,22 +266,20 @@ export default function Home() {
   }, [addAsanaComment, toast]);
 
   // Handle Asana task deletion from sidebar
-  const handleSidebarAsanaDelete = useCallback(async (taskId: string, integrationId: string): Promise<boolean> => {
-    try {
-      // Also unschedule all instances of this task
-      unscheduleAllAsanaInstances(taskId);
-      await deleteAsanaTask(taskId, integrationId);
-      toast.success('Task deleted from Asana');
-      return true;
-    } catch (err) {
+  // Optimistic: returns immediately, shows error toast if API fails
+  const handleSidebarAsanaDelete = useCallback((taskId: string, integrationId: string) => {
+    // Unschedule all instances of this task immediately
+    unscheduleAllAsanaInstances(taskId);
+    // Fire-and-forget: state updates optimistically
+    deleteAsanaTask(taskId, integrationId).catch(err => {
       toast.error('Failed to delete task from Asana');
       console.error('Error deleting Asana task:', err);
-      return false;
-    }
+    });
   }, [deleteAsanaTask, unscheduleAllAsanaInstances, toast]);
 
   // Handle Asana task update from sidebar (dates, type, projects)
-  const handleSidebarAsanaUpdate = useCallback(async (
+  // Optimistic: returns immediately, shows error toast if API fails
+  const handleSidebarAsanaUpdate = useCallback((
     taskId: string,
     integrationId: string,
     updates: {
@@ -293,18 +289,12 @@ export default function Home() {
       addProjects?: string[];
       removeProjects?: string[];
     }
-  ): Promise<CalendarEvent | null> => {
-    try {
-      const updatedTask = await updateAsanaTask(taskId, integrationId, updates);
-      if (updatedTask) {
-        toast.success('Task updated in Asana');
-      }
-      return updatedTask;
-    } catch (err) {
+  ) => {
+    // Fire-and-forget: state updates optimistically
+    updateAsanaTask(taskId, integrationId, updates).catch(err => {
       toast.error('Failed to update task in Asana');
       console.error('Error updating Asana task:', err);
-      return null;
-    }
+    });
   }, [updateAsanaTask, toast]);
 
   // Get connected Google integrations

@@ -42,12 +42,12 @@ interface AsanaSidebarProps {
   filters?: AsanaFilterState;
   onFiltersChange?: (filters: AsanaFilterState) => void;
   onClearFilters?: () => void;
-  // Asana actions
+  // Asana actions (optimistic: return immediately, errors shown via toast)
   onToggleComplete?: (taskId: string, integrationId: string, completed: boolean) => void;
   onAddComment?: (taskId: string, integrationId: string, comment: string) => void;
   onCreateTask?: (integrationId: string, name: string, options?: { notes?: string; dueOn?: string; projectGid?: string; customFields?: Record<string, string> }) => Promise<CalendarEvent | null>;
-  onUpdateTask?: (taskId: string, integrationId: string, updates: UpdateTaskOptions) => Promise<CalendarEvent | null>;
-  onDeleteTask?: (taskId: string, integrationId: string) => Promise<boolean>;
+  onUpdateTask?: (taskId: string, integrationId: string, updates: UpdateTaskOptions) => void;
+  onDeleteTask?: (taskId: string, integrationId: string) => void;
   // Highlight task from calendar click
   highlightedTaskId?: string | null;
   onClearHighlight?: () => void;
@@ -841,7 +841,6 @@ export function AsanaSidebar({
           onAddComment={onAddComment}
           onUpdateTask={onUpdateTask}
           onDeleteTask={onDeleteTask}
-          onTaskUpdated={(updatedTask) => setSelectedTask(updatedTask)}
           projects={projects}
           typeFieldInfoByIntegration={typeFieldInfoByIntegration}
         />
@@ -869,9 +868,8 @@ interface TaskDetailDialogProps {
   onClose: () => void;
   onToggleComplete?: (taskId: string, integrationId: string, completed: boolean) => void;
   onAddComment?: (taskId: string, integrationId: string, comment: string) => void;
-  onUpdateTask?: (taskId: string, integrationId: string, updates: UpdateTaskOptions) => Promise<CalendarEvent | null>;
-  onDeleteTask?: (taskId: string, integrationId: string) => Promise<boolean>;
-  onTaskUpdated?: (task: CalendarEvent) => void;
+  onUpdateTask?: (taskId: string, integrationId: string, updates: UpdateTaskOptions) => void;
+  onDeleteTask?: (taskId: string, integrationId: string) => void;
   projects?: AsanaProject[];
   typeFieldInfoByIntegration?: Map<string, AsanaSidebarTypeFieldInfo>;
 }
@@ -885,22 +883,18 @@ function TaskDetailDialog({
   onAddComment,
   onUpdateTask,
   onDeleteTask,
-  onTaskUpdated,
   projects = [],
   typeFieldInfoByIntegration,
 }: TaskDetailDialogProps) {
   const [comment, setComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isToggling, setIsToggling] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
   const [stories, setStories] = useState<AsanaStory[]>([]);
   const [isLoadingStories, setIsLoadingStories] = useState(false);
   const [storiesError, setStoriesError] = useState<string | null>(null);
 
   // Edit mode state
   const [isEditing, setIsEditing] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
   const [editDueOn, setEditDueOn] = useState(task.dueOn || '');
   const [editStartOn, setEditStartOn] = useState(task.startOn || '');
   const [editType, setEditType] = useState('');
@@ -1001,105 +995,80 @@ function TaskDetailDialog({
     }
   };
 
-  const handleToggleComplete = async () => {
+  const handleToggleComplete = () => {
     if (!onToggleComplete || !task.integrationId) return;
 
     const isCompleting = !task.completed;
-    setIsToggling(true);
-    try {
-      await onToggleComplete(task.id, task.integrationId, isCompleting);
-      // Close the dialog immediately after marking complete (task will disappear from list)
-      if (isCompleting) {
-        onClose();
-      }
-    } finally {
-      setIsToggling(false);
+    // Optimistic: call handler and close dialog immediately
+    onToggleComplete(task.id, task.integrationId, isCompleting);
+    // Close the dialog immediately after marking complete (task will disappear from list)
+    if (isCompleting) {
+      onClose();
     }
   };
 
-  const handleDeleteTask = async () => {
+  const handleDeleteTask = () => {
     if (!onDeleteTask || !task.integrationId) return;
 
-    setIsDeleting(true);
-    try {
-      await onDeleteTask(task.id, task.integrationId);
-      onClose();
-    } catch (error) {
-      console.error('Failed to delete task:', error);
-      setShowDeleteConfirm(false);
-    } finally {
-      setIsDeleting(false);
-    }
+    // Optimistic: call handler and close dialog immediately
+    onDeleteTask(task.id, task.integrationId);
+    onClose();
   };
 
-  const handleSaveChanges = async () => {
+  const handleSaveChanges = () => {
     if (!onUpdateTask || !task.integrationId) return;
 
-    setIsSaving(true);
-    try {
-      const updates: UpdateTaskOptions = {};
+    const updates: UpdateTaskOptions = {};
 
-      // Due date
-      if (editDueOn !== (task.dueOn || '')) {
-        updates.dueOn = editDueOn || null;
-      }
-
-      // Start date
-      if (editStartOn !== (task.startOn || '')) {
-        updates.startOn = editStartOn || null;
-      }
-
-      // Type
-      if (editType !== (typeField?.displayValue || '')) {
-        if (typeFieldInfo && editType) {
-          const enumOptionGid = typeFieldInfo.enumOptions.get(editType);
-          if (enumOptionGid) {
-            updates.customFields = { [typeFieldInfo.fieldGid]: enumOptionGid };
-          }
-        } else if (typeFieldInfo && !editType) {
-          // Clear the type
-          updates.customFields = { [typeFieldInfo.fieldGid]: null };
-        }
-      }
-
-      // Projects
-      const currentProjectIds = task.projects?.map(p => p.gid) || [];
-      const addProjects = editProjectIds.filter(id => !currentProjectIds.includes(id));
-      const removeProjects = currentProjectIds.filter(id => !editProjectIds.includes(id));
-
-      if (addProjects.length > 0) {
-        updates.addProjects = addProjects;
-      }
-      if (removeProjects.length > 0) {
-        updates.removeProjects = removeProjects;
-      }
-
-      // Only update if there are changes
-      if (Object.keys(updates).length > 0) {
-        const updatedTask = await onUpdateTask(task.id, task.integrationId, updates);
-        // If type was changed to "NOT A TASK", close the dialog entirely
-        // since the task will be filtered out of the view
-        if (editType === 'NOT A TASK') {
-          onClose();
-          return;
-        }
-        // Exit edit mode BEFORE updating parent state to avoid re-render issues
-        setIsEditing(false);
-        wasEditingRef.current = false;
-        if (updatedTask && onTaskUpdated) {
-          onTaskUpdated(updatedTask);
-        }
-      } else {
-        // No changes, just exit edit mode
-        setIsEditing(false);
-        wasEditingRef.current = false;
-      }
-    } catch (error) {
-      console.error('Failed to save changes:', error);
-      // Stay in edit mode on error so user can retry
-    } finally {
-      setIsSaving(false);
+    // Due date
+    if (editDueOn !== (task.dueOn || '')) {
+      updates.dueOn = editDueOn || null;
     }
+
+    // Start date
+    if (editStartOn !== (task.startOn || '')) {
+      updates.startOn = editStartOn || null;
+    }
+
+    // Type
+    if (editType !== (typeField?.displayValue || '')) {
+      if (typeFieldInfo && editType) {
+        const enumOptionGid = typeFieldInfo.enumOptions.get(editType);
+        if (enumOptionGid) {
+          updates.customFields = { [typeFieldInfo.fieldGid]: enumOptionGid };
+        }
+      } else if (typeFieldInfo && !editType) {
+        // Clear the type
+        updates.customFields = { [typeFieldInfo.fieldGid]: null };
+      }
+    }
+
+    // Projects
+    const currentProjectIds = task.projects?.map(p => p.gid) || [];
+    const addProjects = editProjectIds.filter(id => !currentProjectIds.includes(id));
+    const removeProjects = currentProjectIds.filter(id => !editProjectIds.includes(id));
+
+    if (addProjects.length > 0) {
+      updates.addProjects = addProjects;
+    }
+    if (removeProjects.length > 0) {
+      updates.removeProjects = removeProjects;
+    }
+
+    // Only update if there are changes
+    if (Object.keys(updates).length > 0) {
+      // Optimistic: call handler immediately
+      onUpdateTask(task.id, task.integrationId, updates);
+      // If type was changed to "NOT A TASK", close the dialog entirely
+      // since the task will be filtered out of the view
+      if (editType === 'NOT A TASK') {
+        onClose();
+        return;
+      }
+    }
+    // Exit edit mode immediately
+    setIsEditing(false);
+    wasEditingRef.current = false;
   };
 
   const handleProjectToggle = (projectGid: string) => {
@@ -1236,17 +1205,15 @@ function TaskDetailDialog({
               <div className="flex gap-2 pt-2">
                 <button
                   onClick={() => setIsEditing(false)}
-                  disabled={isSaving}
-                  className="flex-1 px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
+                  className="flex-1 px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleSaveChanges}
-                  disabled={isSaving}
-                  className="flex-1 px-4 py-2 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors disabled:opacity-50"
+                  className="flex-1 px-4 py-2 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
                 >
-                  {isSaving ? 'Saving...' : 'Save Changes'}
+                  Save Changes
                 </button>
               </div>
             </div>
@@ -1376,15 +1343,14 @@ function TaskDetailDialog({
           {onToggleComplete && task.integrationId && (
             <button
               onClick={handleToggleComplete}
-              disabled={isToggling}
               className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium transition-colors ${
                 task.completed
                   ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                   : 'bg-green-600 text-white hover:bg-green-700'
-              } disabled:opacity-50`}
+              }`}
             >
               <Check className="w-4 h-4" />
-              {isToggling ? 'Updating...' : task.completed ? 'Reopen Task' : 'Mark Complete'}
+              {task.completed ? 'Reopen Task' : 'Mark Complete'}
             </button>
           )}
 
@@ -1453,17 +1419,15 @@ function TaskDetailDialog({
             <div className="flex gap-3">
               <button
                 onClick={() => setShowDeleteConfirm(false)}
-                disabled={isDeleting}
-                className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
+                className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleDeleteTask}
-                disabled={isDeleting}
-                className="flex-1 px-4 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
+                className="flex-1 px-4 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
               >
-                {isDeleting ? 'Deleting...' : 'Delete'}
+                Delete
               </button>
             </div>
           </div>
