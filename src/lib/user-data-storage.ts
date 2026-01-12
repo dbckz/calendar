@@ -19,6 +19,7 @@ const DEFAULT_ASANA_FILTERS: AsanaFilterState = {
   sortDirection: 'asc',
   groupBy: 'none',
   groupOrder: [],
+  expandedGroups: [],
 };
 
 interface UserData {

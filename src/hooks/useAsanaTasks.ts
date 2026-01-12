@@ -80,6 +80,7 @@ const DEFAULT_FILTERS: AsanaFilterState = {
   sortDirection: 'asc',
   groupBy: 'none',
   groupOrder: [],
+  expandedGroups: [],
 };
 
 

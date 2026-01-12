@@ -93,6 +93,7 @@ export interface AsanaFilterState {
   sortDirection: AsanaSortDirection;
   groupBy: AsanaGroupBy;
   groupOrder: string[]; // Custom order of group names (when groupBy is active)
+  expandedGroups: string[]; // Groups that are expanded (persisted across refresh)
 }
 
 // Built-in task types

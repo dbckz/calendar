@@ -2,10 +2,47 @@
 
 import { useState, memo, useMemo, useCallback, useRef, useEffect, forwardRef } from 'react';
 import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDateFilter, AsanaSortField, AsanaFilterLogic, AsanaGroupBy, ScheduledAsanaTask, AsanaStory } from '@/types';
-import { Calendar, GripVertical, Filter, X, ChevronDown, ChevronUp, ChevronRight, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle, Plus, Trash2, MessageSquare, Loader2, Layers } from 'lucide-react';
+import { Calendar, GripVertical, Filter, X, ChevronDown, ChevronUp, ChevronRight, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle, Plus, Trash2, MessageSquare, Loader2, Layers, Search } from 'lucide-react';
 import { format, parseISO, isToday, isPast } from 'date-fns';
 import { getAsanaTaskUrl } from '@/lib/asana';
 import { api } from '@/lib/api';
+
+// Helper component to render text with clickable links
+function LinkifiedText({ text, className }: { text: string; className?: string }) {
+  // Regex to match URLs (http, https, or www)
+  const urlRegex = /(https?:\/\/[^\s<]+|www\.[^\s<]+)/gi;
+
+  const parts = text.split(urlRegex);
+  const matches = text.match(urlRegex) || [];
+
+  const elements: React.ReactNode[] = [];
+  let matchIndex = 0;
+
+  parts.forEach((part, index) => {
+    if (part === matches[matchIndex]) {
+      // This part is a URL
+      const url = part.startsWith('www.') ? `https://${part}` : part;
+      elements.push(
+        <a
+          key={index}
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 hover:text-blue-800 hover:underline break-all"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {part}
+        </a>
+      );
+      matchIndex++;
+    } else if (part) {
+      // Regular text
+      elements.push(<span key={index}>{part}</span>);
+    }
+  });
+
+  return <span className={className}>{elements}</span>;
+}
 
 interface ColorScheme {
   headerBg: string;
@@ -48,9 +85,12 @@ interface AsanaSidebarProps {
   onCreateTask?: (integrationId: string, name: string, options?: { notes?: string; dueOn?: string; projectGid?: string; customFields?: Record<string, string> }) => Promise<CalendarEvent | null>;
   onUpdateTask?: (taskId: string, integrationId: string, updates: UpdateTaskOptions) => void;
   onDeleteTask?: (taskId: string, integrationId: string) => void;
-  // Highlight task from calendar click
+  // Highlight task from calendar click (single click - just navigate/scroll)
   highlightedTaskId?: string | null;
   onClearHighlight?: () => void;
+  // Open task dialog from calendar double-click
+  openTaskDialogId?: string | null;
+  onClearOpenTaskDialog?: () => void;
 }
 
 const DATE_FILTER_OPTIONS: { value: AsanaDateFilter; label: string }[] = [
@@ -94,6 +134,8 @@ export function AsanaSidebar({
   onDeleteTask,
   highlightedTaskId,
   onClearHighlight,
+  openTaskDialogId,
+  onClearOpenTaskDialog,
 }: AsanaSidebarProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
@@ -101,9 +143,51 @@ export function AsanaSidebar({
   const [showGroupBy, setShowGroupBy] = useState(false);
   const [selectedTask, setSelectedTask] = useState<CalendarEvent | null>(null);
   const [showCreateTask, setShowCreateTask] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set()); // Track which groups are expanded (default: all collapsed)
+  // Initialize expandedGroups from filters (persisted state)
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
+    return new Set(filters?.expandedGroups || []);
+  });
+  // Track the last synced value from filters to detect server updates
+  const lastSyncedFromFiltersRef = useRef<string[]>(filters?.expandedGroups || []);
+
+  // Sync expandedGroups from filters when server data arrives (filters change)
+  useEffect(() => {
+    const serverGroups = filters?.expandedGroups || [];
+    const lastSynced = lastSyncedFromFiltersRef.current;
+
+    // Check if filters changed from what we last synced from
+    const filtersChanged =
+      serverGroups.length !== lastSynced.length ||
+      serverGroups.some(g => !lastSynced.includes(g));
+
+    if (filtersChanged) {
+      setExpandedGroups(new Set(serverGroups));
+      lastSyncedFromFiltersRef.current = serverGroups;
+    }
+  }, [filters?.expandedGroups]);
+
+  // Persist expandedGroups to filters when user toggles groups
+  useEffect(() => {
+    if (!onFiltersChange || !filters) return;
+
+    const expandedArray = Array.from(expandedGroups);
+    const currentArray = filters.expandedGroups || [];
+
+    // Only update if different from what's in filters
+    const hasChanged =
+      expandedArray.length !== currentArray.length ||
+      expandedArray.some(g => !currentArray.includes(g));
+
+    if (hasChanged) {
+      // Update the ref so we don't re-sync this back
+      lastSyncedFromFiltersRef.current = expandedArray;
+      onFiltersChange({ ...filters, expandedGroups: expandedArray });
+    }
+  }, [expandedGroups, filters, onFiltersChange]);
+
   const [dragOverGroup, setDragOverGroup] = useState<string | null>(null); // Track which group is being dragged over
   const [optimisticTypeOverrides, setOptimisticTypeOverrides] = useState<Map<string, string>>(new Map()); // taskId -> newType for optimistic updates
+  const [searchQuery, setSearchQuery] = useState(''); // Search query for filtering tasks
   const taskRefs = useRef<Map<string, HTMLLIElement>>(new Map());
   const listRef = useRef<HTMLUListElement>(null);
 
@@ -126,6 +210,13 @@ export function AsanaSidebar({
     return `${hours}h ${mins}m`;
   }, []);
 
+  // Filter tasks by search query
+  const searchedTasks = useMemo(() => {
+    if (!searchQuery.trim()) return tasks;
+    const query = searchQuery.toLowerCase().trim();
+    return tasks.filter(task => task.title.toLowerCase().includes(query));
+  }, [tasks, searchQuery]);
+
   // Helper to get Type custom field value from a task (with optimistic override support)
   const getTaskTypeValue = useCallback((task: CalendarEvent): string => {
     // Check for optimistic override first
@@ -145,7 +236,7 @@ export function AsanaSidebar({
 
     const groups = new Map<string, CalendarEvent[]>();
 
-    tasks.forEach(task => {
+    searchedTasks.forEach(task => {
       let groupKey: string;
 
       if (filters.groupBy === 'type') {
@@ -180,17 +271,47 @@ export function AsanaSidebar({
     });
 
     return sortedGroups;
-  }, [tasks, filters?.groupBy, filters?.groupOrder, getTaskTypeValue]);
+  }, [searchedTasks, filters?.groupBy, filters?.groupOrder, getTaskTypeValue]);
 
-  // Scroll to and highlight task when highlightedTaskId changes
+  // Scroll to and highlight task when highlightedTaskId changes (single click from calendar)
   useEffect(() => {
     if (highlightedTaskId) {
-      const taskElement = taskRefs.current.get(highlightedTaskId);
-      if (taskElement) {
-        taskElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Find the task in the list
+      const task = tasks.find(t => t.id === highlightedTaskId);
+      if (task) {
+        // If grouping is enabled, expand the group containing this task
+        if (filters?.groupBy === 'type') {
+          const taskType = getTaskTypeValue(task);
+          setExpandedGroups(prev => {
+            if (prev.has(taskType)) return prev;
+            const next = new Set(prev);
+            next.add(taskType);
+            return next;
+          });
+        }
+
+        // Scroll to the task (with a small delay to allow group expansion)
+        setTimeout(() => {
+          const taskElement = taskRefs.current.get(highlightedTaskId);
+          if (taskElement) {
+            taskElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, 100);
       }
     }
-  }, [highlightedTaskId]);
+  }, [highlightedTaskId, tasks, filters?.groupBy, getTaskTypeValue]);
+
+  // Open task dialog when openTaskDialogId changes (double click from calendar)
+  useEffect(() => {
+    if (openTaskDialogId) {
+      const task = tasks.find(t => t.id === openTaskDialogId);
+      if (task) {
+        setSelectedTask(task);
+      }
+      // Clear the trigger after opening
+      onClearOpenTaskDialog?.();
+    }
+  }, [openTaskDialogId, tasks, onClearOpenTaskDialog]);
 
   // Check if any filters are active
   const hasActiveFilters = filters && (
@@ -506,7 +627,10 @@ export function AsanaSidebar({
           </div>
         </div>
         <p className="text-sm mt-1 text-gray-500">
-          {tasks.length} task{tasks.length !== 1 ? 's' : ''}
+          {searchedTasks.length} task{searchedTasks.length !== 1 ? 's' : ''}
+          {searchQuery && searchedTasks.length !== tasks.length && (
+            <span className="text-gray-400"> (of {tasks.length})</span>
+          )}
         </p>
 
         {/* Group By Panel */}
@@ -715,14 +839,36 @@ export function AsanaSidebar({
         )}
       </div>
 
+      {/* Search Input */}
+      <div className="px-4 pb-3 border-b border-gray-200">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search tasks..."
+            className="w-full pl-8 pr-8 py-1.5 text-sm bg-gray-50 border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-gray-400 hover:text-gray-600"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+
       <div className="flex-1 overflow-y-auto">
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
             <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-orange-500" />
           </div>
-        ) : tasks.length === 0 ? (
+        ) : searchedTasks.length === 0 ? (
           <div className="p-4 text-center text-gray-500 text-sm">
-            No incomplete Asana tasks
+            {searchQuery ? 'No tasks match your search' : 'No incomplete Asana tasks'}
           </div>
         ) : groupedTasks ? (
           // Grouped view
@@ -793,6 +939,8 @@ export function AsanaSidebar({
                           formatDuration={formatDuration}
                           onClick={() => setSelectedTask(task)}
                           isHighlighted={highlightedTaskId === task.id}
+                          onComplete={onToggleComplete}
+                          onDelete={onDeleteTask}
                           ref={(el) => {
                             if (el) taskRefs.current.set(task.id, el);
                             else taskRefs.current.delete(task.id);
@@ -808,7 +956,7 @@ export function AsanaSidebar({
         ) : (
           // Flat list view
           <ul ref={listRef} className="p-2 space-y-1">
-            {tasks.map(task => (
+            {searchedTasks.map(task => (
               <MemoizedTaskItem
                 key={`${task.integrationId || 'default'}-${task.id}`}
                 task={task}
@@ -817,6 +965,8 @@ export function AsanaSidebar({
                 formatDuration={formatDuration}
                 onClick={() => setSelectedTask(task)}
                 isHighlighted={highlightedTaskId === task.id}
+                onComplete={onToggleComplete}
+                onDelete={onDeleteTask}
                 ref={(el) => {
                   if (el) taskRefs.current.set(task.id, el);
                   else taskRefs.current.delete(task.id);
@@ -954,29 +1104,16 @@ function TaskDetailDialog({
     }
   }, [task.id, task.integrationId]);
 
-  // Helper to render text with clickable links
-  const renderTextWithLinks = (text: string) => {
-    // Regex to match URLs
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    const parts = text.split(urlRegex);
-
-    return parts.map((part, index) => {
-      if (part.match(urlRegex)) {
-        return (
-          <a
-            key={index}
-            href={part}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-600 hover:text-blue-800 hover:underline break-all"
-          >
-            {part}
-          </a>
-        );
+  // Close dialog on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
       }
-      return part;
-    });
-  };
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   const handleSubmitComment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1224,7 +1361,9 @@ function TaskDetailDialog({
               {task.description && (
                 <div>
                   <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Notes</label>
-                  <p className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">{task.description}</p>
+                  <div className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">
+                    <LinkifiedText text={task.description} />
+                  </div>
                 </div>
               )}
 
@@ -1326,7 +1465,7 @@ function TaskDetailDialog({
                           </span>
                         </div>
                         <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">
-                          {renderTextWithLinks(story.text)}
+                          <LinkifiedText text={story.text} />
                         </p>
                       </div>
                     ))}
@@ -1681,11 +1820,13 @@ interface TaskItemProps {
   formatDuration: (minutes: number) => string;
   onClick: () => void;
   isHighlighted?: boolean;
+  onComplete?: (taskId: string, integrationId: string, completed: boolean) => void;
+  onDelete?: (taskId: string, integrationId: string) => void;
 }
 
 const MemoizedTaskItem = memo(
   forwardRef<HTMLLIElement, TaskItemProps>(function TaskItem(
-    { task, onDragStart, scheduledDuration, formatDuration, onClick, isHighlighted },
+    { task, onDragStart, scheduledDuration, formatDuration, onClick, isHighlighted, onComplete, onDelete },
     ref
   ) {
     const formatDueDate = (dueOn: string | undefined) => {
@@ -1700,6 +1841,20 @@ const MemoizedTaskItem = memo(
       if (isPast(date) && !isToday(date)) return 'text-red-500';
       if (isToday(date)) return 'text-orange-500';
       return 'text-gray-500';
+    };
+
+    const handleComplete = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (onComplete && task.integrationId) {
+        onComplete(task.id, task.integrationId, true);
+      }
+    };
+
+    const handleDelete = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (onDelete && task.integrationId) {
+        onDelete(task.id, task.integrationId);
+      }
     };
 
     return (
@@ -1738,6 +1893,29 @@ const MemoizedTaskItem = memo(
             </div>
           </div>
         </div>
+        {/* Action buttons - show on hover */}
+        {task.integrationId && (
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+            {onComplete && (
+              <button
+                onClick={handleComplete}
+                className="p-1 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
+                title="Mark complete"
+              >
+                <Check className="w-4 h-4" />
+              </button>
+            )}
+            {onDelete && (
+              <button
+                onClick={handleDelete}
+                className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                title="Delete task"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        )}
       </li>
     );
   })

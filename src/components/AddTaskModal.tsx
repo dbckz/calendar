@@ -18,13 +18,16 @@ interface AddTaskModalProps {
   defaultEndTime?: Date;
 }
 
+function getInitialDueDate(defaultStartTime?: Date, defaultDate?: Date): string {
+  if (defaultStartTime) return format(defaultStartTime, 'yyyy-MM-dd');
+  if (defaultDate) return format(defaultDate, 'yyyy-MM-dd');
+  return '';
+}
+
 export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStartTime, defaultEndTime }: AddTaskModalProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [dueDate, setDueDate] = useState(
-    defaultStartTime ? format(defaultStartTime, 'yyyy-MM-dd') :
-    defaultDate ? format(defaultDate, 'yyyy-MM-dd') : ''
-  );
+  const [dueDate, setDueDate] = useState(getInitialDueDate(defaultStartTime, defaultDate));
   const [dueTime, setDueTime] = useState(defaultStartTime ? format(defaultStartTime, 'HH:mm') : '');
   const [taskType, setTaskType] = useState<TaskTypeSelection>(null);
   const [showTypeDropdown, setShowTypeDropdown] = useState(false);
@@ -50,6 +53,18 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
       }
     }
   }, [isOpen, defaultStartTime, defaultDate]);
+
+  // Close on Escape key
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   // Helper to get emoji for any task type
   const getTaskTypeEmoji = useCallback((type: TaskType): string => {
@@ -132,10 +147,7 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
     // Reset form
     setTitle('');
     setDescription('');
-    setDueDate(
-      defaultStartTime ? format(defaultStartTime, 'yyyy-MM-dd') :
-      defaultDate ? format(defaultDate, 'yyyy-MM-dd') : ''
-    );
+    setDueDate(getInitialDueDate(defaultStartTime, defaultDate));
     setDueTime(defaultStartTime ? format(defaultStartTime, 'HH:mm') : '');
     setTaskType(null);
     setIsCreatingCustomType(false);

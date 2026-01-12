@@ -14,9 +14,6 @@ import { useToast } from '@/hooks/useToast';
 import { CalendarEvent, DragItem, TaskType, SettingsResponse } from '@/types';
 import { api } from '@/lib/api';
 
-// Use the typed SettingsResponse from types, but we keep a local alias for clarity
-type SettingsState = SettingsResponse;
-
 // Softer, more cohesive color themes
 // Each theme has a main header color and a shared sidebar accent
 const COLOR_SCHEMES = [
@@ -72,7 +69,7 @@ const COLOR_SCHEMES = [
 
 export default function Home() {
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [settings, setSettings] = useState<SettingsState | null>(null);
+  const [settings, setSettings] = useState<SettingsResponse | null>(null);
   // Start with index 0 on server, then randomize on client to avoid hydration mismatch
   const [colorSchemeIndex, setColorSchemeIndex] = useState(0);
   // Set random color scheme on client mount only
@@ -154,6 +151,29 @@ export default function Home() {
 
   // State for highlighted Asana task in sidebar (when clicking calendar event)
   const [highlightedAsanaTaskId, setHighlightedAsanaTaskId] = useState<string | null>(null);
+  // State for opening task dialog from calendar double-click
+  const [openTaskDialogId, setOpenTaskDialogId] = useState<string | null>(null);
+  // State for Google Calendar event detail dialog
+  const [selectedGoogleEvent, setSelectedGoogleEvent] = useState<CalendarEvent | null>(null);
+
+  // Close modals on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (selectedGoogleEvent) {
+          setSelectedGoogleEvent(null);
+        } else if (calendarSelectionModal.show) {
+          setCalendarSelectionModal({ show: false, pendingDrop: null });
+        } else if (pendingTaskCreation) {
+          setPendingTaskCreation(null);
+        } else if (deleteConfirmModal.show) {
+          setDeleteConfirmModal({ show: false, event: null });
+        }
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [selectedGoogleEvent, calendarSelectionModal.show, pendingTaskCreation, deleteConfirmModal.show]);
 
   // Fetch settings on mount
   useEffect(() => {
@@ -225,13 +245,8 @@ export default function Home() {
   }, [googleEvents, selectedDate, getTasksForDate, adhocToCalendarEvent, getScheduledAsanaEventsForDate, scheduledAsanaTasks]);
 
   // Separate all-day events from timed events
-  const allDayEvents = useMemo(() => {
-    return allEvents.filter(e => e.allDay);
-  }, [allEvents]);
-
-  const timedEvents = useMemo(() => {
-    return allEvents.filter(e => !e.allDay);
-  }, [allEvents]);
+  const allDayEvents = useMemo(() => allEvents.filter(e => e.allDay), [allEvents]);
+  const timedEvents = useMemo(() => allEvents.filter(e => !e.allDay), [allEvents]);
 
   const handleRefresh = useCallback(() => {
     // Rotate to a new random color scheme on refresh
@@ -248,6 +263,7 @@ export default function Home() {
   // Handle Asana task completion from sidebar (with integration ID)
   // Optimistic: returns immediately, shows error toast if API fails
   const handleSidebarAsanaComplete = useCallback((taskId: string, integrationId: string, completed: boolean) => {
+    toast.success(completed ? 'Task marked complete' : 'Task reopened');
     completeAsanaTask(taskId, integrationId, completed).catch(err => {
       toast.error('Failed to update task in Asana');
       console.error('Error completing Asana task:', err);
@@ -270,6 +286,7 @@ export default function Home() {
   const handleSidebarAsanaDelete = useCallback((taskId: string, integrationId: string) => {
     // Unschedule all instances of this task immediately
     unscheduleAllAsanaInstances(taskId);
+    toast.success('Task deleted from Asana');
     // Fire-and-forget: state updates optimistically
     deleteAsanaTask(taskId, integrationId).catch(err => {
       toast.error('Failed to delete task from Asana');
@@ -297,10 +314,30 @@ export default function Home() {
     });
   }, [updateAsanaTask, toast]);
 
+  // Handle Asana task creation from sidebar (with toast notifications)
+  const handleSidebarAsanaCreate = useCallback(async (
+    integrationId: string,
+    name: string,
+    options?: { notes?: string; dueOn?: string; projectGid?: string; customFields?: Record<string, string> }
+  ) => {
+    try {
+      const task = await createAsanaTask(integrationId, name, options);
+      if (task) {
+        toast.success('Task created in Asana');
+      }
+      return task;
+    } catch (err) {
+      toast.error('Failed to create task in Asana');
+      console.error('Error creating Asana task:', err);
+      throw err;
+    }
+  }, [createAsanaTask, toast]);
+
   // Get connected Google integrations
-  const connectedGoogleIntegrations = useMemo(() => {
-    return settings?.googleIntegrations.filter(i => i.connected && i.enabled) || [];
-  }, [settings]);
+  const connectedGoogleIntegrations = useMemo(
+    () => settings?.googleIntegrations.filter(i => i.connected && i.enabled) || [],
+    [settings]
+  );
 
   // Handle dropping a task onto the calendar
   const handleDropTask = useCallback((dragItem: DragItem, startTime: Date, endTime: Date) => {
@@ -634,6 +671,23 @@ export default function Home() {
     setHighlightedAsanaTaskId(null);
   }, []);
 
+  // Handle double-clicking a calendar event to open its task dialog
+  const handleEventDoubleClick = useCallback((event: CalendarEvent) => {
+    // Check if this is an Asana task (either directly or linked)
+    const asanaTaskId = event.linkedAsanaTaskId || (event.source === 'asana' ? event.id : null);
+    if (asanaTaskId) {
+      setOpenTaskDialogId(asanaTaskId);
+    } else if (event.source === 'google') {
+      // Show Google Calendar event detail dialog
+      setSelectedGoogleEvent(event);
+    }
+  }, []);
+
+  // Clear the open task dialog trigger
+  const handleClearOpenTaskDialog = useCallback(() => {
+    setOpenTaskDialogId(null);
+  }, []);
+
   // Handle delete event request (shows confirmation)
   const handleDeleteEventRequest = useCallback((event: CalendarEvent) => {
     setDeleteConfirmModal({ show: true, event });
@@ -706,11 +760,13 @@ export default function Home() {
             onClearFilters={clearAsanaFilters}
             onToggleComplete={handleSidebarAsanaComplete}
             onAddComment={handleSidebarAsanaComment}
-            onCreateTask={createAsanaTask}
+            onCreateTask={handleSidebarAsanaCreate}
             onUpdateTask={handleSidebarAsanaUpdate}
             onDeleteTask={handleSidebarAsanaDelete}
             highlightedTaskId={highlightedAsanaTaskId}
             onClearHighlight={handleClearHighlight}
+            openTaskDialogId={openTaskDialogId}
+            onClearOpenTaskDialog={handleClearOpenTaskDialog}
           />
         </aside>
 
@@ -736,6 +792,7 @@ export default function Home() {
                   onDeleteEvent={handleDeleteEventRequest}
                   onCreateTask={handleTimelineCreateTask}
                   onEventClick={handleEventClick}
+                  onEventDoubleClick={handleEventDoubleClick}
                 />
               )}
             </div>
@@ -845,6 +902,86 @@ export default function Home() {
         defaultStartTime={createTaskModal.startTime || undefined}
         defaultEndTime={createTaskModal.endTime || undefined}
       />
+
+      {/* Google Calendar Event Detail Dialog */}
+      {selectedGoogleEvent && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col">
+            {/* Header */}
+            <div className="flex items-start justify-between p-4 border-b">
+              <div className="flex-1 min-w-0">
+                <h2 className="text-lg font-semibold text-gray-900 truncate">
+                  {selectedGoogleEvent.title}
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  {format(selectedGoogleEvent.startTime, 'EEEE, MMMM d, yyyy')}
+                </p>
+                <p className="text-sm text-gray-500">
+                  {format(selectedGoogleEvent.startTime, 'h:mm a')} - {format(selectedGoogleEvent.endTime, 'h:mm a')}
+                </p>
+                {selectedGoogleEvent.integrationName && (
+                  <p className="text-xs text-blue-600 mt-1">
+                    {selectedGoogleEvent.integrationName}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => setSelectedGoogleEvent(null)}
+                className="p-1 hover:bg-gray-100 rounded-full transition-colors ml-2"
+              >
+                <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-4 overflow-y-auto flex-1">
+              {selectedGoogleEvent.location && (
+                <div className="mb-4">
+                  <h3 className="text-sm font-medium text-gray-700 mb-1">Location</h3>
+                  <p className="text-sm text-gray-600">{selectedGoogleEvent.location}</p>
+                </div>
+              )}
+
+              {selectedGoogleEvent.description ? (
+                <div>
+                  <h3 className="text-sm font-medium text-gray-700 mb-1">Description</h3>
+                  <div className="text-sm text-gray-600 whitespace-pre-wrap break-words">
+                    {selectedGoogleEvent.description.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
+                      part.match(/^https?:\/\//) ? (
+                        <a
+                          key={i}
+                          href={part}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:text-blue-800 hover:underline break-all"
+                        >
+                          {part}
+                        </a>
+                      ) : (
+                        <span key={i}>{part}</span>
+                      )
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400 italic">No description</p>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t bg-gray-50">
+              <button
+                onClick={() => setSelectedGoogleEvent(null)}
+                className="w-full px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

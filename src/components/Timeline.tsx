@@ -13,6 +13,7 @@ interface TimelineProps {
   onDeleteEvent?: (event: CalendarEvent) => void;
   onCreateTask?: (startTime: Date, endTime: Date) => void;
   onEventClick?: (event: CalendarEvent) => void;
+  onEventDoubleClick?: (event: CalendarEvent) => void;
 }
 
 interface PositionedEvent {
@@ -125,6 +126,7 @@ export function Timeline({
   onDeleteEvent,
   onCreateTask,
   onEventClick,
+  onEventDoubleClick,
 }: TimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -653,6 +655,13 @@ export function Timeline({
                     if (!draggingEvent && onEventClick) {
                       e.stopPropagation();
                       onEventClick(pos.event);
+                    }
+                  }}
+                  onDoubleClick={(e) => {
+                    // Trigger double-click to open task detail popup (only if not dragging)
+                    if (!draggingEvent && onEventDoubleClick) {
+                      e.stopPropagation();
+                      onEventDoubleClick(pos.event);
                     }
                   }}
                 >
