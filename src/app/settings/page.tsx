@@ -298,15 +298,14 @@ function SettingsContent() {
                       <span className="text-sm text-gray-600">Enabled</span>
                     </label>
                   )}
-                  {!integration.connected && (
-                    <button
-                      onClick={() => handleGoogleReconnect(integration.id)}
-                      className="flex items-center gap-1.5 px-2 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                    >
-                      <RefreshCw className="w-3 h-3" />
-                      Reconnect
-                    </button>
-                  )}
+                  <button
+                    onClick={() => handleGoogleReconnect(integration.id)}
+                    className="flex items-center gap-1.5 px-2 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                    title="Re-authenticate with Google"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    {integration.connected ? 'Re-auth' : 'Connect'}
+                  </button>
                   <button
                     onClick={() => handleGoogleDisconnect(integration.id)}
                     className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors"
@@ -467,15 +466,14 @@ function SettingsContent() {
                       <span className="text-sm text-gray-600">Enabled</span>
                     </label>
                   )}
-                  {!integration.connected && (
-                    <button
-                      onClick={() => handleAsanaReconnect(integration.id)}
-                      className="flex items-center gap-1.5 px-2 py-1 text-sm text-orange-600 hover:bg-orange-50 rounded transition-colors"
-                    >
-                      <RefreshCw className="w-3 h-3" />
-                      Reconnect
-                    </button>
-                  )}
+                  <button
+                    onClick={() => handleAsanaReconnect(integration.id)}
+                    className="flex items-center gap-1.5 px-2 py-1 text-sm text-orange-600 hover:bg-orange-50 rounded transition-colors"
+                    title="Re-authenticate with Asana"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    {integration.connected ? 'Re-auth' : 'Connect'}
+                  </button>
                   <button
                     onClick={() => handleAsanaDisconnect(integration.id)}
                     className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors"
