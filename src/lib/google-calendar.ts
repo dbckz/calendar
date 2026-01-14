@@ -68,10 +68,8 @@ export async function getCalendarEvents(
 
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
-  // Get start and end of day
   const startOfDay = new Date(date);
   startOfDay.setHours(0, 0, 0, 0);
-
   const endOfDay = new Date(date);
   endOfDay.setHours(23, 59, 59, 999);
 
@@ -87,15 +85,11 @@ export async function getCalendarEvents(
 
   return events.map((event): CalendarEvent => {
     const isAllDay = !!event.start?.date;
-
-    // For all-day events, Google returns date strings like "2024-01-15".
-    // new Date("2024-01-15") parses as midnight UTC, which can shift to the
-    // previous day in local timezones. We need to parse as local date instead.
     let startTime: Date;
     let endTime: Date;
 
     if (isAllDay) {
-      // Parse date-only strings as local dates by adding time component
+      // Parse date-only strings as local dates (avoids UTC midnight shift)
       const startDateParts = (event.start?.date || '').split('-').map(Number);
       const endDateParts = (event.end?.date || '').split('-').map(Number);
       startTime = new Date(startDateParts[0], startDateParts[1] - 1, startDateParts[2], 0, 0, 0);
@@ -125,7 +119,9 @@ export async function updateCalendarEvent(
   clientSecret: string,
   eventId: string,
   startTime: Date,
-  endTime: Date
+  endTime: Date,
+  title?: string,
+  description?: string
 ): Promise<CalendarEvent> {
   const oauth2Client = createOAuth2Client(clientId, clientSecret);
   oauth2Client.setCredentials({
@@ -134,8 +130,6 @@ export async function updateCalendarEvent(
   });
 
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
-
-  // First get the existing event to preserve other fields
   const existingEvent = await calendar.events.get({
     calendarId: 'primary',
     eventId: eventId,
@@ -143,13 +137,13 @@ export async function updateCalendarEvent(
 
   const event = existingEvent.data;
   const isAllDay = !!event.start?.date;
-
-  // Update the event times
   const updatedEvent = await calendar.events.update({
     calendarId: 'primary',
     eventId: eventId,
     requestBody: {
       ...event,
+      summary: title !== undefined ? title : event.summary,
+      description: description !== undefined ? description : event.description,
       start: isAllDay
         ? { date: startTime.toISOString().split('T')[0] }
         : { dateTime: startTime.toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },

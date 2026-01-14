@@ -82,10 +82,7 @@ async function fetchWithRetry<T>(
   throw lastError;
 }
 
-// Type-safe API methods
-
 export const api = {
-  // Calendar events
   async getCalendarEvents(date: Date): Promise<CalendarEventsResponse> {
     return fetchWithRetry<CalendarEventsResponse>(
       `/api/calendar?date=${date.toISOString()}`
@@ -116,7 +113,9 @@ export const api = {
     eventId: string,
     integrationId: string,
     startTime: Date,
-    endTime: Date
+    endTime: Date,
+    title?: string,
+    description?: string
   ): Promise<CalendarEventResponse> {
     return fetchWithRetry<CalendarEventResponse>('/api/calendar', {
       method: 'PATCH',
@@ -126,6 +125,8 @@ export const api = {
         integrationId,
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
+        title,
+        description,
       }),
     });
   },
@@ -141,7 +142,6 @@ export const api = {
     });
   },
 
-  // Asana tasks
   async getAllAsanaTasks(): Promise<CalendarEventsResponse> {
     return fetchWithRetry<CalendarEventsResponse>('/api/asana-tasks/all');
   },
@@ -251,12 +251,10 @@ export const api = {
     return fetchWithRetry<{ projects: AsanaProject[] }>('/api/asana-projects');
   },
 
-  // Settings
   async getSettings(): Promise<SettingsResponse> {
     return fetchWithRetry<SettingsResponse>('/api/settings');
   },
 
-  // Task Templates
   async getTaskTemplates(): Promise<{ templates: TaskTemplate[] }> {
     return fetchWithRetry<{ templates: TaskTemplate[] }>('/api/user-data/task-templates');
   },
@@ -285,7 +283,6 @@ export const api = {
     });
   },
 
-  // Custom Task Types
   async getCustomTaskTypes(): Promise<{ customTypes: CustomTaskType[] }> {
     return fetchWithRetry<{ customTypes: CustomTaskType[] }>('/api/user-data/custom-task-types');
   },
@@ -306,7 +303,6 @@ export const api = {
     });
   },
 
-  // Ad-Hoc Tasks
   async getAdHocTasks(): Promise<{ tasks: AdHocTask[] }> {
     return fetchWithRetry<{ tasks: AdHocTask[] }>('/api/user-data/adhoc-tasks');
   },
@@ -335,7 +331,6 @@ export const api = {
     });
   },
 
-  // Scheduled Asana Tasks
   async getScheduledAsanaTasks(date?: string): Promise<{ tasks: ScheduledAsanaTask[] }> {
     const url = date
       ? `/api/user-data/scheduled-asana-tasks?date=${encodeURIComponent(date)}`
@@ -405,7 +400,6 @@ export const api = {
     });
   },
 
-  // Asana Filter Preferences
   async getAsanaFilterPreferences(): Promise<{ filters: AsanaFilterState }> {
     return fetchWithRetry<{ filters: AsanaFilterState }>('/api/user-data/asana-filters');
   },
@@ -419,7 +413,6 @@ export const api = {
   },
 };
 
-// Helper to parse API calendar events with Date objects
 export function parseCalendarEvent(event: CalendarEventResponse): CalendarEvent {
   return {
     ...event,

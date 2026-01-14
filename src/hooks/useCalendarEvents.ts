@@ -6,14 +6,9 @@ import { subDays, addDays } from 'date-fns';
 import { useGoogleCalendar } from './useGoogleCalendar';
 import { useAsanaTasks } from './useAsanaTasks';
 
-/**
- * Combined hook for managing all calendar events.
- * Composes useGoogleCalendar and useAsanaTasks for a unified API.
- */
 export function useCalendarEvents() {
   const hasFetched = useRef(false);
 
-  // Use the smaller focused hooks
   const {
     googleEvents,
     isLoading: googleLoading,
@@ -30,7 +25,6 @@ export function useCalendarEvents() {
     scheduledAsanaTasks,
     isLoading: asanaLoading,
     error: asanaError,
-    // Filter state
     projects: asanaProjects,
     typeValues: asanaTypeValues,
     typeFieldInfoByIntegration: asanaTypeFieldInfoByIntegration,
@@ -38,7 +32,6 @@ export function useCalendarEvents() {
     filters: asanaFilters,
     setFilters: setAsanaFilters,
     clearFilters: clearAsanaFilters,
-    // Actions
     fetchAllAsanaTasks,
     scheduleAsana,
     updateScheduledAsana,
@@ -53,11 +46,9 @@ export function useCalendarEvents() {
     deleteAsanaTask,
   } = useAsanaTasks();
 
-  // Combined loading and error state
   const isLoading = googleLoading || asanaLoading;
   const error = googleError || asanaError;
 
-  // Fetch all events for yesterday, today, and tomorrow
   const fetchAllEvents = useCallback(async () => {
     const today = new Date();
     const yesterday = subDays(today, 1);
@@ -69,7 +60,6 @@ export function useCalendarEvents() {
     ]);
   }, [fetchGoogleEventsForDates, fetchAllAsanaTasks]);
 
-  // Fetch on mount
   useEffect(() => {
     if (!hasFetched.current) {
       hasFetched.current = true;
@@ -77,7 +67,6 @@ export function useCalendarEvents() {
     }
   }, [fetchAllEvents]);
 
-  // Convert ad-hoc task to calendar event format
   const adhocToCalendarEvent = useCallback((task: AdHocTask): CalendarEvent => {
     let startTime: Date;
     if (task.dueDate) {
@@ -114,35 +103,27 @@ export function useCalendarEvents() {
     };
   }, []);
 
-  // Wrapper functions that maintain the original API for backwards compatibility
-  const updateGoogleEvent = useCallback(async (
-    eventId: string,
-    integrationId: string,
-    startTime: Date,
-    endTime: Date
-  ): Promise<CalendarEvent | null> => {
-    const result = await updateGoogleEventInternal(eventId, integrationId, startTime, endTime);
-    return result.success ? { id: eventId, startTime, endTime } as CalendarEvent : null;
-  }, [updateGoogleEventInternal]);
+  const updateGoogleEvent = useCallback(
+    (eventId: string, integrationId: string, startTime: Date, endTime: Date, title?: string, description?: string) =>
+      updateGoogleEventInternal(eventId, integrationId, startTime, endTime, title, description),
+    [updateGoogleEventInternal]
+  );
 
-  const createGoogleEvent = useCallback(async (
-    integrationId: string,
-    title: string,
-    startTime: Date,
-    endTime: Date,
-    description?: string
-  ): Promise<CalendarEvent | null> => {
-    const result = await createGoogleEventInternal(integrationId, title, startTime, endTime, description);
-    return result.event;
-  }, [createGoogleEventInternal]);
+  const createGoogleEvent = useCallback(
+    async (integrationId: string, title: string, startTime: Date, endTime: Date, description?: string): Promise<CalendarEvent | null> => {
+      const result = await createGoogleEventInternal(integrationId, title, startTime, endTime, description);
+      return result.event;
+    },
+    [createGoogleEventInternal]
+  );
 
-  const deleteGoogleEvent = useCallback(async (
-    eventId: string,
-    integrationId: string
-  ): Promise<boolean> => {
-    const result = await deleteGoogleEventInternal(eventId, integrationId);
-    return result.success;
-  }, [deleteGoogleEventInternal]);
+  const deleteGoogleEvent = useCallback(
+    async (eventId: string, integrationId: string): Promise<boolean> => {
+      const result = await deleteGoogleEventInternal(eventId, integrationId);
+      return result.success;
+    },
+    [deleteGoogleEventInternal]
+  );
 
   return {
     googleEvents,
@@ -151,7 +132,6 @@ export function useCalendarEvents() {
     scheduledAsanaTasks,
     isLoading,
     error,
-    // Asana filter state
     asanaProjects,
     asanaTypeValues,
     asanaTypeFieldInfoByIntegration,
@@ -159,7 +139,6 @@ export function useCalendarEvents() {
     asanaFilters,
     setAsanaFilters,
     clearAsanaFilters,
-    // Actions
     fetchAllEvents,
     adhocToCalendarEvent,
     scheduleAsana,

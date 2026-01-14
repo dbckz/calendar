@@ -1,3 +1,2 @@
-- Make a feature where I can group batch tasks into a single calendar event that can be dragged onto the calendar, and then tick off individual tasks underneath this
-- Fix events getting dragged onto calendar sometimes not working very smoothly
 - Add cross-tab sync using BroadcastChannel API so changes in one browser tab are reflected in other tabs in near real-time (broadcast mutations, other tabs refetch)
+- When I create a task on the calendar and include a description, the description doesn't get saved or synced. Fix this.

@@ -15,7 +15,9 @@ interface UseGoogleCalendarReturn {
     eventId: string,
     integrationId: string,
     startTime: Date,
-    endTime: Date
+    endTime: Date,
+    title?: string,
+    description?: string
   ) => Promise<{ success: boolean; error?: string }>;
   createGoogleEvent: (
     integrationId: string,
@@ -35,14 +37,9 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
   const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Ref for tracking mounted state to prevent memory leaks
   const isMountedRef = useRef(true);
-
-  // Ref for tracking pending requests to prevent duplicates
   const pendingRequestsRef = useRef<Set<string>>(new Set());
 
-  // Cleanup on unmount
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
@@ -75,34 +72,23 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
   }, []);
 
   const fetchGoogleEventsForDates = useCallback(async (dates: Date[]) => {
-    // ALWAYS restore from cache first if it exists
     const cached = readGoogleCalendarCache();
     if (cached) {
-      // Show cached data immediately (no loading state)
-      // Cached data is already parsed, so use it directly
       setGoogleEvents(cached.events);
     } else {
-      // No cache - show loading state
       setIsLoading(true);
     }
-
     setError(null);
 
     try {
-      // ALWAYS fetch fresh data (regardless of cache)
       const eventArrays = await Promise.all(dates.map(fetchGoogleEventsForDate));
       if (!isMountedRef.current) return;
 
       const allEvents = eventArrays.flat();
-
-      // Deduplicate by ID
       const uniqueEvents = allEvents.filter((event, index, self) =>
         index === self.findIndex(e => e.id === event.id)
       );
-
       setGoogleEvents(uniqueEvents);
-
-      // Write to cache on success
       writeGoogleCalendarCache(uniqueEvents);
     } catch (err) {
       if (!isMountedRef.current) return;
@@ -118,22 +104,27 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     eventId: string,
     integrationId: string,
     startTime: Date,
-    endTime: Date
+    endTime: Date,
+    title?: string,
+    description?: string
   ): Promise<{ success: boolean; error?: string }> => {
-    // Optimistically update local state
     let previousEvent: CalendarEvent | undefined;
     setGoogleEvents(prev => prev.map(event => {
       if (event.id === eventId) {
         previousEvent = event;
-        return { ...event, startTime, endTime };
+        return {
+          ...event,
+          startTime,
+          endTime,
+          ...(title !== undefined && { title }),
+          ...(description !== undefined && { description }),
+        };
       }
       return event;
     }));
 
     try {
-      const updatedEvent = await api.updateCalendarEvent(eventId, integrationId, startTime, endTime);
-
-      // Update with server response
+      const updatedEvent = await api.updateCalendarEvent(eventId, integrationId, startTime, endTime, title, description);
       setGoogleEvents(prev => {
         const updated = prev.map(event =>
           event.id === eventId ? { ...updatedEvent, startTime: new Date(updatedEvent.startTime), endTime: new Date(updatedEvent.endTime) } : event
@@ -144,7 +135,6 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
 
       return { success: true };
     } catch (err) {
-      // Rollback on error
       if (previousEvent) {
         setGoogleEvents(prev => prev.map(event =>
           event.id === eventId ? previousEvent! : event
@@ -189,7 +179,6 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     eventId: string,
     integrationId: string
   ): Promise<{ success: boolean; error?: string }> => {
-    // Optimistically remove and track previous state for rollback
     let previousEvents: CalendarEvent[] = [];
     setGoogleEvents(prev => {
       previousEvents = prev;
@@ -198,14 +187,12 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
 
     try {
       await api.deleteCalendarEvent(eventId, integrationId);
-      // Write updated state to cache after successful delete
       setGoogleEvents(prev => {
         writeGoogleCalendarCache(prev);
         return prev;
       });
       return { success: true };
     } catch (err) {
-      // Rollback
       setGoogleEvents(previousEvents);
       const message = err instanceof ApiRequestError ? err.message : 'Failed to delete event';
       return { success: false, error: message };

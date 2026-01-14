@@ -13,9 +13,8 @@ import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { useToast } from '@/hooks/useToast';
 import { CalendarEvent, DragItem, TaskType, SettingsResponse } from '@/types';
 import { api } from '@/lib/api';
+import { containsHtml, htmlToReadableText } from '@/lib/html-utils';
 
-// Softer, more cohesive color themes
-// Each theme has a main header color and a shared sidebar accent
 const COLOR_SCHEMES = [
   {
     name: 'Slate',
@@ -70,12 +69,11 @@ const COLOR_SCHEMES = [
 export default function Home() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
-  // Start with index 0 on server, then randomize on client to avoid hydration mismatch
-  const [colorSchemeIndex, setColorSchemeIndex] = useState(0);
-  // Set random color scheme on client mount only
-  useEffect(() => {
-    setColorSchemeIndex(Math.floor(Math.random() * COLOR_SCHEMES.length));
-  }, []);
+  const [colorSchemeIndex, setColorSchemeIndex] = useState(() => {
+    // Return 0 for SSR, client will get random value on first render
+    if (typeof window === 'undefined') return 0;
+    return Math.floor(Math.random() * COLOR_SCHEMES.length);
+  });
 
   const colorScheme = COLOR_SCHEMES[colorSchemeIndex];
 
@@ -103,7 +101,6 @@ export default function Home() {
     createAsanaTask,
     updateAsanaTask,
     deleteAsanaTask,
-    // Asana filter state
     asanaProjects,
     asanaTypeValues,
     asanaTypeFieldInfoByIntegration,
@@ -113,26 +110,22 @@ export default function Home() {
     clearAsanaFilters,
   } = useCalendarEvents();
 
-  // State for calendar selection modal
   const [calendarSelectionModal, setCalendarSelectionModal] = useState<{
     show: boolean;
     pendingDrop: { dragItem: DragItem; startTime: Date; endTime: Date } | null;
   }>({ show: false, pendingDrop: null });
 
-  // State for delete confirmation modal
   const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
     show: boolean;
     event: CalendarEvent | null;
   }>({ show: false, event: null });
 
-  // State for task creation modal (triggered by click-drag on timeline)
   const [createTaskModal, setCreateTaskModal] = useState<{
     show: boolean;
     startTime: Date | null;
     endTime: Date | null;
   }>({ show: false, startTime: null, endTime: null });
 
-  // State for pending task creation (needs calendar selection)
   const [pendingTaskCreation, setPendingTaskCreation] = useState<{
     task: {
       title: string;
@@ -149,19 +142,23 @@ export default function Home() {
     endTime: Date;
   } | null>(null);
 
-  // State for highlighted Asana task in sidebar (when clicking calendar event)
   const [highlightedAsanaTaskId, setHighlightedAsanaTaskId] = useState<string | null>(null);
-  // State for opening task dialog from calendar double-click
   const [openTaskDialogId, setOpenTaskDialogId] = useState<string | null>(null);
-  // State for Google Calendar event detail dialog
   const [selectedGoogleEvent, setSelectedGoogleEvent] = useState<CalendarEvent | null>(null);
+  const [isEditingGoogleEvent, setIsEditingGoogleEvent] = useState(false);
+  const [editingGoogleEventTitle, setEditingGoogleEventTitle] = useState('');
+  const [editingGoogleEventDescription, setEditingGoogleEventDescription] = useState('');
+  const [isSavingGoogleEvent, setIsSavingGoogleEvent] = useState(false);
 
-  // Close modals on Escape key
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (selectedGoogleEvent) {
-          setSelectedGoogleEvent(null);
+          if (isEditingGoogleEvent) {
+            setIsEditingGoogleEvent(false);
+          } else {
+            setSelectedGoogleEvent(null);
+          }
         } else if (calendarSelectionModal.show) {
           setCalendarSelectionModal({ show: false, pendingDrop: null });
         } else if (pendingTaskCreation) {
@@ -173,9 +170,8 @@ export default function Home() {
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectedGoogleEvent, calendarSelectionModal.show, pendingTaskCreation, deleteConfirmModal.show]);
+  }, [selectedGoogleEvent, isEditingGoogleEvent, calendarSelectionModal.show, pendingTaskCreation, deleteConfirmModal.show]);
 
-  // Fetch settings on mount
   useEffect(() => {
     api.getSettings()
       .then(data => setSettings(data))
@@ -185,35 +181,23 @@ export default function Home() {
       });
   }, [toast]);
 
-  // Combine all events for the calendar (scheduled tasks only)
-  // NOTE: We filter out adhoc tasks that have a corresponding Google event
-  // to avoid showing duplicates on the calendar
+  // Combine calendar events, filtering out duplicates from synced Google events
   const allEvents = useMemo((): CalendarEvent[] => {
     const dateStr = format(selectedDate, 'yyyy-MM-dd');
 
-    // Helper to check if a date falls within an event's range
-    // For all-day/multi-day events, we need to check the full date range
     const isEventOnDate = (event: CalendarEvent, targetDate: string): boolean => {
-      // For all-day events, the dates from Google are date-only strings
-      // which we've already parsed. Compare just the date portions.
       const startDateStr = format(event.startTime, 'yyyy-MM-dd');
       const endDateStr = format(event.endTime, 'yyyy-MM-dd');
 
-      // For all-day events, the end date is exclusive (e.g., a 1-day event on Jan 15
-      // has start: Jan 15, end: Jan 16). For multi-day, same logic applies.
-      // So we check: startDate <= targetDate < endDate for all-day events
-      // For timed events, we just check the start date
+      // All-day events have exclusive end dates (Jan 15-16 = 1-day event on Jan 15)
       if (event.allDay) {
         return targetDate >= startDateStr && targetDate < endDateStr;
       }
-
       return startDateStr === targetDate;
     };
 
-    // Filter Google events to only show events for the selected date
     const filteredGoogleEvents = googleEvents.filter(event => isEventOnDate(event, dateStr));
 
-    // Enrich Google events with linked Asana task info (for unified display)
     const enrichedGoogleEvents = filteredGoogleEvents.map(event => {
       const linkedAsana = scheduledAsanaTasks.find(s => s.googleEventId === event.id);
       if (linkedAsana) {
@@ -228,14 +212,11 @@ export default function Home() {
       return event;
     });
 
-    // Only include tasks that have both date AND time (scheduled on calendar)
-    // AND that don't have a corresponding Google event (to avoid duplicates)
+    // Exclude tasks that are already synced to Google to avoid duplicates
     const adhocTasks = getTasksForDate(dateStr).filter(t => t.dueTime && !t.googleEventId);
     const adhocEvents = adhocTasks.map(adhocToCalendarEvent);
 
-    // Include scheduled Asana tasks for this date, but EXCLUDE those with linked Google events
-    // (they will show as the enriched Google event instead)
-    // Note: event.id is the schedule ID, so we find the schedule directly
+    // Exclude Asana schedules linked to Google events (shown via enrichedGoogleEvents)
     const scheduledAsanaEvents = getScheduledAsanaEventsForDate(dateStr).filter(event => {
       const schedule = scheduledAsanaTasks.find(s => s.id === event.id);
       return !schedule?.googleEventId;
@@ -260,8 +241,6 @@ export default function Home() {
     fetchAllEvents();
   }, [fetchAllEvents]);
 
-  // Handle Asana task completion from sidebar (with integration ID)
-  // Optimistic: returns immediately, shows error toast if API fails
   const handleSidebarAsanaComplete = useCallback((taskId: string, integrationId: string, completed: boolean) => {
     toast.success(completed ? 'Task marked complete' : 'Task reopened');
     completeAsanaTask(taskId, integrationId, completed).catch(err => {
@@ -270,7 +249,6 @@ export default function Home() {
     });
   }, [completeAsanaTask, toast]);
 
-  // Handle Asana comment from sidebar (with integration ID)
   const handleSidebarAsanaComment = useCallback(async (taskId: string, integrationId: string, comment: string) => {
     try {
       await addAsanaComment(taskId, integrationId, comment);
@@ -281,21 +259,15 @@ export default function Home() {
     }
   }, [addAsanaComment, toast]);
 
-  // Handle Asana task deletion from sidebar
-  // Optimistic: returns immediately, shows error toast if API fails
   const handleSidebarAsanaDelete = useCallback((taskId: string, integrationId: string) => {
-    // Unschedule all instances of this task immediately
     unscheduleAllAsanaInstances(taskId);
     toast.success('Task deleted from Asana');
-    // Fire-and-forget: state updates optimistically
     deleteAsanaTask(taskId, integrationId).catch(err => {
       toast.error('Failed to delete task from Asana');
       console.error('Error deleting Asana task:', err);
     });
   }, [deleteAsanaTask, unscheduleAllAsanaInstances, toast]);
 
-  // Handle Asana task update from sidebar (dates, type, projects)
-  // Optimistic: returns immediately, shows error toast if API fails
   const handleSidebarAsanaUpdate = useCallback((
     taskId: string,
     integrationId: string,
@@ -307,14 +279,12 @@ export default function Home() {
       removeProjects?: string[];
     }
   ) => {
-    // Fire-and-forget: state updates optimistically
     updateAsanaTask(taskId, integrationId, updates).catch(err => {
       toast.error('Failed to update task in Asana');
       console.error('Error updating Asana task:', err);
     });
   }, [updateAsanaTask, toast]);
 
-  // Handle Asana task creation from sidebar (with toast notifications)
   const handleSidebarAsanaCreate = useCallback(async (
     integrationId: string,
     name: string,
@@ -333,22 +303,17 @@ export default function Home() {
     }
   }, [createAsanaTask, toast]);
 
-  // Get connected Google integrations
   const connectedGoogleIntegrations = useMemo(
     () => settings?.googleIntegrations.filter(i => i.connected && i.enabled) || [],
     [settings]
   );
 
-  // Handle dropping a task onto the calendar
   const handleDropTask = useCallback((dragItem: DragItem, startTime: Date, endTime: Date) => {
     const dateStr = format(startTime, 'yyyy-MM-dd');
     const timeStr = format(startTime, 'HH:mm');
     const duration = Math.round((endTime.getTime() - startTime.getTime()) / (60 * 1000));
 
-    // Check if we should sync to Google Calendar and prompt for selection
-    // Always prompt when there are multiple calendars connected
     if (connectedGoogleIntegrations.length > 1) {
-      // Multiple calendars - show selection modal
       setCalendarSelectionModal({
         show: true,
         pendingDrop: { dragItem, startTime, endTime },
@@ -356,18 +321,11 @@ export default function Home() {
       return;
     }
 
-    // Single or no calendar - proceed immediately
     const integrationId = connectedGoogleIntegrations.length === 1 ? connectedGoogleIntegrations[0].id : undefined;
 
     if (dragItem.type === 'adhoc-task') {
-      // Update existing ad-hoc task with scheduled time and duration
-      updateTask(dragItem.id, {
-        dueDate: dateStr,
-        dueTime: timeStr,
-        duration,
-      });
+      updateTask(dragItem.id, { dueDate: dateStr, dueTime: timeStr, duration });
 
-      // Also create in Google Calendar if connected
       if (integrationId) {
         createGoogleEvent(integrationId, dragItem.title, startTime, endTime).then(googleEvent => {
           if (googleEvent) {
@@ -382,14 +340,11 @@ export default function Home() {
         });
       }
     } else if (dragItem.type === 'asana-task') {
-      // Find the Asana task to get its integration ID
       const asanaTask = allAsanaTasks.find(t => t.id === dragItem.id);
 
-      // Create Google event FIRST if connected, then link it to Asana schedule
       if (integrationId && asanaTask) {
         createGoogleEvent(integrationId, asanaTask.title, startTime, endTime).then(googleEvent => {
           if (googleEvent) {
-            // Schedule Asana task with Google event reference (unified display)
             scheduleAsana(
               dragItem.id,
               asanaTask.integrationId,
@@ -401,7 +356,6 @@ export default function Home() {
             );
             toast.success('Task scheduled and synced to Google Calendar');
           } else {
-            // Still schedule locally even if Google fails
             scheduleAsana(
               dragItem.id,
               asanaTask.integrationId,
@@ -413,7 +367,6 @@ export default function Home() {
           }
         });
       } else {
-        // No Google calendar - just schedule locally
         scheduleAsana(
           dragItem.id,
           asanaTask?.integrationId,
@@ -423,7 +376,6 @@ export default function Home() {
         );
       }
     } else if (dragItem.type === 'task-template') {
-      // Create a new ad-hoc task from the template
       addTask({
         title: dragItem.title,
         dueDate: dateStr,
@@ -433,11 +385,8 @@ export default function Home() {
         completed: false,
       }).then(newTask => {
         if (!newTask) return;
-
-        // Update with duration
         updateTask(newTask.id, { duration });
 
-        // Also create in Google Calendar if connected
         if (integrationId) {
           createGoogleEvent(integrationId, dragItem.title, startTime, endTime).then(googleEvent => {
             if (googleEvent) {
@@ -455,7 +404,6 @@ export default function Home() {
     }
   }, [updateTask, addTask, scheduleAsana, allAsanaTasks, connectedGoogleIntegrations, createGoogleEvent, toast]);
 
-  // Handle calendar selection from modal
   const handleCalendarSelection = useCallback((integrationId: string) => {
     const { pendingDrop } = calendarSelectionModal;
     if (!pendingDrop) return;
@@ -513,7 +461,6 @@ export default function Home() {
         });
       }
     } else if (dragItem.type === 'task-template') {
-      // Create a new ad-hoc task from the template
       addTask({
         title: dragItem.title,
         dueDate: dateStr,
@@ -523,8 +470,6 @@ export default function Home() {
         completed: false,
       }).then(newTask => {
         if (!newTask) return;
-
-        // Update with duration
         updateTask(newTask.id, { duration });
 
         createGoogleEvent(integrationId, dragItem.title, startTime, endTime).then(googleEvent => {
@@ -544,7 +489,6 @@ export default function Home() {
     setCalendarSelectionModal({ show: false, pendingDrop: null });
   }, [calendarSelectionModal, updateTask, addTask, scheduleAsana, allAsanaTasks, createGoogleEvent, toast]);
 
-  // Handle calendar selection for new task creation
   const handleTaskCreationCalendarSelection = useCallback((integrationId: string) => {
     if (!pendingTaskCreation) return;
 
@@ -565,7 +509,6 @@ export default function Home() {
     setPendingTaskCreation(null);
   }, [pendingTaskCreation, createGoogleEvent, updateTask, toast]);
 
-  // Handle moving/resizing an event on the calendar
   const handleEventMove = useCallback((
     eventId: string,
     source: 'adhoc' | 'asana' | 'google',
@@ -577,34 +520,18 @@ export default function Home() {
     const duration = Math.round((endTime.getTime() - startTime.getTime()) / (60 * 1000));
 
     if (source === 'adhoc') {
-      updateTask(eventId, {
-        dueDate: dateStr,
-        dueTime: timeStr,
-        duration,
-      });
+      updateTask(eventId, { dueDate: dateStr, dueTime: timeStr, duration });
     } else if (source === 'asana') {
-      updateScheduledAsana(eventId, {
-        scheduledDate: dateStr,
-        scheduledTime: timeStr,
-        duration,
-      });
+      updateScheduledAsana(eventId, { scheduledDate: dateStr, scheduledTime: timeStr, duration });
     } else if (source === 'google') {
-      // Find the Google event to get its integration ID
       const googleEvent = googleEvents.find(e => e.id === eventId);
       if (googleEvent?.integrationId) {
         updateGoogleEvent(eventId, googleEvent.integrationId, startTime, endTime);
       }
-
-      // Also update linked Asana schedule if present (keeps duration in sync)
-      updateScheduledAsanaByGoogleEvent(eventId, {
-        scheduledDate: dateStr,
-        scheduledTime: timeStr,
-        duration,
-      });
+      updateScheduledAsanaByGoogleEvent(eventId, { scheduledDate: dateStr, scheduledTime: timeStr, duration });
     }
   }, [updateTask, updateScheduledAsana, updateScheduledAsanaByGoogleEvent, updateGoogleEvent, googleEvents]);
 
-  // Handle adding a new task from the sidebar or creation modal
   const handleAddTask = useCallback(async (task: {
     title: string;
     description?: string;
@@ -625,18 +552,11 @@ export default function Home() {
       startTime.setHours(hours, minutes, 0, 0);
       const endTime = new Date(startTime.getTime() + task.duration * 60 * 1000);
 
-      // If multiple calendars, prompt for selection
       if (connectedGoogleIntegrations.length > 1) {
-        setPendingTaskCreation({
-          task,
-          taskId: newTask.id,
-          startTime,
-          endTime,
-        });
+        setPendingTaskCreation({ task, taskId: newTask.id, startTime, endTime });
         return newTask;
       }
 
-      // Single calendar - use it directly
       const integrationId = connectedGoogleIntegrations[0].id;
       createGoogleEvent(integrationId, task.title, startTime, endTime).then(googleEvent => {
         if (googleEvent) {
@@ -652,48 +572,38 @@ export default function Home() {
     return newTask;
   }, [addTask, connectedGoogleIntegrations, createGoogleEvent, updateTask, toast]);
 
-  // Handle creating a new task from timeline click-drag
   const handleTimelineCreateTask = useCallback((startTime: Date, endTime: Date) => {
     setCreateTaskModal({ show: true, startTime, endTime });
   }, []);
 
-  // Handle clicking a calendar event to highlight its Asana task in sidebar
   const handleEventClick = useCallback((event: CalendarEvent) => {
-    // Check if this is an Asana task (either directly or linked)
     const asanaTaskId = event.linkedAsanaTaskId || (event.source === 'asana' ? event.id : null);
     if (asanaTaskId) {
       setHighlightedAsanaTaskId(asanaTaskId);
     }
   }, []);
 
-  // Clear highlighted Asana task
   const handleClearHighlight = useCallback(() => {
     setHighlightedAsanaTaskId(null);
   }, []);
 
-  // Handle double-clicking a calendar event to open its task dialog
   const handleEventDoubleClick = useCallback((event: CalendarEvent) => {
-    // Check if this is an Asana task (either directly or linked)
     const asanaTaskId = event.linkedAsanaTaskId || (event.source === 'asana' ? event.id : null);
     if (asanaTaskId) {
       setOpenTaskDialogId(asanaTaskId);
     } else if (event.source === 'google') {
-      // Show Google Calendar event detail dialog
       setSelectedGoogleEvent(event);
     }
   }, []);
 
-  // Clear the open task dialog trigger
   const handleClearOpenTaskDialog = useCallback(() => {
     setOpenTaskDialogId(null);
   }, []);
 
-  // Handle delete event request (shows confirmation)
   const handleDeleteEventRequest = useCallback((event: CalendarEvent) => {
     setDeleteConfirmModal({ show: true, event });
   }, []);
 
-  // Handle confirmed event deletion
   const handleConfirmDelete = useCallback(async () => {
     const { event } = deleteConfirmModal;
     if (!event) return;
@@ -726,8 +636,6 @@ export default function Home() {
     setDeleteConfirmModal({ show: false, event: null });
   }, [deleteConfirmModal, deleteGoogleEvent, removeTask, unscheduleAsana, scheduledAsanaTasks, toast]);
 
-  // Memoized callbacks for sidebars to avoid recreating on every render
-  // Called from sidebar - unschedule all instances of an Asana task
   const handleUnscheduleAsana = useCallback((asanaTaskId: string) => {
     unscheduleAllAsanaInstances(asanaTaskId);
   }, [unscheduleAllAsanaInstances]);
@@ -743,7 +651,6 @@ export default function Home() {
       />
 
       <div className="flex flex-1 min-h-0">
-        {/* Asana Sidebar - Left (fixed) */}
         <aside className="w-72 flex-shrink-0 overflow-hidden">
           <AsanaSidebar
             tasks={filteredAsanaTasks}
@@ -770,14 +677,10 @@ export default function Home() {
           />
         </aside>
 
-        {/* Main content - this is the only scrollable area */}
         <main className={`flex-1 overflow-y-auto px-4 py-6 ${colorScheme.mainBg}`}>
           <div className="max-w-5xl mx-auto">
-            {settings && (
-              <IntegrationStatus settings={settings} />
-            )}
+            {settings && <IntegrationStatus settings={settings} />}
 
-            {/* Events display */}
             <div className="bg-white rounded-lg border shadow-sm p-4">
               {isLoading ? (
                 <div className="flex items-center justify-center py-12">
@@ -799,7 +702,6 @@ export default function Home() {
           </div>
         </main>
 
-        {/* Task Sidebar - Right (templates and all-day events) */}
         <aside className="w-72 flex-shrink-0 overflow-hidden">
           <TaskSidebar
             allDayEvents={allDayEvents}
@@ -808,7 +710,6 @@ export default function Home() {
         </aside>
       </div>
 
-      {/* Calendar Selection Modal (for drag & drop) */}
       {calendarSelectionModal.show && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm w-full mx-4">
@@ -835,7 +736,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* Calendar Selection Modal (for new task creation) */}
       {pendingTaskCreation && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm w-full mx-4">
@@ -862,7 +762,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
       {deleteConfirmModal.show && deleteConfirmModal.event && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm w-full mx-4">
@@ -893,7 +792,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* Task Creation Modal (from timeline click-drag) */}
       <AddTaskModal
         isOpen={createTaskModal.show}
         onClose={() => setCreateTaskModal({ show: false, startTime: null, endTime: null })}
@@ -903,16 +801,25 @@ export default function Home() {
         defaultEndTime={createTaskModal.endTime || undefined}
       />
 
-      {/* Google Calendar Event Detail Dialog */}
       {selectedGoogleEvent && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col">
-            {/* Header */}
             <div className="flex items-start justify-between p-4 border-b">
               <div className="flex-1 min-w-0">
-                <h2 className="text-lg font-semibold text-gray-900 truncate">
-                  {selectedGoogleEvent.title}
-                </h2>
+                {isEditingGoogleEvent ? (
+                  <input
+                    type="text"
+                    value={editingGoogleEventTitle}
+                    onChange={(e) => setEditingGoogleEventTitle(e.target.value)}
+                    className="w-full text-lg font-semibold text-gray-900 border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Event title"
+                    autoFocus
+                  />
+                ) : (
+                  <h2 className="text-lg font-semibold text-gray-900 truncate">
+                    {selectedGoogleEvent.title}
+                  </h2>
+                )}
                 <p className="text-sm text-gray-500 mt-1">
                   {format(selectedGoogleEvent.startTime, 'EEEE, MMMM d, yyyy')}
                 </p>
@@ -926,7 +833,10 @@ export default function Home() {
                 )}
               </div>
               <button
-                onClick={() => setSelectedGoogleEvent(null)}
+                onClick={() => {
+                  setSelectedGoogleEvent(null);
+                  setIsEditingGoogleEvent(false);
+                }}
                 className="p-1 hover:bg-gray-100 rounded-full transition-colors ml-2"
               >
                 <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -935,7 +845,6 @@ export default function Home() {
               </button>
             </div>
 
-            {/* Content */}
             <div className="p-4 overflow-y-auto flex-1">
               {selectedGoogleEvent.location && (
                 <div className="mb-4">
@@ -944,40 +853,120 @@ export default function Home() {
                 </div>
               )}
 
-              {selectedGoogleEvent.description ? (
+              {isEditingGoogleEvent ? (
                 <div>
                   <h3 className="text-sm font-medium text-gray-700 mb-1">Description</h3>
-                  <div className="text-sm text-gray-600 whitespace-pre-wrap break-words">
-                    {selectedGoogleEvent.description.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
-                      part.match(/^https?:\/\//) ? (
-                        <a
-                          key={i}
-                          href={part}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-600 hover:text-blue-800 hover:underline break-all"
-                        >
-                          {part}
-                        </a>
-                      ) : (
-                        <span key={i}>{part}</span>
-                      )
-                    )}
-                  </div>
+                  <textarea
+                    value={editingGoogleEventDescription}
+                    onChange={(e) => setEditingGoogleEventDescription(e.target.value)}
+                    className="w-full h-40 text-sm text-gray-600 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                    placeholder="Add a description..."
+                  />
                 </div>
               ) : (
-                <p className="text-sm text-gray-400 italic">No description</p>
+                <>
+                  {selectedGoogleEvent.description ? (
+                    <div>
+                      <h3 className="text-sm font-medium text-gray-700 mb-1">Description</h3>
+                      <div className="text-sm text-gray-600 whitespace-pre-wrap break-words">
+                        {(() => {
+                          const displayText = containsHtml(selectedGoogleEvent.description)
+                            ? htmlToReadableText(selectedGoogleEvent.description)
+                            : selectedGoogleEvent.description;
+
+                          return displayText.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
+                            part.match(/^https?:\/\//) ? (
+                              <a
+                                key={i}
+                                href={part}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:text-blue-800 hover:underline break-all"
+                              >
+                                {part}
+                              </a>
+                            ) : (
+                              <span key={i}>{part}</span>
+                            )
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-400 italic">No description</p>
+                  )}
+                </>
               )}
             </div>
 
-            {/* Footer */}
             <div className="p-4 border-t bg-gray-50">
-              <button
-                onClick={() => setSelectedGoogleEvent(null)}
-                className="w-full px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors"
-              >
-                Close
-              </button>
+              {isEditingGoogleEvent ? (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setIsEditingGoogleEvent(false)}
+                    disabled={isSavingGoogleEvent}
+                    className="flex-1 px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!selectedGoogleEvent.integrationId) {
+                        toast.error('Cannot update event: missing integration ID');
+                        return;
+                      }
+                      setIsSavingGoogleEvent(true);
+                      const result = await updateGoogleEvent(
+                        selectedGoogleEvent.id,
+                        selectedGoogleEvent.integrationId,
+                        selectedGoogleEvent.startTime,
+                        selectedGoogleEvent.endTime,
+                        editingGoogleEventTitle,
+                        editingGoogleEventDescription
+                      );
+                      setIsSavingGoogleEvent(false);
+                      if (result.success) {
+                        setSelectedGoogleEvent({
+                          ...selectedGoogleEvent,
+                          title: editingGoogleEventTitle,
+                          description: editingGoogleEventDescription || undefined,
+                        });
+                        setIsEditingGoogleEvent(false);
+                        toast.success('Event updated');
+                      } else {
+                        toast.error(result.error || 'Failed to update event');
+                      }
+                    }}
+                    disabled={isSavingGoogleEvent}
+                    className="flex-1 px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                  >
+                    {isSavingGoogleEvent ? 'Saving...' : 'Save'}
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      setSelectedGoogleEvent(null);
+                      setIsEditingGoogleEvent(false);
+                    }}
+                    className="flex-1 px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditingGoogleEventTitle(selectedGoogleEvent.title);
+                      const desc = selectedGoogleEvent.description || '';
+                      setEditingGoogleEventDescription(containsHtml(desc) ? htmlToReadableText(desc) : desc);
+                      setIsEditingGoogleEvent(true);
+                    }}
+                    className="flex-1 px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    Edit
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>

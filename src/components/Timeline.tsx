@@ -99,9 +99,9 @@ const HOUR_HEIGHT = 60;
 const START_HOUR = 6;
 const END_HOUR = 23;
 const SNAP_MINUTES = 15;
-const MIN_EVENT_HEIGHT = HOUR_HEIGHT * SNAP_MINUTES / 60; // 15px = 15 minutes
+const SNAP_HEIGHT = (HOUR_HEIGHT * SNAP_MINUTES) / 60;
+const MIN_EVENT_HEIGHT = SNAP_HEIGHT;
 
-// Convert Y position to time
 function yToTime(y: number, selectedDate: Date): Date {
   const hours = y / HOUR_HEIGHT + START_HOUR;
   const totalMinutes = hours * 60;
@@ -112,7 +112,6 @@ function yToTime(y: number, selectedDate: Date): Date {
   return date;
 }
 
-// Convert time to Y position
 function timeToY(time: Date): number {
   const hours = time.getHours() + time.getMinutes() / 60;
   return (hours - START_HOUR) * HOUR_HEIGHT;
@@ -132,11 +131,8 @@ export function Timeline({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [dropPreviewY, setDropPreviewY] = useState<number | null>(null);
-
-  // Get current time for checking if events are in the past
   const now = useMemo(() => new Date(), []);
 
-  // Event dragging state
   const [draggingEvent, setDraggingEvent] = useState<{
     event: CalendarEvent;
     mode: 'move' | 'resize-top' | 'resize-bottom';
@@ -145,8 +141,6 @@ export function Timeline({
     originalHeight: number;
   } | null>(null);
   const [dragOffset, setDragOffset] = useState({ top: 0, height: 0 });
-
-  // Click-and-drag task creation state
   const [isCreatingEvent, setIsCreatingEvent] = useState(false);
   const [creationStartY, setCreationStartY] = useState<number | null>(null);
   const [creationEndY, setCreationEndY] = useState<number | null>(null);
@@ -196,46 +190,29 @@ export function Timeline({
     return styles;
   }, [positionedEvents]);
 
-  // Current time for the indicator line - check if viewing today
   const isToday = useMemo(() => {
     const today = new Date();
     return selectedDate.toDateString() === today.toDateString();
   }, [selectedDate]);
 
-  // Current time state - updates every minute
   const [currentTime, setCurrentTime] = useState(() => new Date());
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 60 * 1000); // Update every minute
-
+    const interval = setInterval(() => setCurrentTime(new Date()), 60 * 1000);
     return () => clearInterval(interval);
   }, []);
 
-  // Current time position
   const currentTimePosition = useMemo(() => {
     const hours = currentTime.getHours() + currentTime.getMinutes() / 60;
     return (hours - START_HOUR) * HOUR_HEIGHT;
   }, [currentTime]);
 
-  // Format current time as HH:mm (24 hour)
-  const currentTimeLabel = useMemo(() => {
-    return format(currentTime, 'HH:mm');
-  }, [currentTime]);
-
-  // Memoize current hour - updates with currentTime
+  const currentTimeLabel = useMemo(() => format(currentTime, 'HH:mm'), [currentTime]);
   const currentHour = useMemo(() => currentTime.getHours(), [currentTime]);
+  const hourLabels = useMemo(() => hours.map(hour => format(new Date(2000, 0, 1, hour, 0, 0, 0), 'h a')), [hours]);
 
-  // Pre-compute hour labels once
-  const hourLabels = useMemo(() => {
-    return hours.map(hour => format(new Date(2000, 0, 1, hour, 0, 0, 0), 'h a'));
-  }, [hours]);
-
-  // Auto-scroll to current time on mount (only for today)
   useEffect(() => {
     if (isToday && scrollContainerRef.current) {
-      // Calculate scroll position to center the current time
       const scrollContainer = scrollContainerRef.current.closest('.overflow-y-auto');
       if (scrollContainer) {
         const containerHeight = scrollContainer.clientHeight;
@@ -245,7 +222,6 @@ export function Timeline({
     }
   }, [isToday, currentTimePosition]);
 
-  // Check if an event is in the past
   const isEventPast = useCallback((event: CalendarEvent) => {
     if (!isToday) return selectedDate < new Date(new Date().setHours(0, 0, 0, 0));
     return event.endTime < now;
@@ -278,17 +254,15 @@ export function Timeline({
     return baseStyle;
   }, [eventStyles, draggingEvent, dragOffset]);
 
-  // Handle external drop (from sidebars)
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    // Use 'copy' for templates, 'move' for other items
     e.dataTransfer.dropEffect = e.dataTransfer.effectAllowed === 'copy' ? 'copy' : 'move';
     setIsDraggingOver(true);
 
     if (containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
       const y = e.clientY - rect.top;
-      const snappedY = Math.round(y / (HOUR_HEIGHT * SNAP_MINUTES / 60)) * (HOUR_HEIGHT * SNAP_MINUTES / 60);
+      const snappedY = Math.round(y / (SNAP_HEIGHT)) * (SNAP_HEIGHT);
       setDropPreviewY(Math.max(0, Math.min(snappedY, hours.length * HOUR_HEIGHT - HOUR_HEIGHT)));
     }
   }, [hours.length]);
@@ -326,7 +300,6 @@ export function Timeline({
     }
   }, [selectedDate, onDropTask]);
 
-  // Handle event move/resize
   const handleEventMouseDown = useCallback((
     e: React.MouseEvent,
     event: CalendarEvent,
@@ -347,7 +320,7 @@ export function Timeline({
     if (!draggingEvent) return;
 
     const deltaY = e.clientY - draggingEvent.startY;
-    const snappedDelta = Math.round(deltaY / (HOUR_HEIGHT * SNAP_MINUTES / 60)) * (HOUR_HEIGHT * SNAP_MINUTES / 60);
+    const snappedDelta = Math.round(deltaY / (SNAP_HEIGHT)) * (SNAP_HEIGHT);
 
     if (draggingEvent.mode === 'move') {
       setDragOffset({ top: snappedDelta, height: 0 });
@@ -385,59 +358,58 @@ export function Timeline({
     setDragOffset({ top: 0, height: 0 });
   }, [draggingEvent, dragOffset, hours.length, selectedDate, onEventMove]);
 
-  // Format drop preview time - memoized
   const dropPreviewTime = useMemo(() => {
     if (dropPreviewY === null) return '';
     const time = yToTime(dropPreviewY, selectedDate);
     return format(time, 'h:mm a');
   }, [dropPreviewY, selectedDate]);
 
-  // Check if a Y position overlaps with any existing event
-  const doesOverlapWithEvents = useCallback((y: number, height: number = HOUR_HEIGHT / 2) => {
+  const doesOverlapWithEvents = useCallback((x: number, y: number, containerWidth: number, height: number = HOUR_HEIGHT / 2) => {
     const startTime = yToTime(y, selectedDate);
     const endTime = yToTime(y + height, selectedDate);
 
-    return events.some(event =>
-      startTime < event.endTime && endTime > event.startTime
+    const timeOverlappingEvents = positionedEvents.filter(pos =>
+      startTime < pos.event.endTime && endTime > pos.event.startTime
     );
-  }, [events, selectedDate]);
 
-  // Handle click-and-drag task creation - mouse down on empty space
+    if (timeOverlappingEvents.length === 0) return false;
+
+    return timeOverlappingEvents.some(pos => {
+      const { column, totalColumns } = pos;
+      const colWidth = containerWidth / totalColumns;
+      const eventLeft = column * colWidth + 2;
+      const eventRight = (column + 1) * colWidth - 2;
+      return x >= eventLeft && x <= eventRight;
+    });
+  }, [positionedEvents, selectedDate]);
+
   const handleEmptySpaceMouseDown = useCallback((e: React.MouseEvent) => {
-    // Only start creation if clicking on empty space (not an event)
     if (!onCreateTask) return;
     if ((e.target as HTMLElement).closest('.event-card-wrapper')) return;
-
-    // Don't start if we're dragging an event
     if (draggingEvent) return;
 
     if (containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      const snappedY = Math.round(y / (HOUR_HEIGHT * SNAP_MINUTES / 60)) * (HOUR_HEIGHT * SNAP_MINUTES / 60);
+      const snappedY = Math.round(y / SNAP_HEIGHT) * SNAP_HEIGHT;
 
-      // Check if this position overlaps with an event
-      if (doesOverlapWithEvents(snappedY)) return;
+      if (doesOverlapWithEvents(x, snappedY, rect.width)) return;
 
       setIsCreatingEvent(true);
       setCreationStartY(snappedY);
-      setCreationEndY(snappedY + (HOUR_HEIGHT / 2)); // Default 30 min
+      setCreationEndY(snappedY + HOUR_HEIGHT / 2);
     }
   }, [onCreateTask, draggingEvent, doesOverlapWithEvents]);
 
-  // Handle creation mouse move
   const handleCreationMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isCreatingEvent || creationStartY === null) return;
 
     if (containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
       const y = e.clientY - rect.top;
-      const snappedY = Math.round(y / (HOUR_HEIGHT * SNAP_MINUTES / 60)) * (HOUR_HEIGHT * SNAP_MINUTES / 60);
-
-      // Clamp to valid range
+      const snappedY = Math.round(y / SNAP_HEIGHT) * SNAP_HEIGHT;
       const clampedY = Math.max(0, Math.min(snappedY, hours.length * HOUR_HEIGHT));
-
-      // Ensure minimum height of 15 minutes
       const minHeight = MIN_EVENT_HEIGHT;
       if (clampedY >= creationStartY) {
         setCreationEndY(Math.max(clampedY, creationStartY + minHeight));
@@ -448,7 +420,6 @@ export function Timeline({
     }
   }, [isCreatingEvent, creationStartY, hours.length]);
 
-  // Handle creation mouse up
   const handleCreationMouseUp = useCallback(() => {
     if (!isCreatingEvent || creationStartY === null || creationEndY === null) {
       setIsCreatingEvent(false);
@@ -463,7 +434,6 @@ export function Timeline({
     const startTime = yToTime(startY, selectedDate);
     const endTime = yToTime(endY, selectedDate);
 
-    // Only trigger if we have a valid selection (at least 15 minutes)
     if (endTime.getTime() - startTime.getTime() >= 15 * 60 * 1000) {
       onCreateTask?.(startTime, endTime);
     }
@@ -473,7 +443,6 @@ export function Timeline({
     setCreationEndY(null);
   }, [isCreatingEvent, creationStartY, creationEndY, selectedDate, onCreateTask]);
 
-  // Creation preview box
   const creationPreview = useMemo(() => {
     if (!isCreatingEvent || creationStartY === null || creationEndY === null) return null;
 
@@ -491,7 +460,6 @@ export function Timeline({
     };
   }, [isCreatingEvent, creationStartY, creationEndY, selectedDate]);
 
-  // Combined mouse move handler
   const handleCombinedMouseMove = useCallback((e: React.MouseEvent) => {
     if (draggingEvent) {
       handleMouseMove(e);
@@ -500,7 +468,6 @@ export function Timeline({
     }
   }, [draggingEvent, handleMouseMove, isCreatingEvent, handleCreationMouseMove]);
 
-  // Combined mouse up handler
   const handleCombinedMouseUp = useCallback(() => {
     if (draggingEvent) {
       handleMouseUp();
@@ -531,9 +498,7 @@ export function Timeline({
       onMouseUp={handleCombinedMouseUp}
       onMouseLeave={handleCombinedMouseUp}
     >
-      {/* Timeline */}
       <div className="relative">
-        {/* Hour grid */}
         {hours.map((hour, index) => {
           const isCurrentHour = hour === currentHour;
 
@@ -559,19 +524,15 @@ export function Timeline({
           );
         })}
 
-        {/* Events overlay - also serves as drop zone and creation area */}
         <div
           ref={containerRef}
-          className={`absolute top-0 left-20 right-0 ${
-            isDraggingOver ? 'bg-purple-50/30' : ''
-          } ${onCreateTask ? 'cursor-crosshair' : ''}`}
+          className={`absolute top-0 left-20 right-0 ${isDraggingOver ? 'bg-purple-50/30' : ''} ${onCreateTask ? 'cursor-crosshair' : ''}`}
           style={{ height: `${hours.length * HOUR_HEIGHT}px` }}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onMouseDown={handleEmptySpaceMouseDown}
         >
-          {/* Drop preview line */}
           {isDraggingOver && dropPreviewY !== null && (
             <div
               className="absolute left-0 right-0 flex items-center pointer-events-none z-50"
@@ -584,7 +545,6 @@ export function Timeline({
             </div>
           )}
 
-          {/* Current time indicator - red line with time label */}
           {isToday && currentTimePosition >= 0 && currentTimePosition <= hours.length * HOUR_HEIGHT && (
             <div
               className="absolute z-20 pointer-events-none"
@@ -600,7 +560,6 @@ export function Timeline({
             </div>
           )}
 
-          {/* Creation preview box */}
           {creationPreview && (
             <div
               className="absolute left-1 right-1 bg-purple-500/20 border-2 border-purple-500 border-dashed rounded-lg pointer-events-none z-40"
@@ -622,7 +581,6 @@ export function Timeline({
             const canDrag = pos.event.source === 'adhoc' || pos.event.source === 'asana' || pos.event.source === 'google';
             const eventStyle = getEventStyle(pos);
             const eventHeight = parseFloat(String(eventStyle.height || '0'));
-            // For small events, hide top resize handle (overlaps delete button) but keep bottom handle for lengthening
             const showTopResizeHandle = canDrag && eventHeight > 25;
             const showBottomResizeHandle = canDrag;
 
@@ -632,7 +590,6 @@ export function Timeline({
                 style={eventStyle}
                 className="group event-card-wrapper"
               >
-                {/* Resize handle - top (only for larger events to avoid overlapping delete button) */}
                 {showTopResizeHandle && (
                   <div
                     className="absolute top-0 left-0 right-0 h-2 cursor-ns-resize z-10 hover:bg-gray-400/20"
@@ -640,25 +597,21 @@ export function Timeline({
                   />
                 )}
 
-                {/* Event card - mouse drag for vertical move within calendar */}
                 <div
                   className={`h-full ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''}`}
                   onMouseDown={(e) => {
-                    // Only trigger move if not clicking resize handles or other interactive elements
                     const target = e.target as HTMLElement;
                     if (!target.closest('.cursor-ns-resize') && !target.closest('button') && canDrag) {
                       handleEventMouseDown(e, pos.event, 'move');
                     }
                   }}
                   onClick={(e) => {
-                    // Trigger event click to highlight in sidebar (only if not dragging)
                     if (!draggingEvent && onEventClick) {
                       e.stopPropagation();
                       onEventClick(pos.event);
                     }
                   }}
                   onDoubleClick={(e) => {
-                    // Trigger double-click to open task detail popup (only if not dragging)
                     if (!draggingEvent && onEventDoubleClick) {
                       e.stopPropagation();
                       onEventDoubleClick(pos.event);
@@ -674,7 +627,6 @@ export function Timeline({
                   />
                 </div>
 
-                {/* Resize handle - bottom (always shown for lengthening events) */}
                 {showBottomResizeHandle && (
                   <div
                     className="absolute bottom-0 left-0 right-0 h-2 cursor-ns-resize z-10 hover:bg-gray-400/20"

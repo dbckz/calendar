@@ -1,7 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getCalendarEvents, refreshAccessToken, updateCalendarEvent, createCalendarEvent, deleteCalendarEvent } from '@/lib/google-calendar';
+import { createCalendarEvent, deleteCalendarEvent, getCalendarEvents, refreshAccessToken, updateCalendarEvent } from '@/lib/google-calendar';
 import { getEnabledGoogleIntegrations, getGoogleIntegrationById, updateIntegration } from '@/lib/integration-storage';
-import { CalendarEvent, GoogleIntegration } from '@/types';
+import { CalendarEvent, GoogleCalendarCredentials, GoogleIntegration } from '@/types';
+
+/**
+ * Ensures credentials are valid, refreshing if needed.
+ * Returns refreshed credentials and updates storage.
+ */
+async function ensureValidCredentials(integration: GoogleIntegration): Promise<GoogleCalendarCredentials> {
+  let credentials = integration.credentials!;
+
+  if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
+    credentials = await refreshAccessToken(
+      credentials,
+      integration.clientId,
+      integration.clientSecret
+    );
+    await updateIntegration(integration.id, { credentials });
+  }
+
+  return credentials;
+}
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -53,20 +72,7 @@ async function fetchEventsFromIntegration(
     return [];
   }
 
-  let credentials = integration.credentials;
-
-  // Check if token needs refresh
-  if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
-    credentials = await refreshAccessToken(
-      credentials,
-      integration.clientId,
-      integration.clientSecret
-    );
-
-    // Update stored credentials
-    await updateIntegration(integration.id, { credentials });
-  }
-
+  const credentials = await ensureValidCredentials(integration);
   const events = await getCalendarEvents(
     credentials,
     integration.clientId,
@@ -74,7 +80,6 @@ async function fetchEventsFromIntegration(
     date
   );
 
-  // Add integration metadata to each event
   return events.map(event => ({
     ...event,
     integrationId: integration.id,
@@ -82,10 +87,28 @@ async function fetchEventsFromIntegration(
   }));
 }
 
+/**
+ * Validates integration exists and has credentials.
+ * Returns the integration or an error response.
+ */
+async function getValidatedIntegration(integrationId: string): Promise<
+  | { integration: GoogleIntegration; error?: never }
+  | { integration?: never; error: NextResponse }
+> {
+  const integration = await getGoogleIntegrationById(integrationId);
+  if (!integration) {
+    return { error: NextResponse.json({ error: 'Integration not found' }, { status: 404 }) };
+  }
+  if (!integration.credentials) {
+    return { error: NextResponse.json({ error: 'Integration not authenticated' }, { status: 401 }) };
+  }
+  return { integration };
+}
+
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
-    const { eventId, integrationId, startTime, endTime } = body;
+    const { eventId, integrationId, startTime, endTime, title, description } = body;
 
     if (!eventId || !integrationId || !startTime || !endTime) {
       return NextResponse.json(
@@ -94,43 +117,20 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const integration = await getGoogleIntegrationById(integrationId);
+    const result = await getValidatedIntegration(integrationId);
+    if (result.error) return result.error;
+    const { integration } = result;
 
-    if (!integration) {
-      return NextResponse.json(
-        { error: 'Integration not found' },
-        { status: 404 }
-      );
-    }
-
-    if (!integration.credentials) {
-      return NextResponse.json(
-        { error: 'Integration not authenticated' },
-        { status: 401 }
-      );
-    }
-
-    let credentials = integration.credentials;
-
-    // Check if token needs refresh
-    if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
-      credentials = await refreshAccessToken(
-        credentials,
-        integration.clientId,
-        integration.clientSecret
-      );
-
-      // Update stored credentials
-      await updateIntegration(integration.id, { credentials });
-    }
-
+    const credentials = await ensureValidCredentials(integration);
     const updatedEvent = await updateCalendarEvent(
       credentials,
       integration.clientId,
       integration.clientSecret,
       eventId,
       new Date(startTime),
-      new Date(endTime)
+      new Date(endTime),
+      title,
+      description
     );
 
     return NextResponse.json({
@@ -159,36 +159,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const integration = await getGoogleIntegrationById(integrationId);
+    const result = await getValidatedIntegration(integrationId);
+    if (result.error) return result.error;
+    const { integration } = result;
 
-    if (!integration) {
-      return NextResponse.json(
-        { error: 'Integration not found' },
-        { status: 404 }
-      );
-    }
-
-    if (!integration.credentials) {
-      return NextResponse.json(
-        { error: 'Integration not authenticated' },
-        { status: 401 }
-      );
-    }
-
-    let credentials = integration.credentials;
-
-    // Check if token needs refresh
-    if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
-      credentials = await refreshAccessToken(
-        credentials,
-        integration.clientId,
-        integration.clientSecret
-      );
-
-      // Update stored credentials
-      await updateIntegration(integration.id, { credentials });
-    }
-
+    const credentials = await ensureValidCredentials(integration);
     const createdEvent = await createCalendarEvent(
       credentials,
       integration.clientId,
@@ -225,36 +200,11 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    const integration = await getGoogleIntegrationById(integrationId);
+    const result = await getValidatedIntegration(integrationId);
+    if (result.error) return result.error;
+    const { integration } = result;
 
-    if (!integration) {
-      return NextResponse.json(
-        { error: 'Integration not found' },
-        { status: 404 }
-      );
-    }
-
-    if (!integration.credentials) {
-      return NextResponse.json(
-        { error: 'Integration not authenticated' },
-        { status: 401 }
-      );
-    }
-
-    let credentials = integration.credentials;
-
-    // Check if token needs refresh
-    if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
-      credentials = await refreshAccessToken(
-        credentials,
-        integration.clientId,
-        integration.clientSecret
-      );
-
-      // Update stored credentials
-      await updateIntegration(integration.id, { credentials });
-    }
-
+    const credentials = await ensureValidCredentials(integration);
     await deleteCalendarEvent(
       credentials,
       integration.clientId,
