@@ -333,5 +333,13 @@ export interface TaskTemplate {
   duration: number; // default duration in minutes
   priority: 'low' | 'medium' | 'high';
   taskType: TaskType;
+  group?: string; // group name for organization
   createdAt: string;
+}
+
+// Groups for organizing task templates
+export interface TemplateGroup {
+  id: string;
+  name: string;
+  order: number;
 }

@@ -6,8 +6,8 @@ import { Header } from '@/components/Header';
 import { Timeline } from '@/components/Timeline';
 import { IntegrationStatus } from '@/components/IntegrationStatus';
 import { AsanaSidebar } from '@/components/AsanaSidebar';
-import { TaskSidebar } from '@/components/TaskSidebar';
 import { AddTaskModal } from '@/components/AddTaskModal';
+import { AllDayEventsBar } from '@/components/AllDayEventsBar';
 import { useTasks } from '@/hooks/useTasks';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { useToast } from '@/hooks/useToast';
@@ -181,20 +181,21 @@ export default function Home() {
       });
   }, [toast]);
 
+  // Check if an event falls on a specific date
+  const isEventOnDate = useCallback((event: CalendarEvent, targetDate: string): boolean => {
+    const startDateStr = format(event.startTime, 'yyyy-MM-dd');
+    const endDateStr = format(event.endTime, 'yyyy-MM-dd');
+
+    // All-day events have exclusive end dates (Jan 15-16 = 1-day event on Jan 15)
+    if (event.allDay) {
+      return targetDate >= startDateStr && targetDate < endDateStr;
+    }
+    return startDateStr === targetDate;
+  }, []);
+
   // Combine calendar events, filtering out duplicates from synced Google events
   const allEvents = useMemo((): CalendarEvent[] => {
     const dateStr = format(selectedDate, 'yyyy-MM-dd');
-
-    const isEventOnDate = (event: CalendarEvent, targetDate: string): boolean => {
-      const startDateStr = format(event.startTime, 'yyyy-MM-dd');
-      const endDateStr = format(event.endTime, 'yyyy-MM-dd');
-
-      // All-day events have exclusive end dates (Jan 15-16 = 1-day event on Jan 15)
-      if (event.allDay) {
-        return targetDate >= startDateStr && targetDate < endDateStr;
-      }
-      return startDateStr === targetDate;
-    };
 
     const filteredGoogleEvents = googleEvents.filter(event => isEventOnDate(event, dateStr));
 
@@ -223,7 +224,7 @@ export default function Home() {
     });
 
     return [...enrichedGoogleEvents, ...adhocEvents, ...scheduledAsanaEvents];
-  }, [googleEvents, selectedDate, getTasksForDate, adhocToCalendarEvent, getScheduledAsanaEventsForDate, scheduledAsanaTasks]);
+  }, [googleEvents, selectedDate, getTasksForDate, adhocToCalendarEvent, getScheduledAsanaEventsForDate, scheduledAsanaTasks, isEventOnDate]);
 
   // Separate all-day events from timed events
   const allDayEvents = useMemo(() => allEvents.filter(e => e.allDay), [allEvents]);
@@ -494,7 +495,7 @@ export default function Home() {
 
     const { task, taskId, startTime, endTime } = pendingTaskCreation;
 
-    createGoogleEvent(integrationId, task.title, startTime, endTime).then(googleEvent => {
+    createGoogleEvent(integrationId, task.title, startTime, endTime, task.description).then(googleEvent => {
       if (googleEvent) {
         updateTask(taskId, {
           googleEventId: googleEvent.id,
@@ -558,7 +559,7 @@ export default function Home() {
       }
 
       const integrationId = connectedGoogleIntegrations[0].id;
-      createGoogleEvent(integrationId, task.title, startTime, endTime).then(googleEvent => {
+      createGoogleEvent(integrationId, task.title, startTime, endTime, task.description).then(googleEvent => {
         if (googleEvent) {
           updateTask(newTask.id, {
             googleEventId: googleEvent.id,
@@ -604,36 +605,35 @@ export default function Home() {
     setDeleteConfirmModal({ show: true, event });
   }, []);
 
-  const handleConfirmDelete = useCallback(async () => {
+  const handleConfirmDelete = useCallback(() => {
     const { event } = deleteConfirmModal;
     if (!event) return;
 
-    try {
-      if (event.source === 'google' && event.integrationId) {
-        const success = await deleteGoogleEvent(event.id, event.integrationId);
+    // Close modal immediately for better UX
+    setDeleteConfirmModal({ show: false, event: null });
+
+    if (event.source === 'google' && event.integrationId) {
+      // Also unschedule linked Asana schedule if present (find by googleEventId)
+      const linkedSchedule = scheduledAsanaTasks.find(s => s.googleEventId === event.id);
+      if (linkedSchedule) {
+        unscheduleAsana(linkedSchedule.id);
+      }
+      // deleteGoogleEvent is already optimistic - it removes from UI immediately
+      deleteGoogleEvent(event.id, event.integrationId).then(success => {
         if (success) {
-          // Also unschedule linked Asana schedule if present (find by googleEventId)
-          const linkedSchedule = scheduledAsanaTasks.find(s => s.googleEventId === event.id);
-          if (linkedSchedule) {
-            unscheduleAsana(linkedSchedule.id);
-          }
           toast.success('Event deleted from Google Calendar');
         } else {
           toast.error('Failed to delete event from Google Calendar');
         }
-      } else if (event.source === 'adhoc') {
-        removeTask(event.id);
-        toast.success('Task deleted');
-      } else if (event.source === 'asana') {
-        // event.id is the schedule ID for Asana events
-        unscheduleAsana(event.id);
-        toast.success('Task unscheduled');
-      }
-    } catch {
-      toast.error('Failed to delete event');
+      });
+    } else if (event.source === 'adhoc') {
+      removeTask(event.id);
+      toast.success('Task deleted');
+    } else if (event.source === 'asana') {
+      // event.id is the schedule ID for Asana events
+      unscheduleAsana(event.id);
+      toast.success('Task unscheduled');
     }
-
-    setDeleteConfirmModal({ show: false, event: null });
   }, [deleteConfirmModal, deleteGoogleEvent, removeTask, unscheduleAsana, scheduledAsanaTasks, toast]);
 
   const handleUnscheduleAsana = useCallback((asanaTaskId: string) => {
@@ -651,6 +651,7 @@ export default function Home() {
       />
 
       <div className="flex flex-1 min-h-0">
+        {/* Left sidebar: OM Asana workspace */}
         <aside className="w-72 flex-shrink-0 overflow-hidden">
           <AsanaSidebar
             tasks={filteredAsanaTasks}
@@ -658,6 +659,7 @@ export default function Home() {
             scheduledAsanaTasks={scheduledAsanaTasks}
             onUnschedule={handleUnscheduleAsana}
             colorScheme={colorScheme}
+            lockedIntegrationId="68a7249c-78bb-40e4-bc9d-37fc4a306aea"
             projects={asanaProjects}
             typeValues={asanaTypeValues}
             typeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
@@ -681,6 +683,8 @@ export default function Home() {
           <div className="max-w-5xl mx-auto">
             {settings && <IntegrationStatus settings={settings} />}
 
+            <AllDayEventsBar events={allDayEvents} />
+
             <div className="bg-white rounded-lg border shadow-sm p-4">
               {isLoading ? (
                 <div className="flex items-center justify-center py-12">
@@ -702,10 +706,31 @@ export default function Home() {
           </div>
         </main>
 
+        {/* Right sidebar: DBC Asana workspace */}
         <aside className="w-72 flex-shrink-0 overflow-hidden">
-          <TaskSidebar
-            allDayEvents={allDayEvents}
+          <AsanaSidebar
+            tasks={filteredAsanaTasks}
+            isLoading={isLoading}
+            scheduledAsanaTasks={scheduledAsanaTasks}
+            onUnschedule={handleUnscheduleAsana}
             colorScheme={colorScheme}
+            lockedIntegrationId="a45421fa-02ad-41a7-9d68-dcdf4fdb432d"
+            projects={asanaProjects}
+            typeValues={asanaTypeValues}
+            typeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
+            integrations={asanaIntegrations}
+            filters={asanaFilters}
+            onFiltersChange={setAsanaFilters}
+            onClearFilters={clearAsanaFilters}
+            onToggleComplete={handleSidebarAsanaComplete}
+            onAddComment={handleSidebarAsanaComment}
+            onCreateTask={handleSidebarAsanaCreate}
+            onUpdateTask={handleSidebarAsanaUpdate}
+            onDeleteTask={handleSidebarAsanaDelete}
+            highlightedTaskId={highlightedAsanaTaskId}
+            onClearHighlight={handleClearHighlight}
+            openTaskDialogId={openTaskDialogId}
+            onClearOpenTaskDialog={handleClearOpenTaskDialog}
           />
         </aside>
       </div>

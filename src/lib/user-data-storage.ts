@@ -1,12 +1,9 @@
 // Server-side storage for user data (task templates, custom types, ad-hoc tasks, scheduled tasks)
-// Uses file-based storage in .data directory
+// Uses file-based storage in ~/.claude/data/calendar/ for persistence across builds
 
 import { promises as fs } from 'fs';
-import path from 'path';
-import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState } from '@/types';
-
-const DATA_DIR = path.join(process.cwd(), '.data');
-const USER_DATA_FILE = path.join(DATA_DIR, 'user-data.json');
+import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState, TemplateGroup } from '@/types';
+import { DATA_DIR, USER_DATA_FILE } from './data-paths';
 
 const DEFAULT_ASANA_FILTERS: AsanaFilterState = {
   integrationIds: [],
@@ -24,6 +21,7 @@ const DEFAULT_ASANA_FILTERS: AsanaFilterState = {
 
 interface UserData {
   taskTemplates: TaskTemplate[];
+  templateGroups: TemplateGroup[];
   customTaskTypes: CustomTaskType[];
   adHocTasks: AdHocTask[];
   scheduledAsanaTasks: ScheduledAsanaTask[];
@@ -32,6 +30,7 @@ interface UserData {
 
 const DEFAULT_USER_DATA: UserData = {
   taskTemplates: [],
+  templateGroups: [],
   customTaskTypes: [],
   adHocTasks: [],
   scheduledAsanaTasks: [],
@@ -54,6 +53,7 @@ export async function getUserData(): Promise<UserData> {
     // Ensure all fields exist (for backwards compatibility)
     return {
       taskTemplates: parsed.taskTemplates || [],
+      templateGroups: parsed.templateGroups || [],
       customTaskTypes: parsed.customTaskTypes || [],
       adHocTasks: parsed.adHocTasks || [],
       scheduledAsanaTasks: parsed.scheduledAsanaTasks || [],
@@ -330,5 +330,73 @@ export async function getAsanaFilterPreferences(): Promise<AsanaFilterState> {
 export async function saveAsanaFilterPreferences(filters: AsanaFilterState): Promise<void> {
   const data = await getUserData();
   data.asanaFilterPreferences = filters;
+  await saveUserData(data);
+}
+
+// Template Groups
+export async function getTemplateGroups(): Promise<TemplateGroup[]> {
+  const data = await getUserData();
+  return data.templateGroups;
+}
+
+export async function addTemplateGroup(name: string): Promise<TemplateGroup> {
+  const data = await getUserData();
+  const maxOrder = data.templateGroups.length > 0
+    ? Math.max(...data.templateGroups.map(g => g.order))
+    : -1;
+
+  const newGroup: TemplateGroup = {
+    id: crypto.randomUUID(),
+    name,
+    order: maxOrder + 1,
+  };
+
+  data.templateGroups.push(newGroup);
+  await saveUserData(data);
+  return newGroup;
+}
+
+export async function updateTemplateGroup(id: string, updates: Partial<TemplateGroup>): Promise<TemplateGroup | null> {
+  const data = await getUserData();
+  const index = data.templateGroups.findIndex(g => g.id === id);
+
+  if (index === -1) return null;
+
+  data.templateGroups[index] = {
+    ...data.templateGroups[index],
+    ...updates,
+  };
+
+  await saveUserData(data);
+  return data.templateGroups[index];
+}
+
+export async function deleteTemplateGroup(id: string): Promise<boolean> {
+  const data = await getUserData();
+  const filtered = data.templateGroups.filter(g => g.id !== id);
+
+  if (filtered.length === data.templateGroups.length) return false;
+
+  // Also remove group from any templates that had this group
+  const groupToDelete = data.templateGroups.find(g => g.id === id);
+  if (groupToDelete) {
+    data.taskTemplates = data.taskTemplates.map(t =>
+      t.group === groupToDelete.name ? { ...t, group: undefined } : t
+    );
+  }
+
+  data.templateGroups = filtered;
+  await saveUserData(data);
+  return true;
+}
+
+export async function reorderTemplateGroups(groupIds: string[]): Promise<void> {
+  const data = await getUserData();
+
+  data.templateGroups = data.templateGroups.map(g => {
+    const newOrder = groupIds.indexOf(g.id);
+    return newOrder >= 0 ? { ...g, order: newOrder } : g;
+  }).sort((a, b) => a.order - b.order);
+
   await saveUserData(data);
 }

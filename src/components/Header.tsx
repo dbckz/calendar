@@ -1,7 +1,7 @@
 'use client';
 
 import { format, addDays, subDays } from 'date-fns';
-import { Calendar, Settings, RefreshCw } from 'lucide-react';
+import { Calendar, Settings, RefreshCw, Star } from 'lucide-react';
 import Link from 'next/link';
 
 type DayTab = 'yesterday' | 'today' | 'tomorrow';
@@ -107,6 +107,13 @@ export function Header({ selectedDate, onDateChange, onRefresh, isLoading, color
             >
               <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
+            <Link
+              href="/frequent-tasks"
+              className={`p-2 ${colorScheme ? 'hover:bg-white/20 text-white' : 'hover:bg-gray-100 text-amber-500'} rounded-lg transition-colors`}
+              aria-label="Frequent Tasks"
+            >
+              <Star className="w-5 h-5" />
+            </Link>
             <Link
               href="/settings"
               className={`p-2 ${colorScheme ? 'hover:bg-white/20 text-white' : 'hover:bg-gray-100'} rounded-lg transition-colors`}

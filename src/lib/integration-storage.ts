@@ -1,17 +1,14 @@
 // Server-side storage for integration credentials
-// Uses file-based storage to avoid 4KB cookie limit
+// Uses file-based storage in ~/.claude/data/calendar/ for persistence across builds
 
 import { promises as fs } from 'fs';
-import path from 'path';
 import {
   MultiIntegrationSettings,
   GoogleIntegration,
   AsanaIntegration,
   Integration,
 } from '@/types';
-
-const DATA_DIR = path.join(process.cwd(), '.data');
-const STORAGE_FILE = path.join(DATA_DIR, 'integrations.json');
+import { DATA_DIR, INTEGRATIONS_FILE as STORAGE_FILE } from './data-paths';
 
 const DEFAULT_SETTINGS: MultiIntegrationSettings = {
   version: 2,

@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { X, ChevronDown, PlusCircle } from 'lucide-react';
-import { AdHocTask, TaskType, TaskTypeSelection, BuiltInTaskType, CustomTaskType, BUILT_IN_TASK_TYPE_EMOJIS, BUILT_IN_TASK_TYPE_LABELS, isCustomTaskType, getCustomTaskTypeId } from '@/types';
+import { X, ChevronDown, PlusCircle, Star } from 'lucide-react';
+import { AdHocTask, TaskType, TaskTypeSelection, BuiltInTaskType, CustomTaskType, TaskTemplate, BUILT_IN_TASK_TYPE_EMOJIS, BUILT_IN_TASK_TYPE_LABELS, isCustomTaskType, getCustomTaskTypeId } from '@/types';
 import { format } from 'date-fns';
 import { api } from '@/lib/api';
 import { EmojiPicker } from './EmojiPicker';
@@ -19,9 +19,8 @@ interface AddTaskModalProps {
 }
 
 function getInitialDueDate(defaultStartTime?: Date, defaultDate?: Date): string {
-  if (defaultStartTime) return format(defaultStartTime, 'yyyy-MM-dd');
-  if (defaultDate) return format(defaultDate, 'yyyy-MM-dd');
-  return '';
+  const date = defaultStartTime || defaultDate;
+  return date ? format(date, 'yyyy-MM-dd') : '';
 }
 
 export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStartTime, defaultEndTime }: AddTaskModalProps) {
@@ -36,9 +35,15 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
   const [customTypeLabel, setCustomTypeLabel] = useState('');
   const [customTypeEmoji, setCustomTypeEmoji] = useState('');
 
-  // Load custom types on mount
+  // Template selection state
+  const [templates, setTemplates] = useState<TaskTemplate[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<TaskTemplate | null>(null);
+  const [showTemplateDropdown, setShowTemplateDropdown] = useState(false);
+
+  // Load custom types and templates on mount
   useEffect(() => {
-    api.getCustomTaskTypes().then(({ customTypes }) => setCustomTypes(customTypes)).catch(console.error);
+    api.getCustomTaskTypes().then(r => setCustomTypes(r.customTypes)).catch(console.error);
+    api.getTaskTemplates().then(r => setTemplates(r.templates)).catch(console.error);
   }, []);
 
   // Update form fields when modal opens with new default times (e.g., from timeline drag)
@@ -120,6 +125,24 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
     }
   }, [customTypeLabel, customTypeEmoji]);
 
+  // Apply template to form
+  const applyTemplate = useCallback((template: TaskTemplate) => {
+    setSelectedTemplate(template);
+    setTitle(template.title);
+    setDescription(template.description || '');
+    setTaskType(template.taskType);
+    setShowTemplateDropdown(false);
+  }, []);
+
+  // Clear template selection
+  const clearTemplate = useCallback(() => {
+    setSelectedTemplate(null);
+    setTitle('');
+    setDescription('');
+    setTaskType(null);
+    setShowTemplateDropdown(false);
+  }, []);
+
   // Calculate duration from start/end times if provided
   const calculatedDuration = useMemo(() => {
     if (defaultStartTime && defaultEndTime) {
@@ -153,6 +176,7 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
     setIsCreatingCustomType(false);
     setCustomTypeLabel('');
     setCustomTypeEmoji('');
+    setSelectedTemplate(null);
     onClose();
   };
 
@@ -172,6 +196,62 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
         </div>
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
+          {/* Template Selector */}
+          {templates.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Start from template
+              </label>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowTemplateDropdown(!showTemplateDropdown)}
+                  className="w-full flex items-center justify-between px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none bg-white"
+                >
+                  <span className={selectedTemplate ? 'text-gray-900' : 'text-gray-400'}>
+                    {selectedTemplate ? (
+                      <span className="flex items-center gap-2">
+                        <Star className="w-4 h-4 text-amber-500" />
+                        {getTaskTypeEmoji(selectedTemplate.taskType)} {selectedTemplate.title}
+                      </span>
+                    ) : (
+                      'Select a template (optional)...'
+                    )}
+                  </span>
+                  <ChevronDown className="w-4 h-4 text-gray-400" />
+                </button>
+                {showTemplateDropdown && (
+                  <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                    {selectedTemplate && (
+                      <button
+                        type="button"
+                        onClick={clearTemplate}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left text-gray-500 hover:bg-gray-50 border-b"
+                      >
+                        <X className="w-4 h-4" />
+                        Clear selection
+                      </button>
+                    )}
+                    {templates.map(template => (
+                      <button
+                        key={template.id}
+                        type="button"
+                        onClick={() => applyTemplate(template)}
+                        className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-amber-50 transition-colors ${
+                          selectedTemplate?.id === template.id ? 'bg-amber-50' : ''
+                        }`}
+                      >
+                        <span>{getTaskTypeEmoji(template.taskType)}</span>
+                        <span className="flex-1">{template.title}</span>
+                        <span className="text-xs text-gray-400">{template.duration}min</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Task Type Dropdown */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">

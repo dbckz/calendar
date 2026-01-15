@@ -71,6 +71,8 @@ interface AsanaSidebarProps {
   scheduledAsanaTasks?: ScheduledAsanaTask[];
   onUnschedule?: (taskId: string) => void;
   colorScheme?: ColorScheme;
+  // Lock to a specific integration (hides integration filter)
+  lockedIntegrationId?: string;
   // Filter props
   projects?: AsanaProject[];
   typeValues?: string[]; // Unique Type custom field values
@@ -120,6 +122,7 @@ export function AsanaSidebar({
   scheduledAsanaTasks = [],
   onUnschedule,
   colorScheme,
+  lockedIntegrationId,
   projects = [],
   typeValues = [],
   typeFieldInfoByIntegration,
@@ -150,40 +153,35 @@ export function AsanaSidebar({
   // Track the last synced value from filters to detect server updates
   const lastSyncedFromFiltersRef = useRef<string[]>(filters?.expandedGroups || []);
 
-  // Sync expandedGroups from filters when server data arrives (filters change)
+  // Helper to check if two arrays have the same elements (order-independent)
+  const arraysEqual = (a: string[], b: string[]): boolean =>
+    a.length === b.length && a.every(item => b.includes(item));
+
+  // Sync expandedGroups from filters when server data arrives
+  // Skip for locked sidebars - they maintain their own local state
   useEffect(() => {
+    if (lockedIntegrationId) return;
+
     const serverGroups = filters?.expandedGroups || [];
-    const lastSynced = lastSyncedFromFiltersRef.current;
-
-    // Check if filters changed from what we last synced from
-    const filtersChanged =
-      serverGroups.length !== lastSynced.length ||
-      serverGroups.some(g => !lastSynced.includes(g));
-
-    if (filtersChanged) {
+    if (!arraysEqual(serverGroups, lastSyncedFromFiltersRef.current)) {
       setExpandedGroups(new Set(serverGroups));
       lastSyncedFromFiltersRef.current = serverGroups;
     }
-  }, [filters?.expandedGroups]);
+  }, [filters?.expandedGroups, lockedIntegrationId]);
 
   // Persist expandedGroups to filters when user toggles groups
+  // Skip for locked sidebars - they maintain their own local state
   useEffect(() => {
-    if (!onFiltersChange || !filters) return;
+    if (lockedIntegrationId || !onFiltersChange || !filters) return;
 
     const expandedArray = Array.from(expandedGroups);
     const currentArray = filters.expandedGroups || [];
 
-    // Only update if different from what's in filters
-    const hasChanged =
-      expandedArray.length !== currentArray.length ||
-      expandedArray.some(g => !currentArray.includes(g));
-
-    if (hasChanged) {
-      // Update the ref so we don't re-sync this back
+    if (!arraysEqual(expandedArray, currentArray)) {
       lastSyncedFromFiltersRef.current = expandedArray;
       onFiltersChange({ ...filters, expandedGroups: expandedArray });
     }
-  }, [expandedGroups, filters, onFiltersChange]);
+  }, [expandedGroups, filters, onFiltersChange, lockedIntegrationId]);
 
   const [dragOverGroup, setDragOverGroup] = useState<string | null>(null); // Track which group is being dragged over
   const [optimisticTypeOverrides, setOptimisticTypeOverrides] = useState<Map<string, string>>(new Map()); // taskId -> newType for optimistic updates
@@ -210,20 +208,24 @@ export function AsanaSidebar({
     return `${hours}h ${mins}m`;
   }, []);
 
+  // Filter tasks by locked integration
+  const integrationFilteredTasks = useMemo(() => {
+    if (!lockedIntegrationId) return tasks;
+    return tasks.filter(task => task.integrationId === lockedIntegrationId);
+  }, [tasks, lockedIntegrationId]);
+
   // Filter tasks by search query
   const searchedTasks = useMemo(() => {
-    if (!searchQuery.trim()) return tasks;
+    if (!searchQuery.trim()) return integrationFilteredTasks;
     const query = searchQuery.toLowerCase().trim();
-    return tasks.filter(task => task.title.toLowerCase().includes(query));
-  }, [tasks, searchQuery]);
+    return integrationFilteredTasks.filter(task => task.title.toLowerCase().includes(query));
+  }, [integrationFilteredTasks, searchQuery]);
 
   // Helper to get Type custom field value from a task (with optimistic override support)
   const getTaskTypeValue = useCallback((task: CalendarEvent): string => {
-    // Check for optimistic override first
     const override = optimisticTypeOverrides.get(task.id);
-    if (override !== undefined) {
-      return override;
-    }
+    if (override) return override;
+
     const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
     return typeField?.displayValue || 'No Type';
   }, [optimisticTypeOverrides]);
@@ -491,22 +493,21 @@ export function AsanaSidebar({
         customFields: { [typeFieldInfo.fieldGid]: enumOptionGid || null }
       };
 
+      // Clear optimistic override after API call completes (success or failure)
+      const clearOverride = () => {
+        setOptimisticTypeOverrides(prev => {
+          const next = new Map(prev);
+          next.delete(dragItem.id);
+          return next;
+        });
+      };
+
       try {
         await onUpdateTask(dragItem.id, integrationId, updates);
-        // On success, clear the optimistic override (the real data will come from refresh)
-        setOptimisticTypeOverrides(prev => {
-          const next = new Map(prev);
-          next.delete(dragItem.id);
-          return next;
-        });
+        clearOverride();
       } catch (apiErr) {
-        // On failure, revert the optimistic update
         console.error('Failed to update task in Asana:', apiErr);
-        setOptimisticTypeOverrides(prev => {
-          const next = new Map(prev);
-          next.delete(dragItem.id);
-          return next;
-        });
+        clearOverride();
       }
     } catch (err) {
       console.error('Failed to handle group drop:', err);
@@ -577,7 +578,11 @@ export function AsanaSidebar({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-orange-500" />
-            <h2 className={`font-semibold ${colorScheme?.sidebarHeaderText || 'text-gray-900'}`}>Asana Tasks</h2>
+            <h2 className={`font-semibold ${colorScheme?.sidebarHeaderText || 'text-gray-900'}`}>
+              {lockedIntegrationId
+                ? integrations.find(i => i.id === lockedIntegrationId)?.name || 'Asana Tasks'
+                : 'Asana Tasks'}
+            </h2>
           </div>
           <div className="flex items-center gap-1">
             {onCreateTask && integrations.length > 0 && (
@@ -710,8 +715,8 @@ export function AsanaSidebar({
               </div>
             </div>
 
-            {/* Integration filter */}
-            {integrations.length > 1 && (
+            {/* Integration filter (hidden when locked to specific integration) */}
+            {integrations.length > 1 && !lockedIntegrationId && (
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1.5">Integration</label>
                 <div className="flex flex-wrap gap-1.5">
@@ -1002,6 +1007,7 @@ export function AsanaSidebar({
           integrations={integrations}
           projects={projects}
           typeFieldInfoByIntegration={typeFieldInfoByIntegration}
+          lockedIntegrationId={lockedIntegrationId}
           onClose={() => setShowCreateTask(false)}
           onCreateTask={onCreateTask}
         />
@@ -1022,6 +1028,13 @@ interface TaskDetailDialogProps {
   onDeleteTask?: (taskId: string, integrationId: string) => void;
   projects?: AsanaProject[];
   typeFieldInfoByIntegration?: Map<string, AsanaSidebarTypeFieldInfo>;
+}
+
+function getDueDateStyles(dueOn: string): string {
+  const date = parseISO(dueOn);
+  if (isPast(date) && !isToday(date)) return 'text-red-600 font-medium';
+  if (isToday(date)) return 'text-orange-600 font-medium';
+  return 'text-gray-900';
 }
 
 function TaskDetailDialog({
@@ -1385,13 +1398,7 @@ function TaskDetailDialog({
                     <Clock className="w-3 h-3" /> Due
                   </label>
                   {task.dueOn ? (
-                    <p className={`mt-0.5 ${
-                      isPast(parseISO(task.dueOn)) && !isToday(parseISO(task.dueOn))
-                        ? 'text-red-600 font-medium'
-                        : isToday(parseISO(task.dueOn))
-                        ? 'text-orange-600 font-medium'
-                        : 'text-gray-900'
-                    }`}>
+                    <p className={`mt-0.5 ${getDueDateStyles(task.dueOn)}`}>
                       {format(parseISO(task.dueOn), 'MMM d, yyyy')}
                     </p>
                   ) : (
@@ -1581,6 +1588,7 @@ interface CreateTaskModalProps {
   integrations: { id: string; name: string }[];
   projects: AsanaProject[];
   typeFieldInfoByIntegration?: Map<string, AsanaSidebarTypeFieldInfo>;
+  lockedIntegrationId?: string;
   onClose: () => void;
   onCreateTask: (integrationId: string, name: string, options?: { notes?: string; dueOn?: string; projectGid?: string; customFields?: Record<string, string> }) => Promise<CalendarEvent | null>;
 }
@@ -1589,13 +1597,14 @@ function CreateTaskModal({
   integrations,
   projects,
   typeFieldInfoByIntegration,
+  lockedIntegrationId,
   onClose,
   onCreateTask,
 }: CreateTaskModalProps) {
   const [name, setName] = useState('');
   const [notes, setNotes] = useState('');
   const [dueOn, setDueOn] = useState('');
-  const [selectedIntegration, setSelectedIntegration] = useState(integrations[0]?.id || '');
+  const [selectedIntegration, setSelectedIntegration] = useState(lockedIntegrationId || integrations[0]?.id || '');
   const [selectedProject, setSelectedProject] = useState('');
   const [selectedType, setSelectedType] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1690,8 +1699,8 @@ function CreateTaskModal({
             </div>
           )}
 
-          {/* Integration selector */}
-          {integrations.length > 1 && (
+          {/* Integration selector (hidden when locked) */}
+          {integrations.length > 1 && !lockedIntegrationId && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Workspace

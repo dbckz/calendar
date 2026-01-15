@@ -25,7 +25,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { title, description, duration, priority, taskType } = body;
+    const { title, description, duration, priority, taskType, group } = body;
 
     if (!title || typeof title !== 'string') {
       return NextResponse.json({ error: 'title is required' }, { status: 400 });
@@ -49,6 +49,7 @@ export async function POST(request: NextRequest) {
       duration,
       priority: priority as 'low' | 'medium' | 'high',
       taskType: taskType as TaskType,
+      group: group || undefined,
     });
 
     return NextResponse.json({ template });
