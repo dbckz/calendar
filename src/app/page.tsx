@@ -69,11 +69,12 @@ const COLOR_SCHEMES = [
 export default function Home() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
-  const [colorSchemeIndex, setColorSchemeIndex] = useState(() => {
-    // Return 0 for SSR, client will get random value on first render
-    if (typeof window === 'undefined') return 0;
-    return Math.floor(Math.random() * COLOR_SCHEMES.length);
-  });
+  const [colorSchemeIndex, setColorSchemeIndex] = useState(0);
+
+  // Set random color scheme on mount (client-side only) to avoid hydration mismatch
+  useEffect(() => {
+    setColorSchemeIndex(Math.floor(Math.random() * COLOR_SCHEMES.length));
+  }, []);
 
   const colorScheme = COLOR_SCHEMES[colorSchemeIndex];
 

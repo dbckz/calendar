@@ -3,13 +3,10 @@ import { google } from 'googleapis';
 import { getIntegrationById, addGoogleIntegration } from '@/lib/integration-storage';
 import { GoogleIntegration } from '@/types';
 
-function getRedirectUri(request: NextRequest): string {
-  const host = request.headers.get('host');
-  if (!host) {
-    throw new Error('Missing host header');
-  }
-  const protocol = request.headers.get('x-forwarded-proto') || 'http';
-  return `${protocol}://${host}/api/auth/google/callback`;
+function getRedirectUri(): string {
+  // Always use localhost for Google OAuth (Google doesn't allow .local domains)
+  const port = process.env.PORT || '3001';
+  return `http://localhost:${port}/api/auth/google/callback`;
 }
 
 function getAuthUrlWithState(
@@ -45,7 +42,7 @@ export async function GET(request: NextRequest) {
     }
 
     const googleIntegration = integration as GoogleIntegration;
-    const redirectUri = getRedirectUri(request);
+    const redirectUri = getRedirectUri();
     const state = encodeURIComponent(JSON.stringify({ integrationId }));
     const authUrl = getAuthUrlWithState(
       googleIntegration.clientId,
@@ -87,7 +84,7 @@ export async function POST(request: NextRequest) {
     await addGoogleIntegration(integration);
 
     // Generate auth URL with integration ID in state
-    const redirectUri = getRedirectUri(request);
+    const redirectUri = getRedirectUri();
     const state = encodeURIComponent(JSON.stringify({ integrationId: id }));
     const authUrl = getAuthUrlWithState(clientId, clientSecret, redirectUri, state);
 
