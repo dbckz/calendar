@@ -37,9 +37,11 @@ interface UseAsanaTasksReturn {
   typeValues: string[]; // Unique type values from tasks
   typeFieldInfoByIntegration: Map<string, TypeFieldInfo>; // Info for setting Type field on new tasks, per integration
   integrations: { id: string; name: string }[]; // Unique integrations from tasks
-  filters: AsanaFilterState;
-  setFilters: (filters: AsanaFilterState) => void;
-  clearFilters: () => void;
+  filters: AsanaFilterState; // Default filters (for shared sidebar without locked integration)
+  filtersMap: Record<string, AsanaFilterState>; // Per-integration filters
+  setFilters: (filters: AsanaFilterState, integrationId?: string) => void;
+  getFiltersForIntegration: (integrationId: string) => AsanaFilterState;
+  clearFilters: (integrationId?: string) => void;
   // Actions
   fetchAllAsanaTasks: () => Promise<void>;
   scheduleAsana: (
@@ -131,12 +133,12 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
   const [allAsanaTasks, setAllAsanaTasks] = useState<CalendarEvent[]>([]);
   const [rawAsanaTasks, setRawAsanaTasks] = useState<CalendarEvent[]>([]); // Includes "NOT A TASK" for metadata extraction
   const [scheduledAsanaTasks, setScheduledAsanaTasks] = useState<ScheduledAsanaTask[]>([]);
-  const [filters, setFiltersState] = useState<AsanaFilterState>(DEFAULT_FILTERS);
+  const [filtersMap, setFiltersMapState] = useState<Record<string, AsanaFilterState>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Ref for debouncing filter saves
-  const filterSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Ref for debouncing filter saves (keyed by integration ID)
+  const filterSaveTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({});
 
   // Ref for tracking mounted state to prevent memory leaks
   const isMountedRef = useRef(true);
@@ -149,34 +151,53 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     };
   }, []);
 
-  // Load filters from server on mount
+  // Load all filter preferences from server on mount
   useEffect(() => {
-    api.getAsanaFilterPreferences()
-      .then(({ filters }) => setFiltersState(filters))
+    api.getAllAsanaFilterPreferences()
+      .then(({ filtersMap: loadedMap }) => {
+        if (isMountedRef.current) {
+          setFiltersMapState(loadedMap || {});
+        }
+      })
       .catch(error => console.error('Failed to load filter preferences:', error));
   }, []);
 
-  // Cleanup debounce timeout on unmount
+  // Cleanup debounce timeouts on unmount
   useEffect(() => {
+    const timeoutsRef = filterSaveTimeoutsRef;
     return () => {
-      if (filterSaveTimeoutRef.current) {
-        clearTimeout(filterSaveTimeoutRef.current);
-      }
+      Object.values(timeoutsRef.current).forEach(timeout => clearTimeout(timeout));
     };
   }, []);
 
-  // Wrapper to save filters to server when they change (debounced)
-  const setFilters = useCallback((newFilters: AsanaFilterState) => {
-    setFiltersState(newFilters);
+  // Get filters for a specific integration (or default)
+  const getFiltersForIntegration = useCallback((integrationId: string): AsanaFilterState => {
+    const filters = filtersMap[integrationId];
+    return filters ? { ...DEFAULT_FILTERS, ...filters } : DEFAULT_FILTERS;
+  }, [filtersMap]);
 
-    // Clear any pending save
-    if (filterSaveTimeoutRef.current) {
-      clearTimeout(filterSaveTimeoutRef.current);
+  // Default filters (for compatibility with existing code)
+  const filters = useMemo(() => {
+    return getFiltersForIntegration('default');
+  }, [getFiltersForIntegration]);
+
+  // Wrapper to save filters to server when they change (debounced)
+  const setFilters = useCallback((newFilters: AsanaFilterState, integrationId?: string) => {
+    const key = integrationId || 'default';
+
+    setFiltersMapState(prev => ({
+      ...prev,
+      [key]: newFilters,
+    }));
+
+    // Clear any pending save for this integration
+    if (filterSaveTimeoutsRef.current[key]) {
+      clearTimeout(filterSaveTimeoutsRef.current[key]);
     }
 
     // Debounce the API save
-    filterSaveTimeoutRef.current = setTimeout(() => {
-      api.saveAsanaFilterPreferences(newFilters)
+    filterSaveTimeoutsRef.current[key] = setTimeout(() => {
+      api.saveAsanaFilterPreferences(newFilters, integrationId)
         .catch(error => console.error('Failed to save filter preferences:', error));
     }, FILTER_SAVE_DEBOUNCE_MS);
   }, []);
@@ -393,14 +414,19 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     });
   }, [allAsanaTasks, filters]);
 
-  const clearFilters = useCallback(() => {
-    setFiltersState(DEFAULT_FILTERS);
+  const clearFilters = useCallback((integrationId?: string) => {
+    const key = integrationId || 'default';
+
+    setFiltersMapState(prev => ({
+      ...prev,
+      [key]: DEFAULT_FILTERS,
+    }));
 
     // Clear any pending save and save immediately for clear action
-    if (filterSaveTimeoutRef.current) {
-      clearTimeout(filterSaveTimeoutRef.current);
+    if (filterSaveTimeoutsRef.current[key]) {
+      clearTimeout(filterSaveTimeoutsRef.current[key]);
     }
-    api.saveAsanaFilterPreferences(DEFAULT_FILTERS)
+    api.saveAsanaFilterPreferences(DEFAULT_FILTERS, integrationId)
       .catch(error => console.error('Failed to save filter preferences:', error));
   }, []);
 
@@ -413,6 +439,29 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     googleEventId?: string,
     googleIntegrationId?: string
   ): Promise<ScheduledAsanaTask | null> => {
+    // Create optimistic scheduled task with temp ID
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const optimisticScheduled: ScheduledAsanaTask = {
+      id: tempId,
+      asanaTaskId,
+      integrationId,
+      scheduledDate,
+      scheduledTime,
+      duration,
+      googleEventId,
+      googleIntegrationId,
+    };
+
+    // Add optimistically to state immediately
+    setScheduledAsanaTasks(prev => {
+      const updated = [...prev, optimisticScheduled];
+      const cached = readAsanaTasksCache();
+      if (cached) {
+        writeAsanaTasksCache(cached.allTasks, updated);
+      }
+      return updated;
+    });
+
     try {
       const { scheduled } = await api.scheduleAsanaTask(
         asanaTaskId,
@@ -423,8 +472,9 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
         googleEventId,
         googleIntegrationId
       );
+      // Replace temp entry with real entry from server
       setScheduledAsanaTasks(prev => {
-        const updated = [...prev, scheduled];
+        const updated = prev.map(s => s.id === tempId ? scheduled : s);
         const cached = readAsanaTasksCache();
         if (cached) {
           writeAsanaTasksCache(cached.allTasks, updated);
@@ -433,6 +483,15 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
       });
       return scheduled;
     } catch (error) {
+      // Rollback: remove optimistic entry
+      setScheduledAsanaTasks(prev => {
+        const updated = prev.filter(s => s.id !== tempId);
+        const cached = readAsanaTasksCache();
+        if (cached) {
+          writeAsanaTasksCache(cached.allTasks, updated);
+        }
+        return updated;
+      });
       console.error('Failed to schedule asana task:', error);
       return null;
     }
@@ -442,8 +501,27 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     scheduleId: string,
     updates: Partial<ScheduledAsanaTask>
   ): Promise<ScheduledAsanaTask | null> => {
+    // Capture previous state for rollback
+    let previousSchedule: ScheduledAsanaTask | undefined;
+
+    // Apply optimistic update immediately
+    setScheduledAsanaTasks(prev => {
+      const schedule = prev.find(s => s.id === scheduleId);
+      previousSchedule = schedule;
+      if (!schedule) return prev;
+
+      const optimisticSchedule = { ...schedule, ...updates };
+      const updatedList = prev.map(s => s.id === scheduleId ? optimisticSchedule : s);
+      const cached = readAsanaTasksCache();
+      if (cached) {
+        writeAsanaTasksCache(cached.allTasks, updatedList);
+      }
+      return updatedList;
+    });
+
     try {
       const { schedule: updated } = await api.updateScheduledAsanaTask(scheduleId, updates);
+      // Reconcile with server response
       setScheduledAsanaTasks(prev => {
         const updatedList = prev.map(s => s.id === scheduleId ? updated : s);
         const cached = readAsanaTasksCache();
@@ -454,6 +532,17 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
       });
       return updated;
     } catch (error) {
+      // Rollback to previous state
+      if (previousSchedule) {
+        setScheduledAsanaTasks(prev => {
+          const updatedList = prev.map(s => s.id === scheduleId ? previousSchedule! : s);
+          const cached = readAsanaTasksCache();
+          if (cached) {
+            writeAsanaTasksCache(cached.allTasks, updatedList);
+          }
+          return updatedList;
+        });
+      }
       console.error('Failed to update scheduled asana task:', error);
       return null;
     }
@@ -641,7 +730,38 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
       if (updates.startOn !== undefined) {
         optimisticTask.startOn = updates.startOn || undefined;
       }
-      // Note: customFields and projects will be reconciled when API returns
+      // Optimistically update customFields (e.g., Type field)
+      if (updates.customFields && optimisticTask.customFields) {
+        optimisticTask.customFields = optimisticTask.customFields.map(cf => {
+          const newValue = updates.customFields?.[cf.gid];
+          if (newValue !== undefined) {
+            return {
+              ...cf,
+              enumValueGid: newValue || undefined,
+              // Display value will be reconciled when server responds
+              displayValue: newValue === null ? null : cf.displayValue,
+            };
+          }
+          return cf;
+        });
+      }
+      // Optimistically update projects
+      if (updates.addProjects || updates.removeProjects) {
+        let newProjects = [...(optimisticTask.projects || [])];
+        // Remove projects
+        if (updates.removeProjects) {
+          newProjects = newProjects.filter(p => !updates.removeProjects!.includes(p.gid));
+        }
+        // Add projects (we only have GIDs, so use placeholder names until server responds)
+        if (updates.addProjects) {
+          updates.addProjects.forEach(gid => {
+            if (!newProjects.find(p => p.gid === gid)) {
+              newProjects.push({ gid, name: 'Loading...' });
+            }
+          });
+        }
+        optimisticTask.projects = newProjects;
+      }
 
       const updated = prev.map(t => t.id === taskId ? optimisticTask : t);
       return updated;
@@ -748,7 +868,9 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     typeFieldInfoByIntegration,
     integrations,
     filters,
+    filtersMap,
     setFilters,
+    getFiltersForIntegration,
     clearFilters,
     // Actions
     fetchAllAsanaTasks,

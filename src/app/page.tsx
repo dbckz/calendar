@@ -11,7 +11,7 @@ import { AllDayEventsBar } from '@/components/AllDayEventsBar';
 import { useTasks } from '@/hooks/useTasks';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { useToast } from '@/hooks/useToast';
-import { CalendarEvent, DragItem, TaskType, SettingsResponse } from '@/types';
+import { CalendarEvent, DragItem, TaskType, SettingsResponse, AsanaFilterState } from '@/types';
 import { api } from '@/lib/api';
 import { containsHtml, htmlToReadableText } from '@/lib/html-utils';
 
@@ -105,8 +105,8 @@ export default function Home() {
     asanaTypeValues,
     asanaTypeFieldInfoByIntegration,
     asanaIntegrations,
-    asanaFilters,
     setAsanaFilters,
+    getAsanaFiltersForIntegration,
     clearAsanaFilters,
   } = useCalendarEvents();
 
@@ -640,6 +640,38 @@ export default function Home() {
     unscheduleAllAsanaInstances(asanaTaskId);
   }, [unscheduleAllAsanaInstances]);
 
+  // Integration IDs for the two Asana workspaces
+  const OM_INTEGRATION_ID = '68a7249c-78bb-40e4-bc9d-37fc4a306aea';
+  const DBC_INTEGRATION_ID = 'a45421fa-02ad-41a7-9d68-dcdf4fdb432d';
+
+  // Get filters for each locked integration
+  const omFilters = useMemo(
+    () => getAsanaFiltersForIntegration(OM_INTEGRATION_ID),
+    [getAsanaFiltersForIntegration]
+  );
+  const dbcFilters = useMemo(
+    () => getAsanaFiltersForIntegration(DBC_INTEGRATION_ID),
+    [getAsanaFiltersForIntegration]
+  );
+
+  // Callbacks for setting/clearing filters per integration
+  const handleOmFiltersChange = useCallback(
+    (filters: AsanaFilterState) => setAsanaFilters(filters, OM_INTEGRATION_ID),
+    [setAsanaFilters]
+  );
+  const handleDbcFiltersChange = useCallback(
+    (filters: AsanaFilterState) => setAsanaFilters(filters, DBC_INTEGRATION_ID),
+    [setAsanaFilters]
+  );
+  const handleOmClearFilters = useCallback(
+    () => clearAsanaFilters(OM_INTEGRATION_ID),
+    [clearAsanaFilters]
+  );
+  const handleDbcClearFilters = useCallback(
+    () => clearAsanaFilters(DBC_INTEGRATION_ID),
+    [clearAsanaFilters]
+  );
+
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
       <Header
@@ -659,14 +691,14 @@ export default function Home() {
             scheduledAsanaTasks={scheduledAsanaTasks}
             onUnschedule={handleUnscheduleAsana}
             colorScheme={colorScheme}
-            lockedIntegrationId="68a7249c-78bb-40e4-bc9d-37fc4a306aea"
+            lockedIntegrationId={OM_INTEGRATION_ID}
             projects={asanaProjects}
             typeValues={asanaTypeValues}
             typeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
             integrations={asanaIntegrations}
-            filters={asanaFilters}
-            onFiltersChange={setAsanaFilters}
-            onClearFilters={clearAsanaFilters}
+            filters={omFilters}
+            onFiltersChange={handleOmFiltersChange}
+            onClearFilters={handleOmClearFilters}
             onToggleComplete={handleSidebarAsanaComplete}
             onAddComment={handleSidebarAsanaComment}
             onCreateTask={handleSidebarAsanaCreate}
@@ -714,14 +746,14 @@ export default function Home() {
             scheduledAsanaTasks={scheduledAsanaTasks}
             onUnschedule={handleUnscheduleAsana}
             colorScheme={colorScheme}
-            lockedIntegrationId="a45421fa-02ad-41a7-9d68-dcdf4fdb432d"
+            lockedIntegrationId={DBC_INTEGRATION_ID}
             projects={asanaProjects}
             typeValues={asanaTypeValues}
             typeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
             integrations={asanaIntegrations}
-            filters={asanaFilters}
-            onFiltersChange={setAsanaFilters}
-            onClearFilters={clearAsanaFilters}
+            filters={dbcFilters}
+            onFiltersChange={handleDbcFiltersChange}
+            onClearFilters={handleDbcClearFilters}
             onToggleComplete={handleSidebarAsanaComplete}
             onAddComment={handleSidebarAsanaComment}
             onCreateTask={handleSidebarAsanaCreate}

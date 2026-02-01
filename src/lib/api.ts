@@ -400,15 +400,22 @@ export const api = {
     });
   },
 
-  async getAsanaFilterPreferences(): Promise<{ filters: AsanaFilterState }> {
-    return fetchWithRetry<{ filters: AsanaFilterState }>('/api/user-data/asana-filters');
+  async getAsanaFilterPreferences(integrationId?: string): Promise<{ filters: AsanaFilterState }> {
+    const url = integrationId
+      ? `/api/user-data/asana-filters?integrationId=${encodeURIComponent(integrationId)}`
+      : '/api/user-data/asana-filters?integrationId=default';
+    return fetchWithRetry<{ filters: AsanaFilterState }>(url);
   },
 
-  async saveAsanaFilterPreferences(filters: AsanaFilterState): Promise<{ success: true; filters: AsanaFilterState }> {
-    return fetchWithRetry<{ success: true; filters: AsanaFilterState }>('/api/user-data/asana-filters', {
+  async getAllAsanaFilterPreferences(): Promise<{ filtersMap: Record<string, AsanaFilterState> }> {
+    return fetchWithRetry<{ filtersMap: Record<string, AsanaFilterState> }>('/api/user-data/asana-filters');
+  },
+
+  async saveAsanaFilterPreferences(filters: AsanaFilterState, integrationId?: string): Promise<{ success: true; filters: AsanaFilterState; integrationId?: string }> {
+    return fetchWithRetry<{ success: true; filters: AsanaFilterState; integrationId?: string }>('/api/user-data/asana-filters', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filters }),
+      body: JSON.stringify({ filters, integrationId }),
     });
   },
 };

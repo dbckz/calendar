@@ -158,21 +158,17 @@ export function AsanaSidebar({
     a.length === b.length && a.every(item => b.includes(item));
 
   // Sync expandedGroups from filters when server data arrives
-  // Skip for locked sidebars - they maintain their own local state
   useEffect(() => {
-    if (lockedIntegrationId) return;
-
     const serverGroups = filters?.expandedGroups || [];
     if (!arraysEqual(serverGroups, lastSyncedFromFiltersRef.current)) {
       setExpandedGroups(new Set(serverGroups));
       lastSyncedFromFiltersRef.current = serverGroups;
     }
-  }, [filters?.expandedGroups, lockedIntegrationId]);
+  }, [filters?.expandedGroups]);
 
   // Persist expandedGroups to filters when user toggles groups
-  // Skip for locked sidebars - they maintain their own local state
   useEffect(() => {
-    if (lockedIntegrationId || !onFiltersChange || !filters) return;
+    if (!onFiltersChange || !filters) return;
 
     const expandedArray = Array.from(expandedGroups);
     const currentArray = filters.expandedGroups || [];
@@ -181,7 +177,7 @@ export function AsanaSidebar({
       lastSyncedFromFiltersRef.current = expandedArray;
       onFiltersChange({ ...filters, expandedGroups: expandedArray });
     }
-  }, [expandedGroups, filters, onFiltersChange, lockedIntegrationId]);
+  }, [expandedGroups, filters, onFiltersChange]);
 
   const [dragOverGroup, setDragOverGroup] = useState<string | null>(null); // Track which group is being dragged over
   const [optimisticTypeOverrides, setOptimisticTypeOverrides] = useState<Map<string, string>>(new Map()); // taskId -> newType for optimistic updates
@@ -1305,12 +1301,14 @@ function TaskDetailDialog({
                 <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
                   <PlayCircle className="w-3 h-3" /> Start date
                 </label>
-                <input
-                  type="date"
-                  value={editStartOn}
-                  onChange={(e) => setEditStartOn(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
-                />
+                <div className="relative">
+                  <input
+                    type="date"
+                    value={editStartOn}
+                    onChange={(e) => setEditStartOn(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none cursor-pointer [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:left-0 [&::-webkit-calendar-picker-indicator]:top-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                  />
+                </div>
               </div>
 
               {/* Due date */}
@@ -1318,12 +1316,14 @@ function TaskDetailDialog({
                 <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
                   <Clock className="w-3 h-3" /> Due date
                 </label>
-                <input
-                  type="date"
-                  value={editDueOn}
-                  onChange={(e) => setEditDueOn(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
-                />
+                <div className="relative">
+                  <input
+                    type="date"
+                    value={editDueOn}
+                    onChange={(e) => setEditDueOn(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none cursor-pointer [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:left-0 [&::-webkit-calendar-picker-indicator]:top-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                  />
+                </div>
               </div>
 
               {/* Projects */}
@@ -1377,6 +1377,21 @@ function TaskDetailDialog({
                   <div className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">
                     <LinkifiedText text={task.description} />
                   </div>
+                </div>
+              )}
+
+              {/* Parent Task */}
+              {task.parentTask && (
+                <div>
+                  <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Parent Task</label>
+                  <a
+                    href={getAsanaTaskUrl(task.parentTask.gid)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-orange-600 hover:text-orange-700 hover:underline mt-0.5 block truncate"
+                  >
+                    {task.parentTask.name}
+                  </a>
                 </div>
               )}
 
@@ -1752,12 +1767,14 @@ function CreateTaskModal({
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Due date
             </label>
-            <input
-              type="date"
-              value={dueOn}
-              onChange={(e) => setDueOn(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
-            />
+            <div className="relative">
+              <input
+                type="date"
+                value={dueOn}
+                onChange={(e) => setDueOn(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none cursor-pointer [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:left-0 [&::-webkit-calendar-picker-indicator]:top-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+              />
+            </div>
           </div>
 
           {/* Project selector */}
@@ -1880,6 +1897,11 @@ const MemoizedTaskItem = memo(
       >
         <GripVertical className="w-4 h-4 text-gray-300 group-hover:text-gray-400 mt-0.5 flex-shrink-0 cursor-grab active:cursor-grabbing" />
         <div className="flex-1 min-w-0">
+          {task.parentTask && (
+            <p className="text-xs text-gray-400 truncate mb-0.5" title={`Subtask of: ${task.parentTask.name}`}>
+              ↳ {task.parentTask.name}
+            </p>
+          )}
           <p className="text-sm font-medium text-gray-900 line-clamp-2">
             {task.title}
           </p>

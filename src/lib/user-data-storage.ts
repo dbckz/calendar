@@ -25,7 +25,8 @@ interface UserData {
   customTaskTypes: CustomTaskType[];
   adHocTasks: AdHocTask[];
   scheduledAsanaTasks: ScheduledAsanaTask[];
-  asanaFilterPreferences?: AsanaFilterState;
+  asanaFilterPreferences?: AsanaFilterState; // Legacy: kept for migration
+  asanaFilterPreferencesMap?: Record<string, AsanaFilterState>; // Key is integration ID or "default"
 }
 
 const DEFAULT_USER_DATA: UserData = {
@@ -34,7 +35,7 @@ const DEFAULT_USER_DATA: UserData = {
   customTaskTypes: [],
   adHocTasks: [],
   scheduledAsanaTasks: [],
-  asanaFilterPreferences: DEFAULT_ASANA_FILTERS,
+  asanaFilterPreferencesMap: {},
 };
 
 async function ensureDataDir(): Promise<void> {
@@ -50,6 +51,14 @@ export async function getUserData(): Promise<UserData> {
     await ensureDataDir();
     const data = await fs.readFile(USER_DATA_FILE, 'utf-8');
     const parsed = JSON.parse(data) as Partial<UserData>;
+
+    // Migrate from legacy asanaFilterPreferences to asanaFilterPreferencesMap
+    let filterMap = parsed.asanaFilterPreferencesMap || {};
+    if (parsed.asanaFilterPreferences && !parsed.asanaFilterPreferencesMap) {
+      // Migrate legacy single filter state to "default" key
+      filterMap = { default: { ...DEFAULT_ASANA_FILTERS, ...parsed.asanaFilterPreferences } };
+    }
+
     // Ensure all fields exist (for backwards compatibility)
     return {
       taskTemplates: parsed.taskTemplates || [],
@@ -57,9 +66,7 @@ export async function getUserData(): Promise<UserData> {
       customTaskTypes: parsed.customTaskTypes || [],
       adHocTasks: parsed.adHocTasks || [],
       scheduledAsanaTasks: parsed.scheduledAsanaTasks || [],
-      asanaFilterPreferences: parsed.asanaFilterPreferences
-        ? { ...DEFAULT_ASANA_FILTERS, ...parsed.asanaFilterPreferences }
-        : DEFAULT_ASANA_FILTERS,
+      asanaFilterPreferencesMap: filterMap,
     };
   } catch {
     return { ...DEFAULT_USER_DATA };
@@ -321,15 +328,26 @@ export async function getScheduleByGoogleEventId(googleEventId: string): Promise
   return tasks.find(t => t.googleEventId === googleEventId) || null;
 }
 
-// Asana Filter Preferences
-export async function getAsanaFilterPreferences(): Promise<AsanaFilterState> {
+// Asana Filter Preferences (per-integration)
+export async function getAsanaFilterPreferences(integrationId?: string): Promise<AsanaFilterState> {
   const data = await getUserData();
-  return data.asanaFilterPreferences || DEFAULT_ASANA_FILTERS;
+  const key = integrationId || 'default';
+  const filters = data.asanaFilterPreferencesMap?.[key];
+  return filters ? { ...DEFAULT_ASANA_FILTERS, ...filters } : DEFAULT_ASANA_FILTERS;
 }
 
-export async function saveAsanaFilterPreferences(filters: AsanaFilterState): Promise<void> {
+export async function getAllAsanaFilterPreferences(): Promise<Record<string, AsanaFilterState>> {
   const data = await getUserData();
-  data.asanaFilterPreferences = filters;
+  return data.asanaFilterPreferencesMap || {};
+}
+
+export async function saveAsanaFilterPreferences(filters: AsanaFilterState, integrationId?: string): Promise<void> {
+  const data = await getUserData();
+  const key = integrationId || 'default';
+  if (!data.asanaFilterPreferencesMap) {
+    data.asanaFilterPreferencesMap = {};
+  }
+  data.asanaFilterPreferencesMap[key] = filters;
   await saveUserData(data);
 }
 

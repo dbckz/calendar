@@ -153,6 +153,26 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     endTime: Date,
     description?: string
   ): Promise<{ event: CalendarEvent | null; error?: string }> => {
+    // Create optimistic event with temp ID
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const optimisticEvent: CalendarEvent = {
+      id: tempId,
+      title,
+      startTime,
+      endTime,
+      source: 'google',
+      description,
+      integrationId,
+      color: '#4285f4', // Google blue
+    };
+
+    // Add optimistic event immediately
+    setGoogleEvents(prev => {
+      const updated = [...prev, optimisticEvent];
+      writeGoogleCalendarCache(updated);
+      return updated;
+    });
+
     try {
       const createdEvent = await api.createCalendarEvent(integrationId, title, startTime, endTime, description);
 
@@ -162,14 +182,21 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
         endTime: new Date(createdEvent.endTime),
       };
 
+      // Replace temp event with real event
       setGoogleEvents(prev => {
-        const updated = [...prev, parsedEvent];
+        const updated = prev.map(e => e.id === tempId ? parsedEvent : e);
         writeGoogleCalendarCache(updated);
         return updated;
       });
 
       return { event: parsedEvent };
     } catch (err) {
+      // Rollback: remove optimistic event
+      setGoogleEvents(prev => {
+        const updated = prev.filter(e => e.id !== tempId);
+        writeGoogleCalendarCache(updated);
+        return updated;
+      });
       const message = err instanceof ApiRequestError ? err.message : 'Failed to create event';
       return { event: null, error: message };
     }

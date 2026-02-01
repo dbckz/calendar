@@ -166,6 +166,7 @@ export async function getMyTasks(
     'custom_fields.type',
     'custom_fields.enum_value',
     'custom_fields.enum_value.name',
+    'parent.name',
   ].join(',');
 
   const tasksResponse = await fetch(
@@ -204,6 +205,7 @@ export async function getMyTasks(
       type: cf.type,
       enumValueGid: cf.enum_value?.gid,
     })),
+    parent: task.parent as { gid: string; name: string } | undefined,
   }));
 }
 
@@ -301,6 +303,7 @@ export function asanaTaskToCalendarEvent(task: AsanaTask): CalendarEvent {
     createdAt: task.createdAt,
     projects: task.projects,
     customFields: task.customFields,
+    parentTask: task.parent,
   };
 }
 

@@ -1,1 +1,9 @@
 - Add cross-tab sync using BroadcastChannel API so changes in one browser tab are reflected in other tabs in near real-time (broadcast mutations, other tabs refetch)
+- Make it so when you create an event, you have to directly choose which calendar, rather than waiting for a popup after. Make sure as soon as you click create, it appears on the calendar, i.e. it doesn't wait for the API calls to complete
+- Add a: "time worked on DBC today" and "time worked on OM" today and figure out how to track these
+- Make sure all the grouping and sorting is persistent
+- When dragging Asana tasks onto the cal, they should appear straight away, not wait for the API call to complete
+- When editing an Asana task, when you save changes, they should immediately be reflected in the task
+- Show Asana parent / sub-tasks if possible
+- Make it so I can delete / edit all-day events
+- Make it so I can add focus time blocks in Google Calendar

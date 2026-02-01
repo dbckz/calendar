@@ -20,6 +20,7 @@ export interface CalendarEvent {
   // Asana-specific fields
   projects?: Array<{ gid: string; name: string }>;
   customFields?: AsanaCustomField[];
+  parentTask?: { gid: string; name: string };
   // Link to Asana task (when Google event represents a scheduled Asana task)
   linkedAsanaTaskId?: string;
   linkedAsanaIntegrationId?: string;
@@ -52,6 +53,10 @@ export interface AsanaTask {
     name: string;
   }>;
   customFields?: AsanaCustomField[];
+  parent?: {
+    gid: string;
+    name: string;
+  };
 }
 
 export interface AsanaProject {
