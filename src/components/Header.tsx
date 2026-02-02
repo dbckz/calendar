@@ -14,15 +14,33 @@ interface ColorScheme {
   mainBg: string;
 }
 
+interface Integration {
+  id: string;
+  name: string;
+}
+
 interface HeaderProps {
   selectedDate: Date;
   onDateChange: (date: Date) => void;
   onRefresh: () => void;
   isLoading?: boolean;
   colorScheme?: ColorScheme;
+  timeWorkedByIntegration?: Record<string, number>;
+  integrations?: Integration[];
 }
 
-export function Header({ selectedDate, onDateChange, onRefresh, isLoading, colorScheme }: HeaderProps) {
+function formatDuration(minutes: number): string {
+  if (minutes < 60) {
+    return `${Math.round(minutes)}m`;
+  }
+  const hours = minutes / 60;
+  if (hours % 1 === 0) {
+    return `${hours}h`;
+  }
+  return `${hours.toFixed(1)}h`;
+}
+
+export function Header({ selectedDate, onDateChange, onRefresh, isLoading, colorScheme, timeWorkedByIntegration, integrations }: HeaderProps) {
   const today = new Date();
   const yesterday = subDays(today, 1);
   const tomorrow = addDays(today, 1);
@@ -97,6 +115,26 @@ export function Header({ selectedDate, onDateChange, onRefresh, isLoading, color
               Tomorrow
             </button>
           </div>
+
+          {/* Time worked stats */}
+          {integrations && integrations.length > 0 && (
+            <div className="flex items-center gap-2">
+              {integrations.map(integration => {
+                const minutes = timeWorkedByIntegration?.[integration.id] || 0;
+                if (minutes === 0) return null;
+                return (
+                  <div
+                    key={integration.id}
+                    className={`px-3 py-1.5 rounded-md text-sm font-medium ${
+                      colorScheme ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-700'
+                    }`}
+                  >
+                    {integration.name}: {formatDuration(minutes)}
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           <div className="flex items-center gap-2">
             <button

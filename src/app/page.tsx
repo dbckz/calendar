@@ -213,6 +213,25 @@ export default function Home() {
   const allDayEvents = useMemo(() => allEvents.filter(e => e.allDay), [allEvents]);
   const timedEvents = useMemo(() => allEvents.filter(e => !e.allDay), [allEvents]);
 
+  // Calculate time worked per Asana integration from timed events
+  // Only counts events linked to Asana tasks (via linkedAsanaIntegrationId or source=asana)
+  const timeWorkedByIntegration = useMemo(() => {
+    const totals: Record<string, number> = {};
+
+    for (const event of timedEvents) {
+      // For Google events linked to Asana, use linkedAsanaIntegrationId
+      // For standalone Asana scheduled events, use integrationId
+      const asanaIntegrationId = event.linkedAsanaIntegrationId ||
+        (event.source === 'asana' ? event.integrationId : null);
+      if (!asanaIntegrationId) continue;
+
+      const minutes = (event.endTime.getTime() - event.startTime.getTime()) / 60000;
+      totals[asanaIntegrationId] = (totals[asanaIntegrationId] || 0) + minutes;
+    }
+
+    return totals;
+  }, [timedEvents]);
+
   const handleRefresh = useCallback(() => {
     // Rotate to a new random color scheme on refresh
     setColorSchemeIndex(prev => {
@@ -638,6 +657,8 @@ export default function Home() {
         onRefresh={handleRefresh}
         isLoading={isLoading}
         colorScheme={colorScheme}
+        timeWorkedByIntegration={timeWorkedByIntegration}
+        integrations={asanaIntegrations}
       />
 
       <div className="flex flex-1 min-h-0">
