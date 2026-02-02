@@ -9,13 +9,19 @@ import { EmojiPicker } from './EmojiPicker';
 
 const BUILT_IN_TASK_TYPES: BuiltInTaskType[] = ['flight', 'train', 'car', 'walk', 'writing', 'reading', 'focus', 'email', 'batch'];
 
+interface GoogleIntegrationOption {
+  id: string;
+  name: string;
+}
+
 interface AddTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (task: Omit<AdHocTask, 'id' | 'createdAt' | 'updatedAt'>) => void;
+  onAdd: (task: Omit<AdHocTask, 'id' | 'createdAt' | 'updatedAt'>, integrationId?: string) => void;
   defaultDate?: Date;
   defaultStartTime?: Date;
   defaultEndTime?: Date;
+  googleIntegrations?: GoogleIntegrationOption[];
 }
 
 function getInitialDueDate(defaultStartTime?: Date, defaultDate?: Date): string {
@@ -23,7 +29,7 @@ function getInitialDueDate(defaultStartTime?: Date, defaultDate?: Date): string 
   return date ? format(date, 'yyyy-MM-dd') : '';
 }
 
-export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStartTime, defaultEndTime }: AddTaskModalProps) {
+export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStartTime, defaultEndTime, googleIntegrations }: AddTaskModalProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [dueDate, setDueDate] = useState(getInitialDueDate(defaultStartTime, defaultDate));
@@ -34,6 +40,9 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
   const [isCreatingCustomType, setIsCreatingCustomType] = useState(false);
   const [customTypeLabel, setCustomTypeLabel] = useState('');
   const [customTypeEmoji, setCustomTypeEmoji] = useState('');
+  const [selectedIntegrationId, setSelectedIntegrationId] = useState<string | undefined>(
+    googleIntegrations?.[0]?.id
+  );
 
   // Template selection state
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
@@ -56,8 +65,10 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
         setDueDate(format(defaultDate, 'yyyy-MM-dd'));
         setDueTime('');
       }
+      // Reset to first integration when modal opens
+      setSelectedIntegrationId(googleIntegrations?.[0]?.id);
     }
-  }, [isOpen, defaultStartTime, defaultDate]);
+  }, [isOpen, defaultStartTime, defaultDate, googleIntegrations]);
 
   // Close on Escape key
   useEffect(() => {
@@ -165,7 +176,7 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
       priority: 'medium',
       taskType,
       completed: false,
-    });
+    }, dueTime ? selectedIntegrationId : undefined);
 
     // Reset form
     setTitle('');
@@ -177,6 +188,7 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
     setCustomTypeLabel('');
     setCustomTypeEmoji('');
     setSelectedTemplate(null);
+    setSelectedIntegrationId(googleIntegrations?.[0]?.id);
     onClose();
   };
 
@@ -407,6 +419,28 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
               />
             </div>
           </div>
+
+          {/* Google Calendar Selector - only show if integrations exist and task has time */}
+          {googleIntegrations && googleIntegrations.length > 0 && dueTime && (
+            <div>
+              <label htmlFor="calendar" className="block text-sm font-medium text-gray-700 mb-1">
+                Add to Calendar
+              </label>
+              <select
+                id="calendar"
+                value={selectedIntegrationId || ''}
+                onChange={(e) => setSelectedIntegrationId(e.target.value || undefined)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
+              >
+                <option value="">Don&apos;t add to Google Calendar</option>
+                {googleIntegrations.map(integration => (
+                  <option key={integration.id} value={integration.id}>
+                    {integration.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="flex gap-3 pt-2">
             <button

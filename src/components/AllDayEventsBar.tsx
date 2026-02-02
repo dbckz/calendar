@@ -5,6 +5,8 @@ import { Calendar } from 'lucide-react';
 
 interface AllDayEventsBarProps {
   events: CalendarEvent[];
+  onEventClick?: (event: CalendarEvent) => void;
+  onEventDoubleClick?: (event: CalendarEvent) => void;
 }
 
 // Simple color hash for consistent event colors
@@ -28,7 +30,7 @@ function getEventColor(event: CalendarEvent): string {
   return colors[Math.abs(hash) % colors.length];
 }
 
-export function AllDayEventsBar({ events }: AllDayEventsBarProps) {
+export function AllDayEventsBar({ events, onEventClick, onEventDoubleClick }: AllDayEventsBarProps) {
   if (events.length === 0) {
     return null;
   }
@@ -42,9 +44,11 @@ export function AllDayEventsBar({ events }: AllDayEventsBarProps) {
       </div>
       <div className="flex flex-wrap gap-2">
         {events.map(event => (
-          <div
+          <button
             key={`${event.source}-${event.id}`}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border ${getEventColor(event)}`}
+            onClick={() => onEventClick?.(event)}
+            onDoubleClick={() => onEventDoubleClick?.(event)}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${getEventColor(event)} hover:shadow-md hover:scale-105 cursor-pointer`}
             title={event.location ? `${event.title} • ${event.location}` : event.title}
           >
             <span className="truncate max-w-[200px]">{event.title}</span>
@@ -53,7 +57,7 @@ export function AllDayEventsBar({ events }: AllDayEventsBarProps) {
                 • {event.location}
               </span>
             )}
-          </div>
+          </button>
         ))}
       </div>
     </div>

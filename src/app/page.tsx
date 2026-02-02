@@ -127,22 +127,6 @@ export default function Home() {
     endTime: Date | null;
   }>({ show: false, startTime: null, endTime: null });
 
-  const [pendingTaskCreation, setPendingTaskCreation] = useState<{
-    task: {
-      title: string;
-      description?: string;
-      dueDate?: string;
-      dueTime?: string;
-      duration?: number;
-      priority: 'low' | 'medium' | 'high';
-      taskType: TaskType;
-      completed: boolean;
-    };
-    taskId: string;
-    startTime: Date;
-    endTime: Date;
-  } | null>(null);
-
   const [highlightedAsanaTaskId, setHighlightedAsanaTaskId] = useState<string | null>(null);
   const [openTaskDialogId, setOpenTaskDialogId] = useState<string | null>(null);
   const [selectedGoogleEvent, setSelectedGoogleEvent] = useState<CalendarEvent | null>(null);
@@ -162,8 +146,6 @@ export default function Home() {
           }
         } else if (calendarSelectionModal.show) {
           setCalendarSelectionModal({ show: false, pendingDrop: null });
-        } else if (pendingTaskCreation) {
-          setPendingTaskCreation(null);
         } else if (deleteConfirmModal.show) {
           setDeleteConfirmModal({ show: false, event: null });
         }
@@ -171,7 +153,7 @@ export default function Home() {
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectedGoogleEvent, isEditingGoogleEvent, calendarSelectionModal.show, pendingTaskCreation, deleteConfirmModal.show]);
+  }, [selectedGoogleEvent, isEditingGoogleEvent, calendarSelectionModal.show, deleteConfirmModal.show]);
 
   useEffect(() => {
     api.getSettings()
@@ -491,26 +473,6 @@ export default function Home() {
     setCalendarSelectionModal({ show: false, pendingDrop: null });
   }, [calendarSelectionModal, updateTask, addTask, scheduleAsana, allAsanaTasks, createGoogleEvent, toast]);
 
-  const handleTaskCreationCalendarSelection = useCallback((integrationId: string) => {
-    if (!pendingTaskCreation) return;
-
-    const { task, taskId, startTime, endTime } = pendingTaskCreation;
-
-    createGoogleEvent(integrationId, task.title, startTime, endTime, task.description).then(googleEvent => {
-      if (googleEvent) {
-        updateTask(taskId, {
-          googleEventId: googleEvent.id,
-          googleIntegrationId: integrationId,
-        });
-        toast.success('Event added to Google Calendar');
-      } else {
-        toast.error('Failed to sync with Google Calendar');
-      }
-    });
-
-    setPendingTaskCreation(null);
-  }, [pendingTaskCreation, createGoogleEvent, updateTask, toast]);
-
   const handleEventMove = useCallback((
     eventId: string,
     source: 'adhoc' | 'asana' | 'google',
@@ -543,24 +505,19 @@ export default function Home() {
     priority: 'low' | 'medium' | 'high';
     taskType: TaskType;
     completed: boolean;
-  }) => {
+  }, integrationId?: string) => {
     const newTask = await addTask(task);
     if (!newTask) return null;
 
-    // If created with time and we have Google Calendar, sync it
-    if (task.dueDate && task.dueTime && task.duration && connectedGoogleIntegrations.length > 0) {
+    // If created with time and an integration was selected, sync it immediately
+    if (task.dueDate && task.dueTime && task.duration && integrationId) {
       const [hours, minutes] = task.dueTime.split(':').map(Number);
       const startTime = new Date(task.dueDate);
       startTime.setHours(hours, minutes, 0, 0);
       const endTime = new Date(startTime.getTime() + task.duration * 60 * 1000);
 
-      if (connectedGoogleIntegrations.length > 1) {
-        setPendingTaskCreation({ task, taskId: newTask.id, startTime, endTime });
-        return newTask;
-      }
-
-      const integrationId = connectedGoogleIntegrations[0].id;
-      createGoogleEvent(integrationId, task.title, startTime, endTime, task.description).then(googleEvent => {
+      const eventType = task.taskType === 'focus' ? 'focusTime' : undefined;
+      createGoogleEvent(integrationId, task.title, startTime, endTime, task.description, eventType).then(googleEvent => {
         if (googleEvent) {
           updateTask(newTask.id, {
             googleEventId: googleEvent.id,
@@ -572,7 +529,7 @@ export default function Home() {
     }
 
     return newTask;
-  }, [addTask, connectedGoogleIntegrations, createGoogleEvent, updateTask, toast]);
+  }, [addTask, createGoogleEvent, updateTask, toast]);
 
   const handleTimelineCreateTask = useCallback((startTime: Date, endTime: Date) => {
     setCreateTaskModal({ show: true, startTime, endTime });
@@ -716,7 +673,11 @@ export default function Home() {
           <div className="max-w-5xl mx-auto">
             {settings && <IntegrationStatus settings={settings} />}
 
-            <AllDayEventsBar events={allDayEvents} />
+            <AllDayEventsBar
+              events={allDayEvents}
+              onEventClick={handleEventClick}
+              onEventDoubleClick={handleEventDoubleClick}
+            />
 
             <div className="bg-white rounded-lg border shadow-sm p-4">
               {isLoading ? (
@@ -794,32 +755,6 @@ export default function Home() {
         </div>
       )}
 
-      {pendingTaskCreation && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm w-full mx-4">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Select Calendar</h3>
-            <p className="text-sm text-gray-600 mb-4">Choose which Google Calendar to add &quot;{pendingTaskCreation.task.title}&quot; to:</p>
-            <div className="space-y-2">
-              {connectedGoogleIntegrations.map(integration => (
-                <button
-                  key={integration.id}
-                  onClick={() => handleTaskCreationCalendarSelection(integration.id)}
-                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-colors"
-                >
-                  <span className="font-medium text-gray-900">{integration.name}</span>
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={() => setPendingTaskCreation(null)}
-              className="mt-4 w-full px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              Skip (don&apos;t sync to Google)
-            </button>
-          </div>
-        </div>
-      )}
-
       {deleteConfirmModal.show && deleteConfirmModal.event && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm w-full mx-4">
@@ -857,6 +792,7 @@ export default function Home() {
         defaultDate={selectedDate}
         defaultStartTime={createTaskModal.startTime || undefined}
         defaultEndTime={createTaskModal.endTime || undefined}
+        googleIntegrations={connectedGoogleIntegrations.map(i => ({ id: i.id, name: i.name }))}
       />
 
       {selectedGoogleEvent && (
@@ -1022,6 +958,15 @@ export default function Home() {
                     className="flex-1 px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
                   >
                     Edit
+                  </button>
+                  <button
+                    onClick={() => {
+                      setDeleteConfirmModal({ show: true, event: selectedGoogleEvent });
+                      setSelectedGoogleEvent(null);
+                    }}
+                    className="px-4 py-2 text-sm text-red-600 border border-red-300 rounded-lg hover:bg-red-50 transition-colors"
+                  >
+                    Delete
                   </button>
                 </div>
               )}

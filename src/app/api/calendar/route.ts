@@ -150,7 +150,7 @@ export async function PATCH(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { integrationId, title, startTime, endTime, description } = body;
+    const { integrationId, title, startTime, endTime, description, eventType } = body;
 
     if (!integrationId || !title || !startTime || !endTime) {
       return NextResponse.json(
@@ -171,7 +171,8 @@ export async function POST(request: NextRequest) {
       title,
       new Date(startTime),
       new Date(endTime),
-      description
+      description,
+      eventType
     );
 
     return NextResponse.json({

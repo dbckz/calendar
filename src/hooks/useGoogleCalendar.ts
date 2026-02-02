@@ -24,7 +24,8 @@ interface UseGoogleCalendarReturn {
     title: string,
     startTime: Date,
     endTime: Date,
-    description?: string
+    description?: string,
+    eventType?: 'default' | 'focusTime'
   ) => Promise<{ event: CalendarEvent | null; error?: string }>;
   deleteGoogleEvent: (
     eventId: string,
@@ -151,7 +152,8 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     title: string,
     startTime: Date,
     endTime: Date,
-    description?: string
+    description?: string,
+    eventType?: 'default' | 'focusTime'
   ): Promise<{ event: CalendarEvent | null; error?: string }> => {
     // Create optimistic event with temp ID
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -174,7 +176,7 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     });
 
     try {
-      const createdEvent = await api.createCalendarEvent(integrationId, title, startTime, endTime, description);
+      const createdEvent = await api.createCalendarEvent(integrationId, title, startTime, endTime, description, eventType);
 
       const parsedEvent: CalendarEvent = {
         ...createdEvent,

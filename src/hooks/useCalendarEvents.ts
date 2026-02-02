@@ -112,8 +112,8 @@ export function useCalendarEvents() {
   );
 
   const createGoogleEvent = useCallback(
-    async (integrationId: string, title: string, startTime: Date, endTime: Date, description?: string): Promise<CalendarEvent | null> => {
-      const result = await createGoogleEventInternal(integrationId, title, startTime, endTime, description);
+    async (integrationId: string, title: string, startTime: Date, endTime: Date, description?: string, eventType?: 'default' | 'focusTime'): Promise<CalendarEvent | null> => {
+      const result = await createGoogleEventInternal(integrationId, title, startTime, endTime, description, eventType);
       return result.event;
     },
     [createGoogleEventInternal]

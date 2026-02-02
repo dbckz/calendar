@@ -94,7 +94,8 @@ export const api = {
     title: string,
     startTime: Date,
     endTime: Date,
-    description?: string
+    description?: string,
+    eventType?: 'default' | 'focusTime'
   ): Promise<CalendarEventResponse> {
     return fetchWithRetry<CalendarEventResponse>('/api/calendar', {
       method: 'POST',
@@ -105,6 +106,7 @@ export const api = {
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
         description,
+        eventType,
       }),
     });
   },

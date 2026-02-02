@@ -173,7 +173,8 @@ export async function createCalendarEvent(
   title: string,
   startTime: Date,
   endTime: Date,
-  description?: string
+  description?: string,
+  eventType?: 'default' | 'focusTime'
 ): Promise<CalendarEvent> {
   const oauth2Client = createOAuth2Client(clientId, clientSecret);
   oauth2Client.setCredentials({
@@ -182,22 +183,44 @@ export async function createCalendarEvent(
   });
 
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-  const event = await calendar.events.insert({
-    calendarId: 'primary',
-    requestBody: {
-      summary: title,
-      description: description,
-      start: {
-        dateTime: startTime.toISOString(),
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      },
-      end: {
-        dateTime: endTime.toISOString(),
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      },
+  const baseRequestBody = {
+    summary: title,
+    description: description,
+    start: {
+      dateTime: startTime.toISOString(),
+      timeZone,
     },
-  });
+    end: {
+      dateTime: endTime.toISOString(),
+      timeZone,
+    },
+  };
+
+  let event;
+
+  // Try with requested eventType first, fall back to default if focusTime isn't supported
+  if (eventType === 'focusTime') {
+    try {
+      event = await calendar.events.insert({
+        calendarId: 'primary',
+        requestBody: { ...baseRequestBody, eventType: 'focusTime' },
+      });
+    } catch (err) {
+      // focusTime may not be supported on this calendar, retry as default event
+      console.log('focusTime not supported, creating as default event');
+      event = await calendar.events.insert({
+        calendarId: 'primary',
+        requestBody: { ...baseRequestBody, eventType: 'default' },
+      });
+    }
+  } else {
+    event = await calendar.events.insert({
+      calendarId: 'primary',
+      requestBody: { ...baseRequestBody, eventType: 'default' },
+    });
+  }
 
   return {
     id: event.data.id!,
