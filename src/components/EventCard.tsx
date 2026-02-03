@@ -1,8 +1,156 @@
 'use client';
 
+import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { format } from 'date-fns';
 import { Clock, MapPin, Trash2, X } from 'lucide-react';
 import { CalendarEvent } from '@/types';
+
+interface AsanaIntegrationInfo {
+  id: string;
+  name: string;
+}
+
+// Separate component to avoid nested component issues
+function AttributionIndicator({
+  attribution,
+  asanaIntegrations,
+  onSetAttribution,
+  onRemoveAttribution,
+}: {
+  attribution?: { asanaIntegrationId: string };
+  asanaIntegrations?: AsanaIntegrationInfo[];
+  onSetAttribution?: (asanaIntegrationId: string) => void;
+  onRemoveAttribution?: () => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const justOpenedRef = useRef(false);
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    if (!isOpen) return;
+
+    // Skip the first mousedown after opening to avoid race condition
+    justOpenedRef.current = true;
+    const timer = setTimeout(() => {
+      justOpenedRef.current = false;
+    }, 100);
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (justOpenedRef.current) return;
+      const target = e.target as Node;
+      if (btnRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      setIsOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      clearTimeout(timer);
+    };
+  }, [isOpen]);
+
+  if (!onSetAttribution || !asanaIntegrations?.length) return null;
+
+  const currentAttribution = attribution?.asanaIntegrationId;
+  const currentIntegration = currentAttribution
+    ? asanaIntegrations.find(i => i.id === currentAttribution)
+    : null;
+
+  // Get short label for integration
+  const getLabel = (integrationId: string) => {
+    const integration = asanaIntegrations.find(i => i.id === integrationId);
+    if (!integration) return '?';
+    const name = integration.name;
+    if (name.length <= 3) return name;
+    return name.substring(0, 3).toUpperCase();
+  };
+
+  return (
+    <div className="relative">
+      <button
+        ref={btnRef}
+        type="button"
+        tabIndex={-1}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          if (!isOpen && btnRef.current) {
+            const rect = btnRef.current.getBoundingClientRect();
+            setPos({ top: rect.bottom + 4, left: rect.left });
+          }
+          setIsOpen(!isOpen);
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+        }}
+        className={`flex items-center justify-center text-[9px] font-bold rounded transition-colors ${
+          currentAttribution
+            ? 'bg-green-500 text-white w-auto min-w-[18px] h-[18px] px-1'
+            : 'bg-gray-200 text-gray-500 hover:bg-gray-300 w-[18px] h-[18px]'
+        }`}
+        title={currentIntegration ? `Counts toward ${currentIntegration.name}` : 'Set time tracking'}
+      >
+        {currentAttribution ? getLabel(currentAttribution) : '+'}
+      </button>
+
+      {isOpen && pos && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={menuRef}
+          className="fixed bg-white rounded shadow-lg border min-w-[100px]"
+          style={{ top: pos.top, left: pos.left, zIndex: 9999 }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {asanaIntegrations.map(integration => (
+            <button
+              key={integration.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (currentAttribution === integration.id) {
+                  onRemoveAttribution?.();
+                } else {
+                  onSetAttribution(integration.id);
+                }
+                setIsOpen(false);
+              }}
+              className={`w-full text-left px-2 py-1 text-xs hover:bg-gray-100 flex items-center gap-2 ${
+                currentAttribution === integration.id ? 'bg-green-50 text-green-700' : ''
+              }`}
+            >
+              {currentAttribution === integration.id && (
+                <span className="text-green-500">✓</span>
+              )}
+              <span className={currentAttribution === integration.id ? '' : 'pl-4'}>
+                {integration.name}
+              </span>
+            </button>
+          ))}
+          {currentAttribution && (
+            <>
+              <div className="border-t" />
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemoveAttribution?.();
+                  setIsOpen(false);
+                }}
+                className="w-full text-left px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+              >
+                Remove
+              </button>
+            </>
+          )}
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
 
 interface EventCardProps {
   event: CalendarEvent;
@@ -10,10 +158,25 @@ interface EventCardProps {
   onDeleteEvent?: () => void;
   compact?: boolean;
   isPast?: boolean;
-  height?: number; // Height in pixels for compact view
+  height?: number;
+  attribution?: { asanaIntegrationId: string };
+  asanaIntegrations?: AsanaIntegrationInfo[];
+  onSetAttribution?: (asanaIntegrationId: string) => void;
+  onRemoveAttribution?: () => void;
 }
 
-export function EventCard({ event, onDelete, onDeleteEvent, compact, isPast, height }: EventCardProps) {
+export function EventCard({
+  event,
+  onDelete,
+  onDeleteEvent,
+  compact,
+  isPast,
+  height,
+  attribution,
+  asanaIntegrations,
+  onSetAttribution,
+  onRemoveAttribution,
+}: EventCardProps) {
   const sourceLabels = {
     google: 'Google Calendar',
     asana: 'Asana',
@@ -26,13 +189,12 @@ export function EventCard({ event, onDelete, onDeleteEvent, compact, isPast, hei
     adhoc: 'bg-purple-100 text-purple-700',
   };
 
-  // Determine if this is a very small event (15-20 minutes = 15-20px)
   const isVerySmall = height !== undefined && height <= 20;
   const isSmall = height !== undefined && height <= 35;
 
-  // Compact view for timeline
+  const showAttribution = event.source === 'google' && !event.linkedAsanaTaskId && onSetAttribution;
+
   if (compact) {
-    // Very small events (15 min) - single line with just title and delete button
     if (isVerySmall) {
       return (
         <div
@@ -72,7 +234,6 @@ export function EventCard({ event, onDelete, onDeleteEvent, compact, isPast, hei
       );
     }
 
-    // Small events (20-35 min) - title, time, and delete button
     if (isSmall) {
       return (
         <div
@@ -96,6 +257,14 @@ export function EventCard({ event, onDelete, onDeleteEvent, compact, isPast, hei
             <span className="text-[10px] text-gray-500 flex-shrink-0">
               {format(event.startTime, 'h:mm a')}
             </span>
+            {showAttribution && (
+              <AttributionIndicator
+                attribution={attribution}
+                asanaIntegrations={asanaIntegrations}
+                onSetAttribution={onSetAttribution}
+                onRemoveAttribution={onRemoveAttribution}
+              />
+            )}
             {onDeleteEvent && (
               <button
                 onClick={(e) => {
@@ -114,7 +283,6 @@ export function EventCard({ event, onDelete, onDeleteEvent, compact, isPast, hei
       );
     }
 
-    // Normal compact view
     return (
       <div
         className={`h-full rounded-lg border shadow-sm overflow-hidden transition-all hover:shadow-md ${
@@ -142,26 +310,35 @@ export function EventCard({ event, onDelete, onDeleteEvent, compact, isPast, hei
                 </span>
               </div>
             </div>
-            {onDeleteEvent && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDeleteEvent();
-                }}
-                className="p-0.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors flex-shrink-0"
-                aria-label="Delete event"
-                title="Delete event"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
+            <div className="flex items-center gap-1 flex-shrink-0">
+              {showAttribution && (
+                <AttributionIndicator
+                  attribution={attribution}
+                  asanaIntegrations={asanaIntegrations}
+                  onSetAttribution={onSetAttribution}
+                  onRemoveAttribution={onRemoveAttribution}
+                />
+              )}
+              {onDeleteEvent && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteEvent();
+                  }}
+                  className="p-0.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                  aria-label="Delete event"
+                  title="Delete event"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
     );
   }
 
-  // Full view for all-day events and list view
   return (
     <div
       className={`bg-white rounded-lg border shadow-sm overflow-hidden transition-all hover:shadow-md ${

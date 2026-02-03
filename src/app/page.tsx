@@ -135,6 +135,11 @@ export default function Home() {
   const [editingGoogleEventDescription, setEditingGoogleEventDescription] = useState('');
   const [isSavingGoogleEvent, setIsSavingGoogleEvent] = useState(false);
 
+  // Google event attributions for time tracking
+  const [googleEventAttributions, setGoogleEventAttributions] = useState<
+    Record<string, { asanaIntegrationId: string; googleIntegrationId: string }>
+  >({});
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -163,6 +168,24 @@ export default function Home() {
         toast.error('Failed to load integration settings');
       });
   }, [toast]);
+
+  // Fetch Google event attributions for time tracking
+  useEffect(() => {
+    api.getGoogleEventAttributions()
+      .then(data => {
+        const map: Record<string, { asanaIntegrationId: string; googleIntegrationId: string }> = {};
+        for (const attr of data.attributions) {
+          map[attr.googleEventId] = {
+            asanaIntegrationId: attr.asanaIntegrationId,
+            googleIntegrationId: attr.googleIntegrationId,
+          };
+        }
+        setGoogleEventAttributions(map);
+      })
+      .catch(err => {
+        console.error('Failed to load Google event attributions:', err);
+      });
+  }, []);
 
   // Check if an event falls on a specific date
   const isEventOnDate = useCallback((event: CalendarEvent, targetDate: string): boolean => {
@@ -214,15 +237,25 @@ export default function Home() {
   const timedEvents = useMemo(() => allEvents.filter(e => !e.allDay), [allEvents]);
 
   // Calculate time worked per Asana integration from timed events
-  // Only counts events linked to Asana tasks (via linkedAsanaIntegrationId or source=asana)
+  // Counts: Asana-linked events, standalone Asana events, AND attributed Google events
   const timeWorkedByIntegration = useMemo(() => {
     const totals: Record<string, number> = {};
 
     for (const event of timedEvents) {
       // For Google events linked to Asana, use linkedAsanaIntegrationId
       // For standalone Asana scheduled events, use integrationId
-      const asanaIntegrationId = event.linkedAsanaIntegrationId ||
+      // For attributed Google events, use the attribution
+      let asanaIntegrationId = event.linkedAsanaIntegrationId ||
         (event.source === 'asana' ? event.integrationId : null);
+
+      // Check for manual attribution on Google events
+      if (!asanaIntegrationId && event.source === 'google') {
+        const attribution = googleEventAttributions[event.id];
+        if (attribution) {
+          asanaIntegrationId = attribution.asanaIntegrationId;
+        }
+      }
+
       if (!asanaIntegrationId) continue;
 
       const minutes = (event.endTime.getTime() - event.startTime.getTime()) / 60000;
@@ -230,7 +263,79 @@ export default function Home() {
     }
 
     return totals;
-  }, [timedEvents]);
+  }, [timedEvents, googleEventAttributions]);
+
+  // Record time tracking data for longitudinal analysis
+  // Only records for today or past dates, debounced to avoid excessive writes
+  useEffect(() => {
+    const dateStr = format(selectedDate, 'yyyy-MM-dd');
+    const today = format(new Date(), 'yyyy-MM-dd');
+
+    // Only record for dates that are today or in the past
+    if (dateStr > today) return;
+
+    // Skip if no events or still loading
+    if (isLoading || timedEvents.length === 0) return;
+
+    // Debounce the recording
+    const timeoutId = setTimeout(() => {
+      // Build integration totals with names
+      const integrationTotals: Record<string, { integrationId: string; integrationName: string; totalMinutes: number }> = {};
+      for (const [integrationId, minutes] of Object.entries(timeWorkedByIntegration)) {
+        const integration = asanaIntegrations.find(i => i.id === integrationId);
+        integrationTotals[integrationId] = {
+          integrationId,
+          integrationName: integration?.name || 'Unknown',
+          totalMinutes: minutes,
+        };
+      }
+
+      // Build event records for detailed analysis
+      const eventRecords = timedEvents
+        .filter(event => {
+          let asanaIntegrationId = event.linkedAsanaIntegrationId ||
+            (event.source === 'asana' ? event.integrationId : null);
+          // Also include attributed Google events
+          if (!asanaIntegrationId && event.source === 'google') {
+            const attribution = googleEventAttributions[event.id];
+            if (attribution) {
+              asanaIntegrationId = attribution.asanaIntegrationId;
+            }
+          }
+          return asanaIntegrationId != null;
+        })
+        .map(event => {
+          let asanaIntegrationId = event.linkedAsanaIntegrationId ||
+            (event.source === 'asana' ? event.integrationId : null);
+          // Check for attribution on Google events
+          if (!asanaIntegrationId && event.source === 'google') {
+            const attribution = googleEventAttributions[event.id];
+            if (attribution) {
+              asanaIntegrationId = attribution.asanaIntegrationId;
+            }
+          }
+          const integration = asanaIntegrations.find(i => i.id === asanaIntegrationId);
+          return {
+            eventId: event.id,
+            title: event.title,
+            integrationId: asanaIntegrationId!,
+            integrationName: integration?.name || 'Unknown',
+            startTime: event.startTime.toISOString(),
+            endTime: event.endTime.toISOString(),
+            durationMinutes: Math.round((event.endTime.getTime() - event.startTime.getTime()) / 60000),
+            source: event.source as 'google' | 'asana',
+            linkedAsanaTaskId: event.linkedAsanaTaskId,
+          };
+        });
+
+      // Record the time data
+      api.recordTimeTracking(dateStr, integrationTotals, eventRecords).catch(err => {
+        console.error('Failed to record time tracking data:', err);
+      });
+    }, 2000); // 2 second debounce
+
+    return () => clearTimeout(timeoutId);
+  }, [selectedDate, timedEvents, timeWorkedByIntegration, asanaIntegrations, isLoading, googleEventAttributions]);
 
   const handleRefresh = useCallback(() => {
     // Rotate to a new random color scheme on refresh
@@ -715,6 +820,36 @@ export default function Home() {
                   onCreateTask={handleTimelineCreateTask}
                   onEventClick={handleEventClick}
                   onEventDoubleClick={handleEventDoubleClick}
+                  googleEventAttributions={googleEventAttributions}
+                  asanaIntegrations={asanaIntegrations}
+                  onSetAttribution={async (googleEventId, googleIntegrationId, asanaIntegrationId) => {
+                    try {
+                      await api.setGoogleEventAttribution(googleEventId, googleIntegrationId, asanaIntegrationId);
+                      setGoogleEventAttributions(prev => ({
+                        ...prev,
+                        [googleEventId]: { asanaIntegrationId, googleIntegrationId },
+                      }));
+                      const integration = asanaIntegrations.find(i => i.id === asanaIntegrationId);
+                      toast.success(`Event counts toward ${integration?.name || 'workspace'}`);
+                    } catch (err) {
+                      console.error('Failed to set attribution:', err);
+                      toast.error('Failed to set attribution');
+                    }
+                  }}
+                  onRemoveAttribution={async (googleEventId) => {
+                    try {
+                      await api.removeGoogleEventAttribution(googleEventId);
+                      setGoogleEventAttributions(prev => {
+                        const next = { ...prev };
+                        delete next[googleEventId];
+                        return next;
+                      });
+                      toast.success('Attribution removed');
+                    } catch (err) {
+                      console.error('Failed to remove attribution:', err);
+                      toast.error('Failed to remove attribution');
+                    }
+                  }}
                 />
               )}
             </div>
@@ -911,6 +1046,86 @@ export default function Home() {
                     <p className="text-sm text-gray-400 italic">No description</p>
                   )}
                 </>
+              )}
+
+              {/* Time tracking attribution - only show for Google events not linked to Asana */}
+              {!isEditingGoogleEvent && !selectedGoogleEvent.linkedAsanaTaskId && (
+                <div className="mt-4 pt-4 border-t">
+                  <h3 className="text-sm font-medium text-gray-700 mb-2">Time Tracking</h3>
+                  {(() => {
+                    const attribution = googleEventAttributions[selectedGoogleEvent.id];
+                    const currentIntegration = attribution
+                      ? asanaIntegrations.find(i => i.id === attribution.asanaIntegrationId)
+                      : null;
+
+                    if (attribution && currentIntegration) {
+                      return (
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-gray-600">
+                            Counts toward: <span className="font-medium">{currentIntegration.name}</span>
+                          </span>
+                          <button
+                            onClick={async () => {
+                              try {
+                                await api.removeGoogleEventAttribution(selectedGoogleEvent.id);
+                                setGoogleEventAttributions(prev => {
+                                  const next = { ...prev };
+                                  delete next[selectedGoogleEvent.id];
+                                  return next;
+                                });
+                                toast.success('Attribution removed');
+                              } catch (err) {
+                                console.error('Failed to remove attribution:', err);
+                                toast.error('Failed to remove attribution');
+                              }
+                            }}
+                            className="text-xs text-red-600 hover:text-red-800 underline"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-gray-500">Count toward:</span>
+                        {asanaIntegrations.map(integration => (
+                          <button
+                            key={integration.id}
+                            onClick={async () => {
+                              if (!selectedGoogleEvent.integrationId) {
+                                toast.error('Cannot attribute: missing Google integration ID');
+                                return;
+                              }
+                              try {
+                                await api.setGoogleEventAttribution(
+                                  selectedGoogleEvent.id,
+                                  selectedGoogleEvent.integrationId,
+                                  integration.id
+                                );
+                                setGoogleEventAttributions(prev => ({
+                                  ...prev,
+                                  [selectedGoogleEvent.id]: {
+                                    asanaIntegrationId: integration.id,
+                                    googleIntegrationId: selectedGoogleEvent.integrationId!,
+                                  },
+                                }));
+                                toast.success(`Event counts toward ${integration.name}`);
+                              } catch (err) {
+                                console.error('Failed to set attribution:', err);
+                                toast.error('Failed to set attribution');
+                              }
+                            }}
+                            className="px-3 py-1 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-full transition-colors"
+                          >
+                            {integration.name}
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
               )}
             </div>
 

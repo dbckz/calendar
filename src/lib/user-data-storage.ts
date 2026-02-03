@@ -19,6 +19,14 @@ const DEFAULT_ASANA_FILTERS: AsanaFilterState = {
   expandedGroups: [],
 };
 
+// Attribution for Google events to count toward time tracking
+export interface GoogleEventAttribution {
+  googleEventId: string;
+  googleIntegrationId: string;
+  asanaIntegrationId: string; // Which Asana workspace this counts toward (OM or DBC)
+  createdAt: string;
+}
+
 interface UserData {
   taskTemplates: TaskTemplate[];
   templateGroups: TemplateGroup[];
@@ -27,6 +35,7 @@ interface UserData {
   scheduledAsanaTasks: ScheduledAsanaTask[];
   asanaFilterPreferences?: AsanaFilterState; // Legacy: kept for migration
   asanaFilterPreferencesMap?: Record<string, AsanaFilterState>; // Key is integration ID or "default"
+  googleEventAttributions?: GoogleEventAttribution[];
 }
 
 const DEFAULT_USER_DATA: UserData = {
@@ -36,6 +45,7 @@ const DEFAULT_USER_DATA: UserData = {
   adHocTasks: [],
   scheduledAsanaTasks: [],
   asanaFilterPreferencesMap: {},
+  googleEventAttributions: [],
 };
 
 async function ensureDataDir(): Promise<void> {
@@ -67,6 +77,7 @@ export async function getUserData(): Promise<UserData> {
       adHocTasks: parsed.adHocTasks || [],
       scheduledAsanaTasks: parsed.scheduledAsanaTasks || [],
       asanaFilterPreferencesMap: filterMap,
+      googleEventAttributions: parsed.googleEventAttributions || [],
     };
   } catch {
     return { ...DEFAULT_USER_DATA };
@@ -417,4 +428,57 @@ export async function reorderTemplateGroups(groupIds: string[]): Promise<void> {
   }).sort((a, b) => a.order - b.order);
 
   await saveUserData(data);
+}
+
+// Google Event Attributions (for time tracking)
+export async function getGoogleEventAttributions(): Promise<GoogleEventAttribution[]> {
+  const data = await getUserData();
+  return data.googleEventAttributions || [];
+}
+
+export async function getGoogleEventAttribution(googleEventId: string): Promise<GoogleEventAttribution | null> {
+  const attributions = await getGoogleEventAttributions();
+  return attributions.find(a => a.googleEventId === googleEventId) || null;
+}
+
+export async function setGoogleEventAttribution(
+  googleEventId: string,
+  googleIntegrationId: string,
+  asanaIntegrationId: string
+): Promise<GoogleEventAttribution> {
+  const data = await getUserData();
+  if (!data.googleEventAttributions) {
+    data.googleEventAttributions = [];
+  }
+
+  // Remove existing attribution for this event if any
+  data.googleEventAttributions = data.googleEventAttributions.filter(
+    a => a.googleEventId !== googleEventId
+  );
+
+  const attribution: GoogleEventAttribution = {
+    googleEventId,
+    googleIntegrationId,
+    asanaIntegrationId,
+    createdAt: new Date().toISOString(),
+  };
+
+  data.googleEventAttributions.push(attribution);
+  await saveUserData(data);
+  return attribution;
+}
+
+export async function removeGoogleEventAttribution(googleEventId: string): Promise<boolean> {
+  const data = await getUserData();
+  if (!data.googleEventAttributions) return false;
+
+  const originalLength = data.googleEventAttributions.length;
+  data.googleEventAttributions = data.googleEventAttributions.filter(
+    a => a.googleEventId !== googleEventId
+  );
+
+  if (data.googleEventAttributions.length === originalLength) return false;
+
+  await saveUserData(data);
+  return true;
 }

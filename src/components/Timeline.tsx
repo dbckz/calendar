@@ -5,6 +5,11 @@ import { format } from 'date-fns';
 import { CalendarEvent, DragItem } from '@/types';
 import { EventCard } from './EventCard';
 
+interface AsanaIntegrationInfo {
+  id: string;
+  name: string;
+}
+
 interface TimelineProps {
   events: CalendarEvent[];
   selectedDate: Date;
@@ -14,6 +19,11 @@ interface TimelineProps {
   onCreateTask?: (startTime: Date, endTime: Date) => void;
   onEventClick?: (event: CalendarEvent) => void;
   onEventDoubleClick?: (event: CalendarEvent) => void;
+  // Time tracking attribution
+  googleEventAttributions?: Record<string, { asanaIntegrationId: string }>;
+  asanaIntegrations?: AsanaIntegrationInfo[];
+  onSetAttribution?: (googleEventId: string, googleIntegrationId: string, asanaIntegrationId: string) => void;
+  onRemoveAttribution?: (googleEventId: string) => void;
 }
 
 interface PositionedEvent {
@@ -126,6 +136,10 @@ export function Timeline({
   onCreateTask,
   onEventClick,
   onEventDoubleClick,
+  googleEventAttributions,
+  asanaIntegrations,
+  onSetAttribution,
+  onRemoveAttribution,
 }: TimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -606,12 +620,16 @@ export function Timeline({
                     }
                   }}
                   onClick={(e) => {
+                    const target = e.target as HTMLElement;
+                    if (target.closest('button')) return;  // Don't handle button clicks
                     if (!draggingEvent && onEventClick) {
                       e.stopPropagation();
                       onEventClick(pos.event);
                     }
                   }}
                   onDoubleClick={(e) => {
+                    const target = e.target as HTMLElement;
+                    if (target.closest('button')) return;  // Don't handle button clicks
                     if (!draggingEvent && onEventDoubleClick) {
                       e.stopPropagation();
                       onEventDoubleClick(pos.event);
@@ -624,6 +642,16 @@ export function Timeline({
                     isPast={isEventPast(pos.event)}
                     height={eventHeight}
                     onDeleteEvent={onDeleteEvent ? () => onDeleteEvent(pos.event) : undefined}
+                    attribution={pos.event.source === 'google' && !pos.event.linkedAsanaTaskId
+                      ? googleEventAttributions?.[pos.event.id]
+                      : undefined}
+                    asanaIntegrations={asanaIntegrations}
+                    onSetAttribution={onSetAttribution && pos.event.integrationId
+                      ? (asanaIntegrationId) => onSetAttribution(pos.event.id, pos.event.integrationId!, asanaIntegrationId)
+                      : undefined}
+                    onRemoveAttribution={onRemoveAttribution
+                      ? () => onRemoveAttribution(pos.event.id)
+                      : undefined}
                   />
                 </div>
 

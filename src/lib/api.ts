@@ -420,6 +420,54 @@ export const api = {
       body: JSON.stringify({ filters, integrationId }),
     });
   },
+
+  // Google Event Attributions (for time tracking)
+  async getGoogleEventAttributions(): Promise<{ attributions: Array<{ googleEventId: string; googleIntegrationId: string; asanaIntegrationId: string; createdAt: string }> }> {
+    return fetchWithRetry('/api/user-data/google-event-attributions');
+  },
+
+  async setGoogleEventAttribution(
+    googleEventId: string,
+    googleIntegrationId: string,
+    asanaIntegrationId: string
+  ): Promise<{ success: boolean; attribution: { googleEventId: string; googleIntegrationId: string; asanaIntegrationId: string; createdAt: string } }> {
+    return fetchWithRetry('/api/user-data/google-event-attributions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ googleEventId, googleIntegrationId, asanaIntegrationId }),
+    });
+  },
+
+  async removeGoogleEventAttribution(googleEventId: string): Promise<{ success: boolean; removed: boolean }> {
+    return fetchWithRetry('/api/user-data/google-event-attributions', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ googleEventId }),
+    });
+  },
+
+  // Time tracking API
+  async recordTimeTracking(
+    date: string,
+    integrationTotals: Record<string, { integrationId: string; integrationName: string; totalMinutes: number }>,
+    events: Array<{
+      eventId: string;
+      title: string;
+      integrationId: string;
+      integrationName: string;
+      startTime: string;
+      endTime: string;
+      durationMinutes: number;
+      source: 'google' | 'asana';
+      linkedAsanaTaskId?: string;
+    }>
+  ): Promise<{ success: boolean }> {
+    return fetchWithRetry<{ success: boolean }>('/api/time-tracking', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, integrationTotals, events }),
+    });
+  },
 };
 
 export function parseCalendarEvent(event: CalendarEventResponse): CalendarEvent {
