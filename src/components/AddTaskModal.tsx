@@ -14,14 +14,20 @@ interface GoogleIntegrationOption {
   name: string;
 }
 
+interface AsanaIntegrationOption {
+  id: string;
+  name: string;
+}
+
 interface AddTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (task: Omit<AdHocTask, 'id' | 'createdAt' | 'updatedAt'>, integrationId?: string) => void;
+  onAdd: (task: Omit<AdHocTask, 'id' | 'createdAt' | 'updatedAt'>, integrationId?: string, timeAttributionId?: string) => void;
   defaultDate?: Date;
   defaultStartTime?: Date;
   defaultEndTime?: Date;
   googleIntegrations?: GoogleIntegrationOption[];
+  asanaIntegrations?: AsanaIntegrationOption[];
 }
 
 function getInitialDueDate(defaultStartTime?: Date, defaultDate?: Date): string {
@@ -29,7 +35,7 @@ function getInitialDueDate(defaultStartTime?: Date, defaultDate?: Date): string 
   return date ? format(date, 'yyyy-MM-dd') : '';
 }
 
-export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStartTime, defaultEndTime, googleIntegrations }: AddTaskModalProps) {
+export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStartTime, defaultEndTime, googleIntegrations, asanaIntegrations }: AddTaskModalProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [dueDate, setDueDate] = useState(getInitialDueDate(defaultStartTime, defaultDate));
@@ -43,6 +49,7 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
   const [selectedIntegrationId, setSelectedIntegrationId] = useState<string | undefined>(
     googleIntegrations?.[0]?.id
   );
+  const [selectedTimeAttributionId, setSelectedTimeAttributionId] = useState<string | undefined>(undefined);
 
   // Template selection state
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
@@ -164,11 +171,18 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !taskType) return;
+    // Require taskType; title is optional if taskType is selected
+    if (!taskType) return;
 
     const emoji = getTaskTypeEmoji(taskType);
+    const typeLabel = getTaskTypeLabel(taskType);
+    // Format: "<EMOJI> <Type>" if no title, or "<EMOJI> <Type>: <Title>" if title provided
+    const taskTitle = title.trim()
+      ? `${emoji} ${typeLabel}: ${title.trim()}`
+      : `${emoji} ${typeLabel}`;
+
     onAdd({
-      title: `${emoji} ${title.trim()}`,
+      title: taskTitle,
       description: description.trim() || undefined,
       dueDate: dueDate || undefined,
       dueTime: dueTime || undefined,
@@ -176,7 +190,7 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
       priority: 'medium',
       taskType,
       completed: false,
-    }, dueTime ? selectedIntegrationId : undefined);
+    }, dueTime ? selectedIntegrationId : undefined, dueTime && selectedIntegrationId ? selectedTimeAttributionId : undefined);
 
     // Reset form
     setTitle('');
@@ -189,6 +203,7 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
     setCustomTypeEmoji('');
     setSelectedTemplate(null);
     setSelectedIntegrationId(googleIntegrations?.[0]?.id);
+    setSelectedTimeAttributionId(undefined);
     onClose();
   };
 
@@ -284,7 +299,7 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
                 <ChevronDown className="w-4 h-4 text-gray-400" />
               </button>
               {showTypeDropdown && (
-                <div className={`absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-y-auto ${isCreatingCustomType ? 'max-h-96' : 'max-h-64'}`}>
+                <div className={`absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-y-auto ${isCreatingCustomType ? 'max-h-96' : 'max-h-[70vh]'}`}>
                   {isCreatingCustomType ? (
                     <div className="p-3 space-y-3">
                       <div className="flex gap-2 items-center">
@@ -365,7 +380,7 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
 
           <div>
             <label htmlFor="title" className="block text-sm font-medium text-gray-700 mb-1">
-              Title *
+              Title {!taskType && '*'}
             </label>
             <input
               type="text"
@@ -373,7 +388,7 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-              placeholder="Enter task title"
+              placeholder={taskType ? `Optional - defaults to "${getTaskTypeLabel(taskType)}"` : "Enter task title"}
               autoFocus
             />
           </div>
@@ -442,6 +457,28 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
             </div>
           )}
 
+          {/* Time Attribution Selector - only show if Asana integrations exist and adding to calendar */}
+          {asanaIntegrations && asanaIntegrations.length > 0 && dueTime && selectedIntegrationId && (
+            <div>
+              <label htmlFor="timeAttribution" className="block text-sm font-medium text-gray-700 mb-1">
+                Contributes to
+              </label>
+              <select
+                id="timeAttribution"
+                value={selectedTimeAttributionId || ''}
+                onChange={(e) => setSelectedTimeAttributionId(e.target.value || undefined)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none bg-white"
+              >
+                <option value="">No time attribution</option>
+                {asanaIntegrations.map(integration => (
+                  <option key={integration.id} value={integration.id}>
+                    {integration.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div className="flex gap-3 pt-2">
             <button
               type="button"
@@ -452,7 +489,7 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
             </button>
             <button
               type="submit"
-              disabled={!title.trim() || !taskType}
+              disabled={!taskType}
               className="flex-1 py-2 px-4 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Add Task

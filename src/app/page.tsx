@@ -629,7 +629,7 @@ export default function Home() {
     priority: 'low' | 'medium' | 'high';
     taskType: TaskType;
     completed: boolean;
-  }, integrationId?: string) => {
+  }, integrationId?: string, timeAttributionId?: string) => {
     const newTask = await addTask(task);
     if (!newTask) return null;
 
@@ -641,12 +641,22 @@ export default function Home() {
       const endTime = new Date(startTime.getTime() + task.duration * 60 * 1000);
 
       const eventType = task.taskType === 'focus' ? 'focusTime' : undefined;
-      createGoogleEvent(integrationId, task.title, startTime, endTime, task.description, eventType).then(googleEvent => {
+      createGoogleEvent(integrationId, task.title, startTime, endTime, task.description, eventType).then(async googleEvent => {
         if (googleEvent) {
           updateTask(newTask.id, {
             googleEventId: googleEvent.id,
             googleIntegrationId: integrationId,
           });
+
+          // Set time attribution if selected
+          if (timeAttributionId) {
+            await api.setGoogleEventAttribution(googleEvent.id, integrationId, timeAttributionId);
+            setGoogleEventAttributions(prev => ({
+              ...prev,
+              [googleEvent.id]: { asanaIntegrationId: timeAttributionId, googleIntegrationId: integrationId },
+            }));
+          }
+
           toast.success('Event added to Google Calendar');
         }
       });
@@ -949,6 +959,7 @@ export default function Home() {
         defaultStartTime={createTaskModal.startTime || undefined}
         defaultEndTime={createTaskModal.endTime || undefined}
         googleIntegrations={connectedGoogleIntegrations.map(i => ({ id: i.id, name: i.name }))}
+        asanaIntegrations={asanaIntegrations.map(i => ({ id: i.id, name: i.name }))}
       />
 
       {selectedGoogleEvent && (
