@@ -33,11 +33,12 @@ function formatDuration(minutes: number): string {
   if (minutes < 60) {
     return `${Math.round(minutes)}m`;
   }
-  const hours = minutes / 60;
-  if (hours % 1 === 0) {
+  const hours = Math.floor(minutes / 60);
+  const mins = Math.round(minutes % 60);
+  if (mins === 0) {
     return `${hours}h`;
   }
-  return `${hours.toFixed(1)}h`;
+  return `${hours}h ${mins}m`;
 }
 
 export function Header({ selectedDate, onDateChange, onRefresh, isLoading, colorScheme, timeWorkedByIntegration, integrations }: HeaderProps) {
