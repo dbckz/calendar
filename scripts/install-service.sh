@@ -49,7 +49,4 @@ cat > "$PLIST_PATH" <<EOF
 </plist>
 EOF
 
-echo "Installed plist to $PLIST_PATH"
-
 launchctl load "$PLIST_PATH"
-echo "Service loaded. Check status with: launchctl list | grep calendar"
