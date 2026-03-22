@@ -2,7 +2,7 @@
 
 # Calendar App Stop Script
 
-APP_DIR="/Users/davebuckley/github/dbckz/claude/calendar"
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PID_FILE="$APP_DIR/.data/app.pid"
 LOG_FILE="$APP_DIR/.data/app.log"
 

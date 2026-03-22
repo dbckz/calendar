@@ -2,12 +2,8 @@
 // Stores daily time records for analysis of time spent across projects/integrations
 
 import { promises as fs } from 'fs';
-import path from 'path';
-import { homedir } from 'os';
 
-// Store in ~/.claude/data/calendar/ alongside other app data
-const DATA_DIR = path.join(homedir(), '.claude', 'data', 'calendar');
-const TIME_TRACKING_FILE = path.join(DATA_DIR, 'time-tracking.json');
+import { DATA_DIR, TIME_TRACKING_FILE } from './data-paths';
 
 // Types for time tracking data
 export interface IntegrationTimeRecord {

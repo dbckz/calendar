@@ -10,3 +10,4 @@ export const DATA_DIR = path.join(homedir(), '.claude', 'data', 'calendar');
 // Individual data files
 export const USER_DATA_FILE = path.join(DATA_DIR, 'user-data.json');
 export const INTEGRATIONS_FILE = path.join(DATA_DIR, 'integrations.json');
+export const TIME_TRACKING_FILE = path.join(DATA_DIR, 'time-tracking.json');
