@@ -242,26 +242,26 @@ export default function Home() {
   const allDayEvents = useMemo(() => allEvents.filter(e => e.allDay), [allEvents]);
   const timedEvents = useMemo(() => allEvents.filter(e => !e.allDay), [allEvents]);
 
+  // Resolve the Asana integration ID for an event, checking linked tasks,
+  // Asana source events, and manual Google event attributions
+  const getAsanaIntegrationIdForEvent = useCallback((event: CalendarEvent): string | null => {
+    const directId = event.linkedAsanaIntegrationId ||
+      (event.source === 'asana' ? event.integrationId : null);
+    if (directId) return directId;
+
+    if (event.source === 'google') {
+      return googleEventAttributions[event.id]?.asanaIntegrationId ?? null;
+    }
+    return null;
+  }, [googleEventAttributions]);
+
   // Calculate time worked per Asana integration from timed events
   // Counts: Asana-linked events, standalone Asana events, AND attributed Google events
   const timeWorkedByIntegration = useMemo(() => {
     const totals: Record<string, number> = {};
 
     for (const event of timedEvents) {
-      // For Google events linked to Asana, use linkedAsanaIntegrationId
-      // For standalone Asana scheduled events, use integrationId
-      // For attributed Google events, use the attribution
-      let asanaIntegrationId = event.linkedAsanaIntegrationId ||
-        (event.source === 'asana' ? event.integrationId : null);
-
-      // Check for manual attribution on Google events
-      if (!asanaIntegrationId && event.source === 'google') {
-        const attribution = googleEventAttributions[event.id];
-        if (attribution) {
-          asanaIntegrationId = attribution.asanaIntegrationId;
-        }
-      }
-
+      const asanaIntegrationId = getAsanaIntegrationIdForEvent(event);
       if (!asanaIntegrationId) continue;
 
       const minutes = (event.endTime.getTime() - event.startTime.getTime()) / 60000;
@@ -269,7 +269,7 @@ export default function Home() {
     }
 
     return totals;
-  }, [timedEvents, googleEventAttributions]);
+  }, [timedEvents, getAsanaIntegrationIdForEvent]);
 
   // Record time tracking data for longitudinal analysis
   // Only records for today or past dates, debounced to avoid excessive writes
@@ -298,33 +298,14 @@ export default function Home() {
 
       // Build event records for detailed analysis
       const eventRecords = timedEvents
-        .filter(event => {
-          let asanaIntegrationId = event.linkedAsanaIntegrationId ||
-            (event.source === 'asana' ? event.integrationId : null);
-          // Also include attributed Google events
-          if (!asanaIntegrationId && event.source === 'google') {
-            const attribution = googleEventAttributions[event.id];
-            if (attribution) {
-              asanaIntegrationId = attribution.asanaIntegrationId;
-            }
-          }
-          return asanaIntegrationId != null;
-        })
         .map(event => {
-          let asanaIntegrationId = event.linkedAsanaIntegrationId ||
-            (event.source === 'asana' ? event.integrationId : null);
-          // Check for attribution on Google events
-          if (!asanaIntegrationId && event.source === 'google') {
-            const attribution = googleEventAttributions[event.id];
-            if (attribution) {
-              asanaIntegrationId = attribution.asanaIntegrationId;
-            }
-          }
+          const asanaIntegrationId = getAsanaIntegrationIdForEvent(event);
+          if (!asanaIntegrationId) return null;
           const integration = asanaIntegrations.find(i => i.id === asanaIntegrationId);
           return {
             eventId: event.id,
             title: event.title,
-            integrationId: asanaIntegrationId!,
+            integrationId: asanaIntegrationId,
             integrationName: integration?.name || 'Unknown',
             startTime: event.startTime.toISOString(),
             endTime: event.endTime.toISOString(),
@@ -332,7 +313,8 @@ export default function Home() {
             source: event.source as 'google' | 'asana',
             linkedAsanaTaskId: event.linkedAsanaTaskId,
           };
-        });
+        })
+        .filter((record): record is NonNullable<typeof record> => record !== null);
 
       // Record the time data
       api.recordTimeTracking(dateStr, integrationTotals, eventRecords).catch(err => {
