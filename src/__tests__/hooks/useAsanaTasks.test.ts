@@ -19,7 +19,7 @@ jest.mock('@/lib/api', () => ({
     addAsanaComment: jest.fn(),
     createAsanaTask: jest.fn(),
     deleteAsanaTask: jest.fn(),
-    getAsanaFilterPreferences: jest.fn(),
+    getAllAsanaFilterPreferences: jest.fn(),
     saveAsanaFilterPreferences: jest.fn(),
   },
   parseCalendarEvents: jest.fn((events) => events),
@@ -39,21 +39,16 @@ describe('useAsanaTasks hook', () => {
     jest.clearAllMocks();
     mockApi.getAllAsanaTasks.mockResolvedValue([]);
     mockApi.getScheduledAsanaTasks.mockResolvedValue({ tasks: [] });
-    mockApi.getAsanaFilterPreferences.mockResolvedValue({
+    mockApi.getAllAsanaFilterPreferences.mockResolvedValue({ filtersMap: {} });
+    mockApi.saveAsanaFilterPreferences.mockResolvedValue({
+      success: true,
       filters: {
-        integrationIds: [],
-        projectIds: [],
-        typeValues: [],
-        dueDateRange: 'all',
-        startDateRange: 'all',
-        filterLogic: 'and',
-        sortField: 'dueOn',
-        sortDirection: 'asc',
-        groupBy: 'none',
-        groupOrder: [],
-      }
+        integrationIds: [], projectIds: [], typeValues: [],
+        dueDateRange: 'all', startDateRange: 'all', filterLogic: 'and',
+        sortField: 'dueOn', sortDirection: 'asc', groupBy: 'none',
+        groupOrder: [], expandedGroups: [],
+      },
     });
-    mockApi.saveAsanaFilterPreferences.mockResolvedValue({ success: true, filters: {} as any });
   });
 
   describe('initialization', () => {
@@ -90,17 +85,17 @@ describe('useAsanaTasks hook', () => {
         groupBy: 'none' as const,
         groupOrder: [],
       };
-      mockApi.getAsanaFilterPreferences.mockResolvedValue({ filters: savedFilters });
+      mockApi.getAllAsanaFilterPreferences.mockResolvedValue({ filtersMap: { 'int-1': savedFilters } });
 
       const { result } = renderHook(() => useAsanaTasks());
 
       await waitFor(() => {
-        expect(result.current.filters.integrationIds).toEqual(['int-1']);
-        expect(result.current.filters.sortField).toBe('title');
+        expect(result.current.filtersMap['int-1']?.integrationIds).toEqual(['int-1']);
+        expect(result.current.filtersMap['int-1']?.sortField).toBe('title');
       });
     });
 
-    it('uses default filters when API returns defaults', async () => {
+    it('uses default filters when API returns empty map', async () => {
       const { result } = renderHook(() => useAsanaTasks());
 
       await waitFor(() => {
@@ -198,7 +193,7 @@ describe('useAsanaTasks hook', () => {
 
       // Wait for initial async setup to complete
       await waitFor(() => {
-        expect(mockApi.getAsanaFilterPreferences).toHaveBeenCalled();
+        expect(mockApi.getAllAsanaFilterPreferences).toHaveBeenCalled();
       });
 
       act(() => {
@@ -247,7 +242,7 @@ describe('useAsanaTasks hook', () => {
   });
 
   describe('filtering', () => {
-    const setupTasksWithFilters = async (tasks: any[]) => {
+    const setupTasksWithFilters = async (tasks: Record<string, unknown>[]) => {
       mockApi.getAllAsanaTasks.mockResolvedValue(tasks);
       (api.parseCalendarEvents as jest.Mock).mockReturnValue(tasks);
 
@@ -390,7 +385,7 @@ describe('useAsanaTasks hook', () => {
 
       const { result } = renderHook(() => useAsanaTasks());
 
-      let returned: any;
+      let returned: unknown;
       await act(async () => {
         returned = await result.current.scheduleAsana('task-1', 'int-1', '2024-01-15', '09:00', 60);
       });
@@ -426,7 +421,7 @@ describe('useAsanaTasks hook', () => {
 
       const { result } = renderHook(() => useAsanaTasks());
 
-      let returned: any;
+      let returned: unknown;
       await act(async () => {
         returned = await result.current.updateScheduledAsana('sched-1', { scheduledDate: '2024-01-16' });
       });
@@ -468,7 +463,7 @@ describe('useAsanaTasks hook', () => {
 
       const { result } = renderHook(() => useAsanaTasks());
 
-      let created: any;
+      let created: unknown;
       await act(async () => {
         created = await result.current.createAsanaTask('int-1', 'New Task', { notes: 'Test notes' });
       });
