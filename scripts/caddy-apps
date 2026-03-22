@@ -112,20 +112,6 @@ update_hosts() {
             fi
         done < <(grep '\.localhost {' "$static_conf")
     fi
-
-    new_entries="$new_entries
-$HOSTS_MARKER END"
-
-    if ! touch /etc/hosts 2>/dev/null; then
-        log_warn "Need sudo to update /etc/hosts"
-        sudo sed -i '' "/$HOSTS_MARKER START/,/$HOSTS_MARKER END/d" /etc/hosts 2>/dev/null || true
-        echo "$new_entries" | sudo tee -a /etc/hosts > /dev/null
-    else
-        sed -i '' "/$HOSTS_MARKER START/,/$HOSTS_MARKER END/d" /etc/hosts 2>/dev/null || true
-        echo "$new_entries" >> /etc/hosts
-    fi
-
-    log_success "  /etc/hosts updated"
 }
 
 # Start Caddy
@@ -178,7 +164,7 @@ reload() {
     echo ""
 
     generate_caddyfile
-    update_hosts
+    cleanup_hosts
     reload_caddy
 
     echo ""
@@ -207,7 +193,7 @@ list_apps() {
             status="${RED}●${NC} down"
         fi
 
-        printf "%-20s %-10s " "https://${name}.local" "$port"
+        printf "%-20s %-10s " "https://${name}.localhost" "$port"
         echo -e "$status"
     done < <(parse_config)
     echo ""
@@ -304,12 +290,12 @@ validate() {
         ((warnings++))
     fi
 
-    # Check /etc/hosts
+    # Check /etc/hosts for stale entries
     if grep -q "$HOSTS_MARKER" /etc/hosts 2>/dev/null; then
-        log_success "All .local domains in /etc/hosts"
-    else
-        log_warn "/etc/hosts not updated. Run: caddy-apps reload"
+        log_warn "Stale .local entries in /etc/hosts (run: caddy-apps reload to clean up)"
         ((warnings++))
+    else
+        log_success "No stale /etc/hosts entries"
     fi
 
     echo ""
@@ -446,7 +432,17 @@ init() {
 # Port Allocation Guide:
 #   3001-3010: Node.js/Next.js apps
 #   5000-5099: Python Flask apps
-#   8000-8099: Python FastAPI/other apps
+#   8000-8099: Python FastAPI apps
+
+# Node.js Apps
+calendar=3001
+weeknotes=3002
+linkedin=3003
+policy-explorer=3004
+
+# Python Apps
+tracker=5050
+1001albums=8000
 EOF
         log_success "Created $CONFIG_FILE"
     else
@@ -462,7 +458,7 @@ EOF
 
     echo ""
     log_success "Initialization complete!"
-    log_info "Apps configured at https://<name>.local"
+    log_info "Apps configured at https://<name>.localhost"
     echo ""
 }
 
@@ -535,7 +531,7 @@ Commands:
     help                  Show this help
 
 Config: ~/.caddy-apps/apps.conf
-Access apps at: https://<name>.local
+Access apps at: https://<name>.localhost
 
 Examples:
     caddy-apps init                    # First-time setup

@@ -4,7 +4,7 @@ import { getIntegrationById, updateIntegration } from '@/lib/integration-storage
 import { GoogleIntegration } from '@/types';
 
 function getRedirectUri(): string {
-  // Always use localhost for Google OAuth (Google doesn't allow .local domains)
+  // Always use localhost for Google OAuth (Google doesn't allow .localhost domains)
   const port = process.env.PORT || '3001';
   return `http://localhost:${port}/api/auth/google/callback`;
 }
