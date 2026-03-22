@@ -732,36 +732,42 @@ export default function Home() {
     unscheduleAllAsanaInstances(asanaTaskId);
   }, [unscheduleAllAsanaInstances]);
 
-  // Integration IDs for the two Asana workspaces
-  const OM_INTEGRATION_ID = '68a7249c-78bb-40e4-bc9d-37fc4a306aea';
-  const DBC_INTEGRATION_ID = 'a45421fa-02ad-41a7-9d68-dcdf4fdb432d';
+  // Integration IDs for the two Asana workspaces (looked up by name)
+  const OM_INTEGRATION_ID = useMemo(
+    () => asanaIntegrations.find(i => i.name === 'OM')?.id ?? '',
+    [asanaIntegrations]
+  );
+  const DBC_INTEGRATION_ID = useMemo(
+    () => asanaIntegrations.find(i => i.name === 'DBC')?.id ?? '',
+    [asanaIntegrations]
+  );
 
   // Get filters for each locked integration
   const omFilters = useMemo(
     () => getAsanaFiltersForIntegration(OM_INTEGRATION_ID),
-    [getAsanaFiltersForIntegration]
+    [getAsanaFiltersForIntegration, OM_INTEGRATION_ID]
   );
   const dbcFilters = useMemo(
     () => getAsanaFiltersForIntegration(DBC_INTEGRATION_ID),
-    [getAsanaFiltersForIntegration]
+    [getAsanaFiltersForIntegration, DBC_INTEGRATION_ID]
   );
 
   // Callbacks for setting/clearing filters per integration
   const handleOmFiltersChange = useCallback(
     (filters: AsanaFilterState) => setAsanaFilters(filters, OM_INTEGRATION_ID),
-    [setAsanaFilters]
+    [setAsanaFilters, OM_INTEGRATION_ID]
   );
   const handleDbcFiltersChange = useCallback(
     (filters: AsanaFilterState) => setAsanaFilters(filters, DBC_INTEGRATION_ID),
-    [setAsanaFilters]
+    [setAsanaFilters, DBC_INTEGRATION_ID]
   );
   const handleOmClearFilters = useCallback(
     () => clearAsanaFilters(OM_INTEGRATION_ID),
-    [clearAsanaFilters]
+    [clearAsanaFilters, OM_INTEGRATION_ID]
   );
   const handleDbcClearFilters = useCallback(
     () => clearAsanaFilters(DBC_INTEGRATION_ID),
-    [clearAsanaFilters]
+    [clearAsanaFilters, DBC_INTEGRATION_ID]
   );
 
   return (
