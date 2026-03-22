@@ -3,7 +3,7 @@
 # Calendar App Production Startup Script
 # Finds an available port, updates Caddy config, and starts the Next.js app
 
-APP_DIR="/Users/davebuckley/github/dbckz/claude/calendar"
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PORT_FILE="$APP_DIR/.data/current-port"
 CADDYFILE="/opt/homebrew/etc/Caddyfile"
 PREFERRED_PORT=3001
