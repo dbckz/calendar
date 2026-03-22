@@ -323,7 +323,7 @@ export default function Home() {
     }, 2000); // 2 second debounce
 
     return () => clearTimeout(timeoutId);
-  }, [selectedDate, timedEvents, timeWorkedByIntegration, asanaIntegrations, isLoading, googleEventAttributions]);
+  }, [selectedDate, timedEvents, timeWorkedByIntegration, asanaIntegrations, isLoading, getAsanaIntegrationIdForEvent]);
 
   const handleRefresh = useCallback(() => {
     // Rotate to a new random color scheme on refresh

@@ -35,6 +35,15 @@ interface UseGoogleCalendarReturn {
   setGoogleEvents: React.Dispatch<React.SetStateAction<CalendarEvent[]>>;
 }
 
+function deduplicateEvents(events: CalendarEvent[]): CalendarEvent[] {
+  const seen = new Set<string>();
+  return events.filter(event => {
+    if (seen.has(event.id)) return false;
+    seen.add(event.id);
+    return true;
+  });
+}
+
 export function useGoogleCalendar(): UseGoogleCalendarReturn {
   const [googleEvents, setGoogleEvents] = useState<CalendarEvent[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -101,19 +110,13 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
       const newEvents = eventArrays.flat();
 
       if (incremental) {
-        // Merge new events with existing ones
         setGoogleEvents(prev => {
-          const merged = [...prev, ...newEvents];
-          const uniqueEvents = merged.filter((event, index, self) =>
-            index === self.findIndex(e => e.id === event.id)
-          );
+          const uniqueEvents = deduplicateEvents([...prev, ...newEvents]);
           writeGoogleCalendarCache(uniqueEvents);
           return uniqueEvents;
         });
       } else {
-        const uniqueEvents = newEvents.filter((event, index, self) =>
-          index === self.findIndex(e => e.id === event.id)
-        );
+        const uniqueEvents = deduplicateEvents(newEvents);
         setGoogleEvents(uniqueEvents);
         writeGoogleCalendarCache(uniqueEvents);
       }

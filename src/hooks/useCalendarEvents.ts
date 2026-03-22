@@ -15,7 +15,7 @@ export function useCalendarEvents() {
     error: googleError,
     fetchGoogleEventsForDates,
     resetFetchedDates,
-    updateGoogleEvent: updateGoogleEventInternal,
+    updateGoogleEvent,
     createGoogleEvent: createGoogleEventInternal,
     deleteGoogleEvent: deleteGoogleEventInternal,
   } = useGoogleCalendar();
@@ -113,12 +113,6 @@ export function useCalendarEvents() {
       completed: task.completed,
     };
   }, []);
-
-  const updateGoogleEvent = useCallback(
-    (eventId: string, integrationId: string, startTime: Date, endTime: Date, title?: string, description?: string) =>
-      updateGoogleEventInternal(eventId, integrationId, startTime, endTime, title, description),
-    [updateGoogleEventInternal]
-  );
 
   const createGoogleEvent = useCallback(
     async (integrationId: string, title: string, startTime: Date, endTime: Date, description?: string, eventType?: 'default' | 'focusTime'): Promise<CalendarEvent | null> => {
