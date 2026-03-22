@@ -14,6 +14,7 @@ export function useCalendarEvents() {
     isLoading: googleLoading,
     error: googleError,
     fetchGoogleEventsForDates,
+    resetFetchedDates,
     updateGoogleEvent: updateGoogleEventInternal,
     createGoogleEvent: createGoogleEventInternal,
     deleteGoogleEvent: deleteGoogleEventInternal,
@@ -51,16 +52,24 @@ export function useCalendarEvents() {
   const isLoading = googleLoading || asanaLoading;
   const error = googleError || asanaError;
 
+  // Full refresh: re-fetches everything from scratch
   const fetchAllEvents = useCallback(async () => {
     const today = new Date();
     const yesterday = subDays(today, 1);
     const tomorrow = addDays(today, 1);
 
+    resetFetchedDates();
     await Promise.all([
       fetchGoogleEventsForDates([yesterday, today, tomorrow]),
       fetchAllAsanaTasks(),
     ]);
-  }, [fetchGoogleEventsForDates, fetchAllAsanaTasks]);
+  }, [fetchGoogleEventsForDates, fetchAllAsanaTasks, resetFetchedDates]);
+
+  // Incremental fetch: loads events for a date and its neighbors if not already fetched
+  const fetchEventsForDate = useCallback(async (date: Date) => {
+    const dates = [subDays(date, 1), date, addDays(date, 1)];
+    await fetchGoogleEventsForDates(dates, { incremental: true });
+  }, [fetchGoogleEventsForDates]);
 
   useEffect(() => {
     if (!hasFetched.current) {
@@ -144,6 +153,7 @@ export function useCalendarEvents() {
     getAsanaFiltersForIntegration,
     clearAsanaFilters,
     fetchAllEvents,
+    fetchEventsForDate,
     adhocToCalendarEvent,
     scheduleAsana,
     updateScheduledAsana,

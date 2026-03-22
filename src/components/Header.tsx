@@ -1,10 +1,8 @@
 'use client';
 
-import { format, addDays, subDays } from 'date-fns';
-import { Calendar, Settings, RefreshCw, Star } from 'lucide-react';
+import { format, addDays, subDays, isSameDay } from 'date-fns';
+import { Calendar, Settings, RefreshCw, Star, ChevronLeft, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
-
-type DayTab = 'yesterday' | 'today' | 'tomorrow';
 
 interface ColorScheme {
   headerBg: string;
@@ -41,36 +39,20 @@ function formatDuration(minutes: number): string {
   return `${hours}h ${mins}m`;
 }
 
-export function Header({ selectedDate, onDateChange, onRefresh, isLoading, colorScheme, timeWorkedByIntegration, integrations }: HeaderProps) {
+function getDayLabel(date: Date): string {
   const today = new Date();
-  const yesterday = subDays(today, 1);
-  const tomorrow = addDays(today, 1);
+  if (isSameDay(date, today)) return 'Today';
+  if (isSameDay(date, subDays(today, 1))) return 'Yesterday';
+  if (isSameDay(date, addDays(today, 1))) return 'Tomorrow';
+  return format(date, 'EEE, MMM d');
+}
 
-  const selectedDateStr = format(selectedDate, 'yyyy-MM-dd');
-  const yesterdayStr = format(yesterday, 'yyyy-MM-dd');
-  const tomorrowStr = format(tomorrow, 'yyyy-MM-dd');
+export function Header({ selectedDate, onDateChange, onRefresh, isLoading, colorScheme, timeWorkedByIntegration, integrations }: HeaderProps) {
+  const prevDay = subDays(selectedDate, 1);
+  const nextDay = addDays(selectedDate, 1);
 
-  const getActiveTab = (): DayTab => {
-    if (selectedDateStr === yesterdayStr) return 'yesterday';
-    if (selectedDateStr === tomorrowStr) return 'tomorrow';
-    return 'today';
-  };
-
-  const activeTab = getActiveTab();
-
-  const handleTabClick = (tab: DayTab) => {
-    switch (tab) {
-      case 'yesterday':
-        onDateChange(yesterday);
-        break;
-      case 'today':
-        onDateChange(today);
-        break;
-      case 'tomorrow':
-        onDateChange(tomorrow);
-        break;
-    }
-  };
+  const inactiveClass = colorScheme ? 'text-white/80 hover:text-white' : 'text-gray-600 hover:text-gray-900';
+  const arrowClass = `p-1.5 rounded-md transition-colors ${colorScheme ? 'text-white/70 hover:text-white hover:bg-white/10' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-200'}`;
 
   return (
     <header className={`${colorScheme?.headerBg || 'bg-white'} border-b border-gray-200 sticky top-0 z-10`}>
@@ -83,38 +65,51 @@ export function Header({ selectedDate, onDateChange, onRefresh, isLoading, color
             </div>
           </div>
 
-          {/* Day tabs */}
-          <div className={`flex ${colorScheme ? 'bg-white/20' : 'bg-gray-100'} rounded-lg p-1`}>
-            <button
-              onClick={() => handleTabClick('yesterday')}
-              className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-                activeTab === 'yesterday'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : colorScheme ? 'text-white/80 hover:text-white' : 'text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              Yesterday
-            </button>
-            <button
-              onClick={() => handleTabClick('today')}
-              className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-                activeTab === 'today'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : colorScheme ? 'text-white/80 hover:text-white' : 'text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              Today
-            </button>
-            <button
-              onClick={() => handleTabClick('tomorrow')}
-              className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-                activeTab === 'tomorrow'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : colorScheme ? 'text-white/80 hover:text-white' : 'text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              Tomorrow
-            </button>
+          {/* Day navigation */}
+          <div className="relative flex items-center">
+            <div className={`flex items-center gap-1 ${colorScheme ? 'bg-white/20' : 'bg-gray-100'} rounded-lg p-1`}>
+              <button
+                onClick={() => onDateChange(prevDay)}
+                className={arrowClass}
+                aria-label="Previous day"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => onDateChange(prevDay)}
+                className={`w-28 py-2 text-sm font-medium rounded-md transition-colors text-center ${inactiveClass}`}
+              >
+                {getDayLabel(prevDay)}
+              </button>
+              <button
+                className="w-28 py-2 text-sm font-medium rounded-md transition-colors text-center bg-white text-gray-900 shadow-sm"
+              >
+                {getDayLabel(selectedDate)}
+              </button>
+              <button
+                onClick={() => onDateChange(nextDay)}
+                className={`w-28 py-2 text-sm font-medium rounded-md transition-colors text-center ${inactiveClass}`}
+              >
+                {getDayLabel(nextDay)}
+              </button>
+              <button
+                onClick={() => onDateChange(nextDay)}
+                className={arrowClass}
+                aria-label="Next day"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+            {!isSameDay(selectedDate, new Date()) && (
+              <button
+                onClick={() => onDateChange(new Date())}
+                className={`absolute left-full ml-2 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                  colorScheme ? 'bg-white/20 text-white hover:bg-white/30' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Today
+              </button>
+            )}
           </div>
 
           {/* Time worked stats */}

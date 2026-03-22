@@ -10,7 +10,8 @@ interface UseGoogleCalendarReturn {
   isLoading: boolean;
   error: string | null;
   fetchGoogleEventsForDate: (date: Date) => Promise<CalendarEvent[]>;
-  fetchGoogleEventsForDates: (dates: Date[]) => Promise<void>;
+  fetchGoogleEventsForDates: (dates: Date[], options?: { incremental?: boolean }) => Promise<void>;
+  resetFetchedDates: () => void;
   updateGoogleEvent: (
     eventId: string,
     integrationId: string,
@@ -40,6 +41,7 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
   const [error, setError] = useState<string | null>(null);
   const isMountedRef = useRef(true);
   const pendingRequestsRef = useRef<Set<string>>(new Set());
+  const fetchedDatesRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -72,25 +74,54 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     }
   }, []);
 
-  const fetchGoogleEventsForDates = useCallback(async (dates: Date[]) => {
-    const cached = readGoogleCalendarCache();
-    if (cached) {
-      setGoogleEvents(cached.events);
+  const fetchGoogleEventsForDates = useCallback(async (dates: Date[], { incremental = false }: { incremental?: boolean } = {}) => {
+    // In incremental mode, skip dates we've already fetched
+    const datesToFetch = incremental
+      ? dates.filter(d => !fetchedDatesRef.current.has(d.toISOString().split('T')[0]))
+      : dates;
+
+    if (datesToFetch.length === 0) return;
+
+    if (!incremental) {
+      const cached = readGoogleCalendarCache();
+      if (cached) {
+        setGoogleEvents(cached.events);
+      } else {
+        setIsLoading(true);
+      }
     } else {
       setIsLoading(true);
     }
     setError(null);
 
     try {
-      const eventArrays = await Promise.all(dates.map(fetchGoogleEventsForDate));
+      const eventArrays = await Promise.all(datesToFetch.map(fetchGoogleEventsForDate));
       if (!isMountedRef.current) return;
 
-      const allEvents = eventArrays.flat();
-      const uniqueEvents = allEvents.filter((event, index, self) =>
-        index === self.findIndex(e => e.id === event.id)
-      );
-      setGoogleEvents(uniqueEvents);
-      writeGoogleCalendarCache(uniqueEvents);
+      const newEvents = eventArrays.flat();
+
+      if (incremental) {
+        // Merge new events with existing ones
+        setGoogleEvents(prev => {
+          const merged = [...prev, ...newEvents];
+          const uniqueEvents = merged.filter((event, index, self) =>
+            index === self.findIndex(e => e.id === event.id)
+          );
+          writeGoogleCalendarCache(uniqueEvents);
+          return uniqueEvents;
+        });
+      } else {
+        const uniqueEvents = newEvents.filter((event, index, self) =>
+          index === self.findIndex(e => e.id === event.id)
+        );
+        setGoogleEvents(uniqueEvents);
+        writeGoogleCalendarCache(uniqueEvents);
+      }
+
+      // Track fetched dates
+      for (const d of datesToFetch) {
+        fetchedDatesRef.current.add(d.toISOString().split('T')[0]);
+      }
     } catch (err) {
       if (!isMountedRef.current) return;
       setError(err instanceof Error ? err.message : 'Failed to fetch calendar events');
@@ -100,6 +131,11 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
       }
     }
   }, [fetchGoogleEventsForDate]);
+
+  // Reset fetched dates tracking (used on full refresh)
+  const resetFetchedDates = useCallback(() => {
+    fetchedDatesRef.current.clear();
+  }, []);
 
   const updateGoogleEvent = useCallback(async (
     eventId: string,
@@ -234,6 +270,7 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     error,
     fetchGoogleEventsForDate,
     fetchGoogleEventsForDates,
+    resetFetchedDates,
     updateGoogleEvent,
     createGoogleEvent,
     deleteGoogleEvent,

@@ -87,6 +87,7 @@ export default function Home() {
     scheduledAsanaTasks,
     isLoading,
     fetchAllEvents,
+    fetchEventsForDate,
     adhocToCalendarEvent,
     scheduleAsana,
     updateScheduledAsana,
@@ -186,6 +187,11 @@ export default function Home() {
         console.error('Failed to load Google event attributions:', err);
       });
   }, []);
+
+  // Fetch events for newly navigated dates
+  useEffect(() => {
+    fetchEventsForDate(selectedDate);
+  }, [selectedDate, fetchEventsForDate]);
 
   // Check if an event falls on a specific date
   const isEventOnDate = useCallback((event: CalendarEvent, targetDate: string): boolean => {

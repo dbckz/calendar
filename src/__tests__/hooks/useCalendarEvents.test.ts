@@ -11,6 +11,7 @@ jest.mock('@/hooks/useGoogleCalendar', () => ({
     isLoading: false,
     error: null,
     fetchGoogleEventsForDates: jest.fn().mockResolvedValue(undefined),
+    resetFetchedDates: jest.fn(),
     updateGoogleEvent: jest.fn().mockResolvedValue({ success: true }),
     createGoogleEvent: jest.fn().mockResolvedValue({ event: null }),
     deleteGoogleEvent: jest.fn().mockResolvedValue({ success: true }),
