@@ -48,9 +48,9 @@ step 3 "Configuring environment..."
 if [ ! -f "$APP_DIR/.env.local" ]; then
     cat > "$APP_DIR/.env.local" <<EOF
 PORT=$PORT
-APP_URL=https://calendar.local
+APP_URL=https://calendar.localhost
 EOF
-    ok "Created .env.local (PORT=$PORT, URL=https://calendar.local)"
+    ok "Created .env.local (PORT=$PORT, URL=https://calendar.localhost)"
 else
     ok ".env.local already exists"
 fi
@@ -70,7 +70,7 @@ if [ ! -f "$CADDY_APPS/caddy-apps" ]; then
     cat > "$CADDY_APPS/apps.conf" <<'CONF'
 # Caddy Apps Configuration
 # Format: name=port
-# Access apps at https://name.local
+# Access apps at https://name.localhost
 #
 # Port Allocation Guide:
 #   3001-3010: Node.js/Next.js apps
@@ -88,9 +88,9 @@ fi
 
 if ! grep -q "^calendar=" "$CADDY_APPS/apps.conf" 2>/dev/null; then
     "$CADDY_APPS/caddy-apps" add calendar $PORT
-    ok "Registered calendar.local → localhost:$PORT"
+    ok "Registered calendar.localhost → localhost:$PORT"
 else
-    ok "calendar.local already registered"
+    ok "calendar.localhost already registered"
 fi
 
 # 5. Build
@@ -116,7 +116,7 @@ echo ""
 echo "========================================="
 echo -e "  ${GREEN}Setup complete!${NC}"
 echo ""
-echo "  Visit: https://calendar.local"
+echo "  Visit: https://calendar.localhost"
 echo "  Then connect Google Calendar and Asana."
 echo "========================================="
 echo ""
