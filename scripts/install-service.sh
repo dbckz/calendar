@@ -8,12 +8,8 @@ PLIST_NAME="com.davebuckley.calendar"
 PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
 LOG_DIR="$HOME/.claude/logs"
 
-# Ensure required directories exist
-mkdir -p "$LOG_DIR"
-mkdir -p "$HOME/.claude/data/calendar"
-mkdir -p "$APP_DIR/.data"
+mkdir -p "$LOG_DIR" "$HOME/.claude/data/calendar" "$APP_DIR/.data"
 
-# Unload existing service if present
 launchctl unload "$PLIST_PATH" 2>/dev/null
 
 cat > "$PLIST_PATH" <<EOF
@@ -55,6 +51,5 @@ EOF
 
 echo "Installed plist to $PLIST_PATH"
 
-# Load the service
 launchctl load "$PLIST_PATH"
 echo "Service loaded. Check status with: launchctl list | grep calendar"
