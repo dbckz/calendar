@@ -8,6 +8,7 @@ import { IntegrationStatus } from '@/components/IntegrationStatus';
 import { AsanaSidebar } from '@/components/AsanaSidebar';
 import { AddTaskModal } from '@/components/AddTaskModal';
 import { AllDayEventsBar } from '@/components/AllDayEventsBar';
+import { Reminders } from '@/components/Reminders';
 import { useTasks } from '@/hooks/useTasks';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { useToast } from '@/hooks/useToast';
@@ -857,6 +858,8 @@ export default function Home() {
                 />
               )}
             </div>
+
+            <Reminders />
           </div>
         </main>
 

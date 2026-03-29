@@ -1,6 +1,6 @@
 // API utilities with retry logic and proper typing
 
-import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, ScheduledAsanaTask, SettingsResponse, TaskTemplate } from '@/types';
+import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, Reminder, ScheduledAsanaTask, SettingsResponse, TaskTemplate } from '@/types';
 
 interface RetryOptions {
   maxRetries?: number;
@@ -443,6 +443,35 @@ export const api = {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ googleEventId }),
+    });
+  },
+
+  // Reminders
+  async getReminders(): Promise<{ reminders: Reminder[] }> {
+    return fetchWithRetry<{ reminders: Reminder[] }>('/api/user-data/reminders');
+  },
+
+  async addReminder(text: string): Promise<{ reminder: Reminder }> {
+    return fetchWithRetry<{ reminder: Reminder }>('/api/user-data/reminders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+  },
+
+  async updateReminder(id: string, updates: Partial<Reminder>): Promise<{ reminder: Reminder }> {
+    return fetchWithRetry<{ reminder: Reminder }>('/api/user-data/reminders', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, ...updates }),
+    });
+  },
+
+  async deleteReminder(id: string): Promise<{ success: true }> {
+    return fetchWithRetry<{ success: true }>('/api/user-data/reminders', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
     });
   },
 

@@ -2,7 +2,7 @@
 // Uses file-based storage in ~/.claude/data/calendar/ for persistence across builds
 
 import { promises as fs } from 'fs';
-import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState, TemplateGroup } from '@/types';
+import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState, TemplateGroup, Reminder } from '@/types';
 import { DATA_DIR, USER_DATA_FILE } from './data-paths';
 
 const DEFAULT_ASANA_FILTERS: AsanaFilterState = {
@@ -33,6 +33,7 @@ interface UserData {
   customTaskTypes: CustomTaskType[];
   adHocTasks: AdHocTask[];
   scheduledAsanaTasks: ScheduledAsanaTask[];
+  reminders: Reminder[];
   asanaFilterPreferences?: AsanaFilterState; // Legacy: kept for migration
   asanaFilterPreferencesMap?: Record<string, AsanaFilterState>; // Key is integration ID or "default"
   googleEventAttributions?: GoogleEventAttribution[];
@@ -44,6 +45,7 @@ const DEFAULT_USER_DATA: UserData = {
   customTaskTypes: [],
   adHocTasks: [],
   scheduledAsanaTasks: [],
+  reminders: [],
   asanaFilterPreferencesMap: {},
   googleEventAttributions: [],
 };
@@ -76,6 +78,7 @@ export async function getUserData(): Promise<UserData> {
       customTaskTypes: parsed.customTaskTypes || [],
       adHocTasks: parsed.adHocTasks || [],
       scheduledAsanaTasks: parsed.scheduledAsanaTasks || [],
+      reminders: parsed.reminders || [],
       asanaFilterPreferencesMap: filterMap,
       googleEventAttributions: parsed.googleEventAttributions || [],
     };
@@ -479,6 +482,43 @@ export async function removeGoogleEventAttribution(googleEventId: string): Promi
 
   if (data.googleEventAttributions.length === originalLength) return false;
 
+  await saveUserData(data);
+  return true;
+}
+
+// Reminders
+export async function getReminders(): Promise<Reminder[]> {
+  const data = await getUserData();
+  return data.reminders;
+}
+
+export async function addReminder(text: string): Promise<Reminder> {
+  const data = await getUserData();
+  const reminder: Reminder = {
+    id: crypto.randomUUID(),
+    text,
+    completed: false,
+    createdAt: new Date().toISOString(),
+  };
+  data.reminders.push(reminder);
+  await saveUserData(data);
+  return reminder;
+}
+
+export async function updateReminder(id: string, updates: Partial<Reminder>): Promise<Reminder | null> {
+  const data = await getUserData();
+  const index = data.reminders.findIndex(r => r.id === id);
+  if (index === -1) return null;
+  data.reminders[index] = { ...data.reminders[index], ...updates };
+  await saveUserData(data);
+  return data.reminders[index];
+}
+
+export async function deleteReminder(id: string): Promise<boolean> {
+  const data = await getUserData();
+  const filtered = data.reminders.filter(r => r.id !== id);
+  if (filtered.length === data.reminders.length) return false;
+  data.reminders = filtered;
   await saveUserData(data);
   return true;
 }

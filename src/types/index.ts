@@ -342,6 +342,14 @@ export interface TaskTemplate {
   createdAt: string;
 }
 
+// Reminder checklist item
+export interface Reminder {
+  id: string;
+  text: string;
+  completed: boolean;
+  createdAt: string;
+}
+
 // Groups for organizing task templates
 export interface TemplateGroup {
   id: string;
