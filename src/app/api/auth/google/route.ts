@@ -19,7 +19,10 @@ function getAuthUrlWithState(
 
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
-    scope: ['https://www.googleapis.com/auth/calendar.events'],
+    scope: [
+      'https://www.googleapis.com/auth/calendar.events',
+      'https://www.googleapis.com/auth/tasks',
+    ],
     prompt: 'consent',
     state,
   });

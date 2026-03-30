@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Archive, Plus, Trash2 } from 'lucide-react';
 import { Reminder } from '@/types';
 import { api } from '@/lib/api';
 
@@ -9,6 +9,7 @@ export function Reminders() {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [newText, setNewText] = useState('');
   const [isAdding, setIsAdding] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -50,6 +51,18 @@ export function Reminders() {
     }
   };
 
+  const handleArchive = async () => {
+    setIsArchiving(true);
+    try {
+      await api.archiveReminders();
+      setReminders(prev => prev.filter(r => !r.completed));
+    } catch (err) {
+      console.error('Failed to archive reminders:', err);
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
   const uncompleted = reminders.filter(r => !r.completed);
   const completed = reminders.filter(r => r.completed);
 
@@ -57,18 +70,29 @@ export function Reminders() {
     <div className="bg-white rounded-lg border shadow-sm p-4 mt-4">
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-sm font-semibold text-gray-700">Reminders</h2>
-        {!isAdding && (
+        <div className="flex items-center gap-1">
           <button
-            onClick={() => {
-              setIsAdding(true);
-              setTimeout(() => inputRef.current?.focus(), 0);
-            }}
-            className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
-            title="Add reminder"
+            onClick={handleArchive}
+            disabled={isArchiving}
+            className="flex items-center gap-1 px-2 py-1 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors disabled:opacity-50"
+            title="Archive completed reminders"
           >
-            <Plus className="w-4 h-4" />
+            <Archive className="w-3.5 h-3.5" />
+            {isArchiving ? 'Archiving...' : 'Archive'}
           </button>
-        )}
+          {!isAdding && (
+            <button
+              onClick={() => {
+                setIsAdding(true);
+                setTimeout(() => inputRef.current?.focus(), 0);
+              }}
+              className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+              title="Add reminder"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
 
       {isAdding && (

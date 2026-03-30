@@ -475,6 +475,12 @@ export const api = {
     });
   },
 
+  async archiveReminders(): Promise<{ success: true; archivedCount: number }> {
+    return fetchWithRetry<{ success: true; archivedCount: number }>('/api/user-data/reminders/archive', {
+      method: 'POST',
+    });
+  },
+
   // Time tracking API
   async recordTimeTracking(
     date: string,

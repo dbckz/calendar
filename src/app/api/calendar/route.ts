@@ -1,26 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createCalendarEvent, deleteCalendarEvent, getCalendarEvents, refreshAccessToken, updateCalendarEvent } from '@/lib/google-calendar';
-import { getEnabledGoogleIntegrations, getGoogleIntegrationById, updateIntegration } from '@/lib/integration-storage';
-import { CalendarEvent, GoogleCalendarCredentials, GoogleIntegration } from '@/types';
-
-/**
- * Ensures credentials are valid, refreshing if needed.
- * Returns refreshed credentials and updates storage.
- */
-async function ensureValidCredentials(integration: GoogleIntegration): Promise<GoogleCalendarCredentials> {
-  let credentials = integration.credentials!;
-
-  if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
-    credentials = await refreshAccessToken(
-      credentials,
-      integration.clientId,
-      integration.clientSecret
-    );
-    await updateIntegration(integration.id, { credentials });
-  }
-
-  return credentials;
-}
+import { createCalendarEvent, deleteCalendarEvent, ensureValidCredentials, getCalendarEvents, updateCalendarEvent } from '@/lib/google-calendar';
+import { getEnabledGoogleIntegrations, getGoogleIntegrationById } from '@/lib/integration-storage';
+import { CalendarEvent, GoogleIntegration } from '@/types';
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;

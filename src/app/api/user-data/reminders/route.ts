@@ -1,16 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getReminders, addReminder, updateReminder, deleteReminder } from '@/lib/user-data-storage';
+import {
+  getGoogleTasksIntegration,
+  getTasks,
+  addTask,
+  updateTask,
+  deleteTask,
+  GoogleTask,
+} from '@/lib/google-tasks';
+
+function toReminder(task: GoogleTask) {
+  return {
+    id: task.id,
+    text: task.title,
+    completed: task.status === 'completed',
+    createdAt: task.updated,
+  };
+}
+
+function errorResponse(action: string, error: unknown): NextResponse {
+  console.error(`Error ${action} reminder:`, error);
+  return NextResponse.json(
+    { error: error instanceof Error ? error.message : `Failed to ${action} reminder` },
+    { status: 500 },
+  );
+}
 
 export async function GET() {
   try {
-    const reminders = await getReminders();
-    return NextResponse.json({ reminders });
+    const { credentials, integration } = await getGoogleTasksIntegration();
+    const tasks = await getTasks(credentials, integration.clientId, integration.clientSecret);
+    return NextResponse.json({ reminders: tasks.map(toReminder) });
   } catch (error) {
-    console.error('Error fetching reminders:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to fetch reminders' },
-      { status: 500 }
-    );
+    return errorResponse('fetching', error);
   }
 }
 
@@ -20,34 +41,32 @@ export async function POST(request: NextRequest) {
     if (!text || typeof text !== 'string') {
       return NextResponse.json({ error: 'text is required' }, { status: 400 });
     }
-    const reminder = await addReminder(text.trim());
-    return NextResponse.json({ reminder });
+
+    const { credentials, integration } = await getGoogleTasksIntegration();
+    const task = await addTask(credentials, integration.clientId, integration.clientSecret, text.trim());
+    return NextResponse.json({ reminder: toReminder(task) });
   } catch (error) {
-    console.error('Error adding reminder:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to add reminder' },
-      { status: 500 }
-    );
+    return errorResponse('adding', error);
   }
 }
 
 export async function PATCH(request: NextRequest) {
   try {
-    const { id, ...updates } = await request.json();
+    const { id, completed, text } = await request.json();
     if (!id || typeof id !== 'string') {
       return NextResponse.json({ error: 'id is required' }, { status: 400 });
     }
-    const reminder = await updateReminder(id, updates);
-    if (!reminder) {
-      return NextResponse.json({ error: 'Reminder not found' }, { status: 404 });
-    }
-    return NextResponse.json({ reminder });
+
+    const { credentials, integration } = await getGoogleTasksIntegration();
+
+    const updates: { title?: string; status?: 'needsAction' | 'completed' } = {};
+    if (typeof text === 'string') updates.title = text;
+    if (typeof completed === 'boolean') updates.status = completed ? 'completed' : 'needsAction';
+
+    const task = await updateTask(credentials, integration.clientId, integration.clientSecret, id, updates);
+    return NextResponse.json({ reminder: toReminder(task) });
   } catch (error) {
-    console.error('Error updating reminder:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to update reminder' },
-      { status: 500 }
-    );
+    return errorResponse('updating', error);
   }
 }
 
@@ -57,16 +76,11 @@ export async function DELETE(request: NextRequest) {
     if (!id || typeof id !== 'string') {
       return NextResponse.json({ error: 'id is required' }, { status: 400 });
     }
-    const success = await deleteReminder(id);
-    if (!success) {
-      return NextResponse.json({ error: 'Reminder not found' }, { status: 404 });
-    }
+
+    const { credentials, integration } = await getGoogleTasksIntegration();
+    await deleteTask(credentials, integration.clientId, integration.clientSecret, id);
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('Error deleting reminder:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to delete reminder' },
-      { status: 500 }
-    );
+    return errorResponse('deleting', error);
   }
 }

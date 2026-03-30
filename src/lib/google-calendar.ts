@@ -1,9 +1,13 @@
 // Google Calendar integration service
 
 import { google } from 'googleapis';
-import { CalendarEvent, GoogleCalendarCredentials } from '@/types';
+import { CalendarEvent, GoogleCalendarCredentials, GoogleIntegration } from '@/types';
+import { updateIntegration } from './integration-storage';
 
-const SCOPES = ['https://www.googleapis.com/auth/calendar.events'];
+const SCOPES = [
+  'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/tasks',
+];
 
 export function createOAuth2Client(clientId: string, clientSecret: string, redirectUri?: string) {
   return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
@@ -33,6 +37,19 @@ export async function getTokensFromCode(
     refreshToken: tokens.refresh_token!,
     expiresAt: tokens.expiry_date || Date.now() + 3600000,
   };
+}
+
+/**
+ * Ensures credentials are valid, refreshing if needed.
+ * Updates stored credentials when a refresh occurs.
+ */
+export async function ensureValidCredentials(integration: GoogleIntegration): Promise<GoogleCalendarCredentials> {
+  let credentials = integration.credentials!;
+  if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
+    credentials = await refreshAccessToken(credentials, integration.clientId, integration.clientSecret);
+    await updateIntegration(integration.id, { credentials });
+  }
+  return credentials;
 }
 
 export async function refreshAccessToken(
