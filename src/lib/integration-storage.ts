@@ -5,6 +5,7 @@ import { promises as fs } from 'fs';
 import {
   MultiIntegrationSettings,
   GoogleIntegration,
+  GoogleSubCalendar,
   AsanaIntegration,
   Integration,
 } from '@/types';
@@ -140,6 +141,7 @@ export function sanitizeIntegrations(settings: MultiIntegrationSettings): {
     enabled: boolean;
     connected: boolean;
     createdAt: string;
+    calendars?: GoogleSubCalendar[];
   }>;
   asanaIntegrations: Array<{
     id: string;
@@ -157,6 +159,7 @@ export function sanitizeIntegrations(settings: MultiIntegrationSettings): {
       enabled: i.enabled,
       connected: !!i.credentials?.accessToken,
       createdAt: i.createdAt,
+      calendars: i.calendars,
     })),
     asanaIntegrations: settings.asanaIntegrations.map(i => ({
       id: i.id,

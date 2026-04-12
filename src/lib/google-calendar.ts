@@ -4,13 +4,27 @@ import { google } from 'googleapis';
 import { CalendarEvent, GoogleCalendarCredentials, GoogleIntegration } from '@/types';
 import { updateIntegration } from './integration-storage';
 
-const SCOPES = [
+export const SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/calendar.readonly',
   'https://www.googleapis.com/auth/tasks',
 ];
 
 export function createOAuth2Client(clientId: string, clientSecret: string, redirectUri?: string) {
   return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+}
+
+function createAuthenticatedClient(
+  credentials: GoogleCalendarCredentials,
+  clientId: string,
+  clientSecret: string
+) {
+  const oauth2Client = createOAuth2Client(clientId, clientSecret);
+  oauth2Client.setCredentials({
+    access_token: credentials.accessToken,
+    refresh_token: credentials.refreshToken,
+  });
+  return oauth2Client;
 }
 
 export function getAuthUrl(clientId: string, clientSecret: string, redirectUri: string): string {
@@ -71,18 +85,32 @@ export async function refreshAccessToken(
   };
 }
 
+export async function listCalendars(
+  credentials: GoogleCalendarCredentials,
+  clientId: string,
+  clientSecret: string
+): Promise<Array<{ id: string; summary: string; backgroundColor: string }>> {
+  const oauth2Client = createAuthenticatedClient(credentials, clientId, clientSecret);
+  const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+  const response = await calendar.calendarList.list();
+  const items = response.data.items || [];
+
+  return items.map(item => ({
+    id: item.id!,
+    summary: item.summary || item.id!,
+    backgroundColor: item.backgroundColor || '#4285f4',
+  }));
+}
+
 export async function getCalendarEvents(
   credentials: GoogleCalendarCredentials,
   clientId: string,
   clientSecret: string,
-  date: Date
+  date: Date,
+  calendarId: string = 'primary',
+  defaultColor?: string
 ): Promise<CalendarEvent[]> {
-  const oauth2Client = createOAuth2Client(clientId, clientSecret);
-  oauth2Client.setCredentials({
-    access_token: credentials.accessToken,
-    refresh_token: credentials.refreshToken,
-  });
-
+  const oauth2Client = createAuthenticatedClient(credentials, clientId, clientSecret);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
   const startOfDay = new Date(date);
@@ -91,7 +119,7 @@ export async function getCalendarEvents(
   endOfDay.setHours(23, 59, 59, 999);
 
   const response = await calendar.events.list({
-    calendarId: 'primary',
+    calendarId,
     timeMin: startOfDay.toISOString(),
     timeMax: endOfDay.toISOString(),
     singleEvents: true,
@@ -99,6 +127,7 @@ export async function getCalendarEvents(
   });
 
   const events = response.data.items || [];
+  const fallbackColor = defaultColor || '#4285f4';
 
   return events.map((event): CalendarEvent => {
     const isAllDay = !!event.start?.date;
@@ -123,9 +152,10 @@ export async function getCalendarEvents(
       startTime,
       endTime,
       source: 'google',
-      color: event.colorId ? getGoogleColor(event.colorId) : '#4285f4',
+      color: event.colorId ? getGoogleColor(event.colorId) : fallbackColor,
       location: event.location || undefined,
       allDay: isAllDay,
+      calendarId,
     };
   });
 }
@@ -138,25 +168,21 @@ export async function updateCalendarEvent(
   startTime: Date,
   endTime: Date,
   title?: string,
-  description?: string
+  description?: string,
+  calendarId: string = 'primary'
 ): Promise<CalendarEvent> {
-  const oauth2Client = createOAuth2Client(clientId, clientSecret);
-  oauth2Client.setCredentials({
-    access_token: credentials.accessToken,
-    refresh_token: credentials.refreshToken,
-  });
-
+  const oauth2Client = createAuthenticatedClient(credentials, clientId, clientSecret);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
   const existingEvent = await calendar.events.get({
-    calendarId: 'primary',
-    eventId: eventId,
+    calendarId,
+    eventId,
   });
 
   const event = existingEvent.data;
   const isAllDay = !!event.start?.date;
   const updatedEvent = await calendar.events.update({
-    calendarId: 'primary',
-    eventId: eventId,
+    calendarId,
+    eventId,
     requestBody: {
       ...event,
       summary: title !== undefined ? title : event.summary,
@@ -191,20 +217,16 @@ export async function createCalendarEvent(
   startTime: Date,
   endTime: Date,
   description?: string,
-  eventType?: 'default' | 'focusTime'
+  eventType?: 'default' | 'focusTime',
+  calendarId: string = 'primary'
 ): Promise<CalendarEvent> {
-  const oauth2Client = createOAuth2Client(clientId, clientSecret);
-  oauth2Client.setCredentials({
-    access_token: credentials.accessToken,
-    refresh_token: credentials.refreshToken,
-  });
-
+  const oauth2Client = createAuthenticatedClient(credentials, clientId, clientSecret);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   const baseRequestBody = {
     summary: title,
-    description: description,
+    description,
     start: {
       dateTime: startTime.toISOString(),
       timeZone,
@@ -221,20 +243,20 @@ export async function createCalendarEvent(
   if (eventType === 'focusTime') {
     try {
       event = await calendar.events.insert({
-        calendarId: 'primary',
+        calendarId,
         requestBody: { ...baseRequestBody, eventType: 'focusTime' },
       });
     } catch (err) {
       // focusTime may not be supported on this calendar, retry as default event
       console.log('focusTime not supported, creating as default event');
       event = await calendar.events.insert({
-        calendarId: 'primary',
+        calendarId,
         requestBody: { ...baseRequestBody, eventType: 'default' },
       });
     }
   } else {
     event = await calendar.events.insert({
-      calendarId: 'primary',
+      calendarId,
       requestBody: { ...baseRequestBody, eventType: 'default' },
     });
   }
@@ -254,19 +276,15 @@ export async function deleteCalendarEvent(
   credentials: GoogleCalendarCredentials,
   clientId: string,
   clientSecret: string,
-  eventId: string
+  eventId: string,
+  calendarId: string = 'primary'
 ): Promise<void> {
-  const oauth2Client = createOAuth2Client(clientId, clientSecret);
-  oauth2Client.setCredentials({
-    access_token: credentials.accessToken,
-    refresh_token: credentials.refreshToken,
-  });
-
+  const oauth2Client = createAuthenticatedClient(credentials, clientId, clientSecret);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
   await calendar.events.delete({
-    calendarId: 'primary',
-    eventId: eventId,
+    calendarId,
+    eventId,
   });
 }
 

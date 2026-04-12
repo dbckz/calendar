@@ -17,6 +17,8 @@ export interface CalendarEvent {
   createdAt?: string;
   integrationId?: string;
   integrationName?: string;
+  calendarId?: string;       // Google sub-calendar ID (for mutations)
+  calendarName?: string;     // Display name of the sub-calendar
   // Asana-specific fields
   projects?: Array<{ gid: string; name: string }>;
   customFields?: AsanaCustomField[];
@@ -228,11 +230,19 @@ export interface IntegrationBase {
   createdAt: string;
 }
 
+export interface GoogleSubCalendar {
+  id: string;          // e.g., 'primary', 'family123@group.calendar.google.com'
+  summary: string;     // Display name, e.g., "Joneses"
+  backgroundColor: string;  // e.g., '#7986cb'
+  selected: boolean;   // Whether user wants to fetch events from this calendar
+}
+
 export interface GoogleIntegration extends IntegrationBase {
   type: 'google';
   clientId: string;
   clientSecret: string;
   credentials?: GoogleCalendarCredentials;
+  calendars?: GoogleSubCalendar[];  // undefined means legacy = fetch only 'primary'
 }
 
 export interface AsanaIntegration extends IntegrationBase {
@@ -311,6 +321,7 @@ export interface SettingsResponse {
     name: string;
     enabled: boolean;
     connected: boolean;
+    calendars?: GoogleSubCalendar[];
   }>;
   asanaIntegrations: Array<{
     id: string;

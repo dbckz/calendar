@@ -603,7 +603,7 @@ export default function Home() {
     } else if (source === 'google') {
       const googleEvent = googleEvents.find(e => e.id === eventId);
       if (googleEvent?.integrationId) {
-        updateGoogleEvent(eventId, googleEvent.integrationId, startTime, endTime);
+        updateGoogleEvent(eventId, googleEvent.integrationId, startTime, endTime, undefined, undefined, googleEvent.calendarId);
       }
       updateScheduledAsanaByGoogleEvent(eventId, { scheduledDate: dateStr, scheduledTime: timeStr, duration });
     }
@@ -700,7 +700,7 @@ export default function Home() {
         unscheduleAsana(linkedSchedule.id);
       }
       // deleteGoogleEvent is already optimistic - it removes from UI immediately
-      deleteGoogleEvent(event.id, event.integrationId).then(success => {
+      deleteGoogleEvent(event.id, event.integrationId, event.calendarId).then(success => {
         if (success) {
           toast.success('Event deleted from Google Calendar');
         } else {
@@ -1160,7 +1160,8 @@ export default function Home() {
                         selectedGoogleEvent.startTime,
                         selectedGoogleEvent.endTime,
                         editingGoogleEventTitle,
-                        editingGoogleEventDescription
+                        editingGoogleEventDescription,
+                        selectedGoogleEvent.calendarId
                       );
                       setIsSavingGoogleEvent(false);
                       if (result.success) {

@@ -13,7 +13,10 @@ import {
   Trash2,
   Plus,
   RefreshCw,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
+import { GoogleSubCalendar } from '@/types';
 
 interface IntegrationInfo {
   id: string;
@@ -22,6 +25,7 @@ interface IntegrationInfo {
   connected: boolean;
   createdAt: string;
   workspaceId?: string;
+  calendars?: GoogleSubCalendar[];
 }
 
 interface SettingsState {
@@ -41,6 +45,11 @@ function SettingsContent() {
   const [googleClientId, setGoogleClientId] = useState('');
   const [googleClientSecret, setGoogleClientSecret] = useState('');
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+
+  // Google calendar selection
+  const [expandedCalendars, setExpandedCalendars] = useState<Record<string, boolean>>({});
+  const [calendarLists, setCalendarLists] = useState<Record<string, GoogleSubCalendar[]>>({});
+  const [loadingCalendars, setLoadingCalendars] = useState<Record<string, boolean>>({});
 
   // Asana form
   const [showAsanaForm, setShowAsanaForm] = useState(false);
@@ -193,6 +202,54 @@ function SettingsContent() {
     }
   };
 
+  const toggleCalendarPanel = async (integrationId: string) => {
+    const isExpanded = expandedCalendars[integrationId];
+    setExpandedCalendars(prev => ({ ...prev, [integrationId]: !isExpanded }));
+
+    // Fetch calendar list on first expand
+    if (!isExpanded && !calendarLists[integrationId]) {
+      setLoadingCalendars(prev => ({ ...prev, [integrationId]: true }));
+      try {
+        const res = await fetch(`/api/google-calendars?integrationId=${integrationId}`);
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.error || 'Failed to fetch calendars');
+        }
+        const data = await res.json();
+        setCalendarLists(prev => ({ ...prev, [integrationId]: data.calendars }));
+      } catch (error) {
+        setMessage({
+          type: 'error',
+          text: error instanceof Error ? error.message : 'Failed to load calendars. You may need to re-authenticate.',
+        });
+      } finally {
+        setLoadingCalendars(prev => ({ ...prev, [integrationId]: false }));
+      }
+    }
+  };
+
+  const toggleSubCalendar = async (integrationId: string, calendarId: string) => {
+    const calendars = calendarLists[integrationId];
+    if (!calendars) return;
+
+    const updated = calendars.map(c =>
+      c.id === calendarId ? { ...c, selected: !c.selected } : c
+    );
+    setCalendarLists(prev => ({ ...prev, [integrationId]: updated }));
+
+    try {
+      await fetch('/api/google-calendars', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ integrationId, calendars: updated }),
+      });
+    } catch (error) {
+      // Revert on failure
+      setCalendarLists(prev => ({ ...prev, [integrationId]: calendars }));
+      setMessage({ type: 'error', text: 'Failed to save calendar selection.' });
+    }
+  };
+
   const toggleIntegration = async (integrationId: string, enabled: boolean) => {
     try {
       await fetch('/api/integrations', {
@@ -276,44 +333,94 @@ function SettingsContent() {
           <div className="divide-y">
             {/* Existing integrations */}
             {settings?.googleIntegrations.map((integration) => (
-              <div key={integration.id} className="p-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={`w-2 h-2 rounded-full ${integration.connected ? 'bg-green-500' : 'bg-gray-300'}`} />
-                  <div>
-                    <p className="font-medium text-gray-900">{integration.name}</p>
-                    <p className="text-xs text-gray-500">
-                      {integration.connected ? 'Connected' : 'Not connected'}
-                    </p>
+              <div key={integration.id}>
+                <div className="p-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-2 h-2 rounded-full ${integration.connected ? 'bg-green-500' : 'bg-gray-300'}`} />
+                    <div>
+                      <p className="font-medium text-gray-900">{integration.name}</p>
+                      <p className="text-xs text-gray-500">
+                        {integration.connected ? 'Connected' : 'Not connected'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {integration.connected && (
+                      <>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={integration.enabled}
+                            onChange={(e) => toggleIntegration(integration.id, e.target.checked)}
+                            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-600">Enabled</span>
+                        </label>
+                        <button
+                          onClick={() => toggleCalendarPanel(integration.id)}
+                          className="flex items-center gap-1 px-2 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                          title="Select calendars"
+                        >
+                          {expandedCalendars[integration.id] ? (
+                            <ChevronDown className="w-3 h-3" />
+                          ) : (
+                            <ChevronRight className="w-3 h-3" />
+                          )}
+                          Calendars
+                        </button>
+                      </>
+                    )}
+                    <button
+                      onClick={() => handleGoogleReconnect(integration.id)}
+                      className="flex items-center gap-1.5 px-2 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                      title="Re-authenticate with Google"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      {integration.connected ? 'Re-auth' : 'Connect'}
+                    </button>
+                    <button
+                      onClick={() => handleGoogleDisconnect(integration.id)}
+                      className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors"
+                      title="Remove"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {integration.connected && (
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={integration.enabled}
-                        onChange={(e) => toggleIntegration(integration.id, e.target.checked)}
-                        className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                      />
-                      <span className="text-sm text-gray-600">Enabled</span>
-                    </label>
-                  )}
-                  <button
-                    onClick={() => handleGoogleReconnect(integration.id)}
-                    className="flex items-center gap-1.5 px-2 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                    title="Re-authenticate with Google"
-                  >
-                    <RefreshCw className="w-3 h-3" />
-                    {integration.connected ? 'Re-auth' : 'Connect'}
-                  </button>
-                  <button
-                    onClick={() => handleGoogleDisconnect(integration.id)}
-                    className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors"
-                    title="Remove"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
+                {/* Sub-calendar selection panel */}
+                {expandedCalendars[integration.id] && (
+                  <div className="px-4 pb-4 pt-0">
+                    <div className="ml-5 border rounded-lg bg-gray-50 p-3">
+                      <p className="text-xs font-medium text-gray-500 mb-2">Select which calendars to show</p>
+                      {loadingCalendars[integration.id] ? (
+                        <div className="flex items-center gap-2 py-2">
+                          <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                          <span className="text-sm text-gray-500">Loading calendars...</span>
+                        </div>
+                      ) : calendarLists[integration.id] ? (
+                        <div className="space-y-1.5">
+                          {calendarLists[integration.id].map(cal => (
+                            <label key={cal.id} className="flex items-center gap-2.5 cursor-pointer py-1 px-1 rounded hover:bg-gray-100">
+                              <input
+                                type="checkbox"
+                                checked={cal.selected}
+                                onChange={() => toggleSubCalendar(integration.id, cal.id)}
+                                className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                              />
+                              <span
+                                className="w-3 h-3 rounded-full flex-shrink-0"
+                                style={{ backgroundColor: cal.backgroundColor }}
+                              />
+                              <span className="text-sm text-gray-700">{cal.summary}</span>
+                            </label>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-500">Could not load calendars.</p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
 

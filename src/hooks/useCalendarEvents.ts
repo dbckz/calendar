@@ -123,8 +123,8 @@ export function useCalendarEvents() {
   );
 
   const deleteGoogleEvent = useCallback(
-    async (eventId: string, integrationId: string): Promise<boolean> => {
-      const result = await deleteGoogleEventInternal(eventId, integrationId);
+    async (eventId: string, integrationId: string, calendarId?: string): Promise<boolean> => {
+      const result = await deleteGoogleEventInternal(eventId, integrationId, calendarId);
       return result.success;
     },
     [deleteGoogleEventInternal]

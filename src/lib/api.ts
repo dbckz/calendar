@@ -1,6 +1,6 @@
 // API utilities with retry logic and proper typing
 
-import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, Reminder, ScheduledAsanaTask, SettingsResponse, TaskTemplate } from '@/types';
+import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, GoogleSubCalendar, Reminder, ScheduledAsanaTask, SettingsResponse, TaskTemplate } from '@/types';
 
 interface RetryOptions {
   maxRetries?: number;
@@ -95,7 +95,8 @@ export const api = {
     startTime: Date,
     endTime: Date,
     description?: string,
-    eventType?: 'default' | 'focusTime'
+    eventType?: 'default' | 'focusTime',
+    calendarId?: string
   ): Promise<CalendarEventResponse> {
     return fetchWithRetry<CalendarEventResponse>('/api/calendar', {
       method: 'POST',
@@ -107,6 +108,7 @@ export const api = {
         endTime: endTime.toISOString(),
         description,
         eventType,
+        calendarId,
       }),
     });
   },
@@ -117,7 +119,8 @@ export const api = {
     startTime: Date,
     endTime: Date,
     title?: string,
-    description?: string
+    description?: string,
+    calendarId?: string
   ): Promise<CalendarEventResponse> {
     return fetchWithRetry<CalendarEventResponse>('/api/calendar', {
       method: 'PATCH',
@@ -129,18 +132,20 @@ export const api = {
         endTime: endTime.toISOString(),
         title,
         description,
+        calendarId,
       }),
     });
   },
 
   async deleteCalendarEvent(
     eventId: string,
-    integrationId: string
+    integrationId: string,
+    calendarId?: string
   ): Promise<{ success: true }> {
     return fetchWithRetry<{ success: true }>('/api/calendar', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ eventId, integrationId }),
+      body: JSON.stringify({ eventId, integrationId, calendarId }),
     });
   },
 
@@ -478,6 +483,21 @@ export const api = {
   async archiveReminders(): Promise<{ success: true; archivedCount: number }> {
     return fetchWithRetry<{ success: true; archivedCount: number }>('/api/user-data/reminders/archive', {
       method: 'POST',
+    });
+  },
+
+  // Google sub-calendar management
+  async getGoogleCalendars(integrationId: string): Promise<{ calendars: GoogleSubCalendar[] }> {
+    return fetchWithRetry<{ calendars: GoogleSubCalendar[] }>(
+      `/api/google-calendars?integrationId=${encodeURIComponent(integrationId)}`
+    );
+  },
+
+  async saveGoogleCalendars(integrationId: string, calendars: GoogleSubCalendar[]): Promise<{ success: true; calendars: GoogleSubCalendar[] }> {
+    return fetchWithRetry<{ success: true; calendars: GoogleSubCalendar[] }>('/api/google-calendars', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ integrationId, calendars }),
     });
   },
 

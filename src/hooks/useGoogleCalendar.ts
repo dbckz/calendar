@@ -18,7 +18,8 @@ interface UseGoogleCalendarReturn {
     startTime: Date,
     endTime: Date,
     title?: string,
-    description?: string
+    description?: string,
+    calendarId?: string
   ) => Promise<{ success: boolean; error?: string }>;
   createGoogleEvent: (
     integrationId: string,
@@ -26,11 +27,13 @@ interface UseGoogleCalendarReturn {
     startTime: Date,
     endTime: Date,
     description?: string,
-    eventType?: 'default' | 'focusTime'
+    eventType?: 'default' | 'focusTime',
+    calendarId?: string
   ) => Promise<{ event: CalendarEvent | null; error?: string }>;
   deleteGoogleEvent: (
     eventId: string,
-    integrationId: string
+    integrationId: string,
+    calendarId?: string
   ) => Promise<{ success: boolean; error?: string }>;
   setGoogleEvents: React.Dispatch<React.SetStateAction<CalendarEvent[]>>;
 }
@@ -38,8 +41,10 @@ interface UseGoogleCalendarReturn {
 function deduplicateEvents(events: CalendarEvent[]): CalendarEvent[] {
   const seen = new Set<string>();
   return events.filter(event => {
-    if (seen.has(event.id)) return false;
-    seen.add(event.id);
+    // Include calendarId in dedup key so same event in different calendars is kept
+    const key = event.calendarId ? `${event.calendarId}:${event.id}` : event.id;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }
@@ -146,7 +151,8 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     startTime: Date,
     endTime: Date,
     title?: string,
-    description?: string
+    description?: string,
+    calendarId?: string
   ): Promise<{ success: boolean; error?: string }> => {
     let previousEvent: CalendarEvent | undefined;
     setGoogleEvents(prev => prev.map(event => {
@@ -164,7 +170,7 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     }));
 
     try {
-      const updatedEvent = await api.updateCalendarEvent(eventId, integrationId, startTime, endTime, title, description);
+      const updatedEvent = await api.updateCalendarEvent(eventId, integrationId, startTime, endTime, title, description, calendarId);
       setGoogleEvents(prev => {
         const updated = prev.map(event =>
           event.id === eventId ? { ...updatedEvent, startTime: new Date(updatedEvent.startTime), endTime: new Date(updatedEvent.endTime) } : event
@@ -192,7 +198,8 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     startTime: Date,
     endTime: Date,
     description?: string,
-    eventType?: 'default' | 'focusTime'
+    eventType?: 'default' | 'focusTime',
+    calendarId?: string
   ): Promise<{ event: CalendarEvent | null; error?: string }> => {
     // Create optimistic event with temp ID
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -215,7 +222,7 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     });
 
     try {
-      const createdEvent = await api.createCalendarEvent(integrationId, title, startTime, endTime, description, eventType);
+      const createdEvent = await api.createCalendarEvent(integrationId, title, startTime, endTime, description, eventType, calendarId);
 
       const parsedEvent: CalendarEvent = {
         ...createdEvent,
@@ -245,7 +252,8 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
 
   const deleteGoogleEvent = useCallback(async (
     eventId: string,
-    integrationId: string
+    integrationId: string,
+    calendarId?: string
   ): Promise<{ success: boolean; error?: string }> => {
     let previousEvents: CalendarEvent[] = [];
     setGoogleEvents(prev => {
@@ -254,7 +262,7 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     });
 
     try {
-      await api.deleteCalendarEvent(eventId, integrationId);
+      await api.deleteCalendarEvent(eventId, integrationId, calendarId);
       setGoogleEvents(prev => {
         writeGoogleCalendarCache(prev);
         return prev;

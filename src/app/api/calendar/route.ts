@@ -54,18 +54,36 @@ async function fetchEventsFromIntegration(
   }
 
   const credentials = await ensureValidCredentials(integration);
-  const events = await getCalendarEvents(
-    credentials,
-    integration.clientId,
-    integration.clientSecret,
-    date
-  );
 
-  return events.map(event => ({
-    ...event,
-    integrationId: integration.id,
-    integrationName: integration.name,
-  }));
+  const DEFAULT_CALENDAR = { id: 'primary', summary: 'Primary', backgroundColor: '#4285f4', selected: true as const };
+  const selectedCalendars = integration.calendars?.filter(c => c.selected);
+  const calendarsToFetch = selectedCalendars?.length ? selectedCalendars : [DEFAULT_CALENDAR];
+
+  const allEvents: CalendarEvent[] = [];
+
+  for (const cal of calendarsToFetch) {
+    try {
+      const events = await getCalendarEvents(
+        credentials,
+        integration.clientId,
+        integration.clientSecret,
+        date,
+        cal.id,
+        cal.backgroundColor
+      );
+      allEvents.push(...events.map(event => ({
+        ...event,
+        integrationId: integration.id,
+        integrationName: integration.name,
+        calendarId: cal.id,
+        calendarName: cal.summary,
+      })));
+    } catch (error) {
+      console.error(`Error fetching from calendar ${cal.summary}:`, error);
+    }
+  }
+
+  return allEvents;
 }
 
 /**
@@ -89,7 +107,7 @@ async function getValidatedIntegration(integrationId: string): Promise<
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
-    const { eventId, integrationId, startTime, endTime, title, description } = body;
+    const { eventId, integrationId, startTime, endTime, title, description, calendarId } = body;
 
     if (!eventId || !integrationId || !startTime || !endTime) {
       return NextResponse.json(
@@ -111,7 +129,8 @@ export async function PATCH(request: NextRequest) {
       new Date(startTime),
       new Date(endTime),
       title,
-      description
+      description,
+      calendarId || 'primary'
     );
 
     return NextResponse.json({
@@ -131,7 +150,7 @@ export async function PATCH(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { integrationId, title, startTime, endTime, description, eventType } = body;
+    const { integrationId, title, startTime, endTime, description, eventType, calendarId } = body;
 
     if (!integrationId || !title || !startTime || !endTime) {
       return NextResponse.json(
@@ -153,7 +172,8 @@ export async function POST(request: NextRequest) {
       new Date(startTime),
       new Date(endTime),
       description,
-      eventType
+      eventType,
+      calendarId || 'primary'
     );
 
     return NextResponse.json({
@@ -173,7 +193,7 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const body = await request.json();
-    const { eventId, integrationId } = body;
+    const { eventId, integrationId, calendarId } = body;
 
     if (!eventId || !integrationId) {
       return NextResponse.json(
@@ -191,7 +211,8 @@ export async function DELETE(request: NextRequest) {
       credentials,
       integration.clientId,
       integration.clientSecret,
-      eventId
+      eventId,
+      calendarId || 'primary'
     );
 
     return NextResponse.json({ success: true });

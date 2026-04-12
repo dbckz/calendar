@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { getIntegrationById, addGoogleIntegration } from '@/lib/integration-storage';
 import { GoogleIntegration } from '@/types';
+import { SCOPES } from '@/lib/google-calendar';
 
 function getRedirectUri(): string {
   // Always use localhost for Google OAuth (Google doesn't allow .localhost domains)
@@ -19,10 +20,7 @@ function getAuthUrlWithState(
 
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
-    scope: [
-      'https://www.googleapis.com/auth/calendar.events',
-      'https://www.googleapis.com/auth/tasks',
-    ],
+    scope: SCOPES,
     prompt: 'consent',
     state,
   });
