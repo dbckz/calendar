@@ -102,6 +102,45 @@ export async function listCalendars(
   }));
 }
 
+function parseGoogleDateOnly(dateStr: string): Date {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  return new Date(year, month - 1, day, 0, 0, 0, 0);
+}
+
+function formatDateOnly(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function toCalendarEvent(
+  event: { id?: string | null; summary?: string | null; description?: string | null; start?: { date?: string | null; dateTime?: string | null } | null; end?: { date?: string | null; dateTime?: string | null } | null; colorId?: string | null; location?: string | null },
+  fallbackColor: string,
+  calendarId?: string
+): CalendarEvent {
+  const isAllDay = !!event.start?.date;
+  const startTime = isAllDay
+    ? parseGoogleDateOnly(event.start?.date || '')
+    : new Date(event.start?.dateTime || '');
+  const endTime = isAllDay
+    ? parseGoogleDateOnly(event.end?.date || '')
+    : new Date(event.end?.dateTime || '');
+
+  return {
+    id: event.id!,
+    title: event.summary || 'Untitled Event',
+    description: event.description || undefined,
+    startTime,
+    endTime,
+    source: 'google',
+    color: event.colorId ? getGoogleColor(event.colorId) : fallbackColor,
+    location: event.location || undefined,
+    allDay: isAllDay,
+    calendarId,
+  };
+}
+
 export async function getCalendarEvents(
   credentials: GoogleCalendarCredentials,
   clientId: string,
@@ -129,35 +168,7 @@ export async function getCalendarEvents(
   const events = response.data.items || [];
   const fallbackColor = defaultColor || '#4285f4';
 
-  return events.map((event): CalendarEvent => {
-    const isAllDay = !!event.start?.date;
-    let startTime: Date;
-    let endTime: Date;
-
-    if (isAllDay) {
-      // Parse date-only strings as local dates (avoids UTC midnight shift)
-      const startDateParts = (event.start?.date || '').split('-').map(Number);
-      const endDateParts = (event.end?.date || '').split('-').map(Number);
-      startTime = new Date(startDateParts[0], startDateParts[1] - 1, startDateParts[2], 0, 0, 0);
-      endTime = new Date(endDateParts[0], endDateParts[1] - 1, endDateParts[2], 0, 0, 0);
-    } else {
-      startTime = new Date(event.start?.dateTime || '');
-      endTime = new Date(event.end?.dateTime || '');
-    }
-
-    return {
-      id: event.id!,
-      title: event.summary || 'Untitled Event',
-      description: event.description || undefined,
-      startTime,
-      endTime,
-      source: 'google',
-      color: event.colorId ? getGoogleColor(event.colorId) : fallbackColor,
-      location: event.location || undefined,
-      allDay: isAllDay,
-      calendarId,
-    };
-  });
+  return events.map(event => toCalendarEvent(event, fallbackColor, calendarId));
 }
 
 export async function updateCalendarEvent(
@@ -218,23 +229,33 @@ export async function createCalendarEvent(
   endTime: Date,
   description?: string,
   eventType?: 'default' | 'focusTime',
-  calendarId: string = 'primary'
+  calendarId: string = 'primary',
+  options?: {
+    allDay?: boolean;
+    recurrence?: string[];
+  }
 ): Promise<CalendarEvent> {
   const oauth2Client = createAuthenticatedClient(credentials, clientId, clientSecret);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const isAllDay = !!options?.allDay;
 
   const baseRequestBody = {
     summary: title,
     description,
-    start: {
-      dateTime: startTime.toISOString(),
-      timeZone,
-    },
-    end: {
-      dateTime: endTime.toISOString(),
-      timeZone,
-    },
+    start: isAllDay
+      ? { date: formatDateOnly(startTime) }
+      : {
+          dateTime: startTime.toISOString(),
+          timeZone,
+        },
+    end: isAllDay
+      ? { date: formatDateOnly(endTime) }
+      : {
+          dateTime: endTime.toISOString(),
+          timeZone,
+        },
+    ...(options?.recurrence?.length ? { recurrence: options.recurrence } : {}),
   };
 
   let event;
@@ -261,15 +282,7 @@ export async function createCalendarEvent(
     });
   }
 
-  return {
-    id: event.data.id!,
-    title: event.data.summary || 'Untitled Event',
-    description: event.data.description || undefined,
-    startTime: new Date(event.data.start?.dateTime || ''),
-    endTime: new Date(event.data.end?.dateTime || ''),
-    source: 'google',
-    color: '#4285f4',
-  };
+  return toCalendarEvent(event.data, '#4285f4', calendarId);
 }
 
 export async function deleteCalendarEvent(

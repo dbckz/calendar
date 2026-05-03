@@ -150,7 +150,17 @@ export async function PATCH(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { integrationId, title, startTime, endTime, description, eventType, calendarId } = body;
+    const {
+      integrationId,
+      title,
+      startTime,
+      endTime,
+      description,
+      eventType,
+      calendarId,
+      allDay,
+      recurrence,
+    } = body;
 
     if (!integrationId || !title || !startTime || !endTime) {
       return NextResponse.json(
@@ -173,7 +183,11 @@ export async function POST(request: NextRequest) {
       new Date(endTime),
       description,
       eventType,
-      calendarId || 'primary'
+      calendarId || 'primary',
+      {
+        allDay: !!allDay,
+        recurrence: Array.isArray(recurrence) ? recurrence : undefined,
+      }
     );
 
     return NextResponse.json({

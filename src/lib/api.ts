@@ -96,7 +96,11 @@ export const api = {
     endTime: Date,
     description?: string,
     eventType?: 'default' | 'focusTime',
-    calendarId?: string
+    calendarId?: string,
+    options?: {
+      allDay?: boolean;
+      recurrence?: string[];
+    }
   ): Promise<CalendarEventResponse> {
     return fetchWithRetry<CalendarEventResponse>('/api/calendar', {
       method: 'POST',
@@ -109,6 +113,8 @@ export const api = {
         description,
         eventType,
         calendarId,
+        allDay: options?.allDay,
+        recurrence: options?.recurrence,
       }),
     });
   },

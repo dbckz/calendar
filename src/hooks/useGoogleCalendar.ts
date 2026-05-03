@@ -28,7 +28,11 @@ interface UseGoogleCalendarReturn {
     endTime: Date,
     description?: string,
     eventType?: 'default' | 'focusTime',
-    calendarId?: string
+    calendarId?: string,
+    options?: {
+      allDay?: boolean;
+      recurrence?: string[];
+    }
   ) => Promise<{ event: CalendarEvent | null; error?: string }>;
   deleteGoogleEvent: (
     eventId: string,
@@ -199,7 +203,11 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     endTime: Date,
     description?: string,
     eventType?: 'default' | 'focusTime',
-    calendarId?: string
+    calendarId?: string,
+    options?: {
+      allDay?: boolean;
+      recurrence?: string[];
+    }
   ): Promise<{ event: CalendarEvent | null; error?: string }> => {
     // Create optimistic event with temp ID
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -212,6 +220,7 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
       description,
       integrationId,
       color: '#4285f4', // Google blue
+      allDay: options?.allDay,
     };
 
     // Add optimistic event immediately
@@ -222,7 +231,7 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     });
 
     try {
-      const createdEvent = await api.createCalendarEvent(integrationId, title, startTime, endTime, description, eventType, calendarId);
+      const createdEvent = await api.createCalendarEvent(integrationId, title, startTime, endTime, description, eventType, calendarId, options);
 
       const parsedEvent: CalendarEvent = {
         ...createdEvent,

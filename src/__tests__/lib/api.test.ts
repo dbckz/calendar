@@ -158,10 +158,53 @@ describe('api methods', () => {
           startTime: startTime.toISOString(),
           endTime: endTime.toISOString(),
           description: 'Description',
+          allDay: undefined,
+          recurrence: undefined,
         }),
       });
     });
   });
+
+  it('creates recurring all-day event with correct payload', async () => {
+      const mockEvent = { id: 'new-event', title: 'Recurring Test' };
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(mockEvent),
+      });
+
+      const startTime = new Date('2026-05-08T00:00:00');
+      const endTime = new Date('2026-05-09T00:00:00');
+
+      await api.createCalendarEvent(
+        'int-1',
+        'Recurring Test',
+        startTime,
+        endTime,
+        'Description',
+        'default',
+        'calendar-1',
+        {
+          allDay: true,
+          recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=FR'],
+        }
+      );
+
+      expect(mockFetch).toHaveBeenCalledWith('/api/calendar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          integrationId: 'int-1',
+          title: 'Recurring Test',
+          startTime: startTime.toISOString(),
+          endTime: endTime.toISOString(),
+          description: 'Description',
+          eventType: 'default',
+          calendarId: 'calendar-1',
+          allDay: true,
+          recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=FR'],
+        }),
+      });
+    });
 
   describe('updateCalendarEvent', () => {
     it('updates event with correct payload', async () => {
