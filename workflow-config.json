@@ -1,0 +1,49 @@
+{
+  "taskQuotas": {
+    "Writing/Deep Work": {
+      "weeklyCount": 3,
+      "targetLength": "2h",
+      "preferredTimes": [
+        "09:00-11:00",
+        "21:00-23:00"
+      ]
+    },
+    "Blogs": {
+      "weeklyCount": 2,
+      "targetLength": "1.5h",
+      "preferredTimes": [
+        "09:00-12:00"
+      ]
+    },
+    "Batch": {
+      "weeklyCount": 2,
+      "targetLength": "1h",
+      "preferredTimes": []
+    },
+    "Engagement/Outreach": {
+      "weeklyCount": 1,
+      "targetLength": "45min",
+      "preferredTimes": []
+    },
+    "General Todos": {
+      "targetLength": "30min",
+      "preferredTimes": []
+    }
+  },
+  "scheduling": {
+    "maxTasksPerDay": 4,
+    "bufferBetweenTasks": "30min",
+    "workingDays": [
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday"
+    ],
+    "workingHours": {
+      "start": "09:00",
+      "end": "17:00"
+    }
+  },
+  "lastUpdated": "2026-05-03T03:03:59.262Z"
+}

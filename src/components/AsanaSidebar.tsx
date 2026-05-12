@@ -1637,7 +1637,7 @@ function CreateTaskModal({
     return Array.from(typeFieldInfo.enumOptions.keys()).sort();
   }, [typeFieldInfo]);
 
-  // Whether Type field is required (available and has options for this integration)
+  // Type field is always required when type info is available
   const typeRequired = typeFieldInfo && typeValues.length > 0;
 
   // Filter projects by selected integration
@@ -1655,9 +1655,15 @@ function CreateTaskModal({
     e.preventDefault();
     if (!name.trim() || !selectedIntegration) return;
 
-    // Require Type selection if field is available for this integration
+    // Type field is mandatory for all task creation
     if (typeRequired && !selectedType) {
-      setError('Please select a Type for this task');
+      setError('Type field is required - please select a type for this task');
+      return;
+    }
+    
+    // Also check if we're creating for OM integration but don't have type info
+    if (selectedIntegration === 'cced5243-26a4-447f-bd1e-1e202ebe5130' && !typeRequired) {
+      setError('Type configuration missing for OM integration');
       return;
     }
 
@@ -1800,15 +1806,15 @@ function CreateTaskModal({
           {typeValues.length > 0 && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Type {typeRequired && <span className="text-red-500">*</span>}
+                Type <span className="text-red-500">*</span>
               </label>
               <select
                 value={selectedType}
                 onChange={(e) => setSelectedType(e.target.value)}
                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
-                required={!!typeRequired}
+                required={true}
               >
-                <option value="">Select type</option>
+                <option value="">Select type (required)</option>
                 {typeValues.map(type => (
                   <option key={type} value={type}>{type}</option>
                 ))}

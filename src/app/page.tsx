@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { format } from 'date-fns';
+import { Calendar, Repeat } from 'lucide-react';
 import { Header } from '@/components/Header';
 import { Timeline } from '@/components/Timeline';
 import { IntegrationStatus } from '@/components/IntegrationStatus';
@@ -9,6 +10,7 @@ import { AsanaSidebar } from '@/components/AsanaSidebar';
 import { AddTaskModal } from '@/components/AddTaskModal';
 import { AllDayEventsBar } from '@/components/AllDayEventsBar';
 import { Reminders } from '@/components/Reminders';
+import { RitualsContent } from '@/components/RitualsContent';
 import { useTasks } from '@/hooks/useTasks';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { useToast } from '@/hooks/useToast';
@@ -68,6 +70,17 @@ const COLOR_SCHEMES = [
 ];
 
 export default function Home() {
+  const [activeTab, setActiveTab] = useState<'calendar' | 'rituals'>(() => {
+    if (typeof window !== 'undefined' && window.location.hash === '#rituals') return 'rituals';
+    return 'calendar';
+  });
+
+  const handleTabChange = useCallback((tab: string) => {
+    const t = tab as 'calendar' | 'rituals';
+    setActiveTab(t);
+    window.location.hash = t === 'calendar' ? '' : t;
+  }, []);
+
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [colorSchemeIndex, setColorSchemeIndex] = useState(0);
@@ -759,6 +772,11 @@ export default function Home() {
     [clearAsanaFilters, DBC_INTEGRATION_ID]
   );
 
+  const tabs = [
+    { id: 'calendar' as const, label: 'Daily Calendar', icon: Calendar },
+    { id: 'rituals' as const, label: 'Rituals', icon: Repeat },
+  ];
+
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
       <Header
@@ -769,8 +787,16 @@ export default function Home() {
         colorScheme={colorScheme}
         timeWorkedByIntegration={timeWorkedByIntegration}
         integrations={asanaIntegrations}
+        activeTab={activeTab}
+        tabs={tabs}
+        onTabChange={handleTabChange}
       />
 
+      {activeTab === 'rituals' ? (
+        <div className="flex-1 overflow-y-auto">
+          <RitualsContent />
+        </div>
+      ) : (
       <div className="flex flex-1 min-h-0">
         {/* Left sidebar: OM Asana workspace */}
         <aside className="w-72 flex-shrink-0 overflow-hidden">
@@ -891,6 +917,7 @@ export default function Home() {
           />
         </aside>
       </div>
+      )}
 
       {calendarSelectionModal.show && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">

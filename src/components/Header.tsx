@@ -1,7 +1,7 @@
 'use client';
 
 import { format, addDays, subDays, isSameDay } from 'date-fns';
-import { Calendar, Settings, RefreshCw, Star, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Settings, RefreshCw, Star, ChevronLeft, ChevronRight, LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 
 interface ColorScheme {
@@ -17,6 +17,12 @@ interface Integration {
   name: string;
 }
 
+interface Tab {
+  id: string;
+  label: string;
+  icon: LucideIcon;
+}
+
 interface HeaderProps {
   selectedDate: Date;
   onDateChange: (date: Date) => void;
@@ -25,6 +31,9 @@ interface HeaderProps {
   colorScheme?: ColorScheme;
   timeWorkedByIntegration?: Record<string, number>;
   integrations?: Integration[];
+  activeTab?: string;
+  tabs?: Tab[];
+  onTabChange?: (tabId: string) => void;
 }
 
 function formatDuration(minutes: number): string {
@@ -47,7 +56,7 @@ function getDayLabel(date: Date): string {
   return format(date, 'EEE, MMM d');
 }
 
-export function Header({ selectedDate, onDateChange, onRefresh, isLoading, colorScheme, timeWorkedByIntegration, integrations }: HeaderProps) {
+export function Header({ selectedDate, onDateChange, onRefresh, isLoading, colorScheme, timeWorkedByIntegration, integrations, activeTab, tabs, onTabChange }: HeaderProps) {
   const prevDay = subDays(selectedDate, 1);
   const nextDay = addDays(selectedDate, 1);
 
@@ -58,11 +67,33 @@ export function Header({ selectedDate, onDateChange, onRefresh, isLoading, color
     <header className={`${colorScheme?.headerBg || 'bg-white'} border-b border-gray-200 sticky top-0 z-10`}>
       <div className="px-4 py-4">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <Calendar className={`w-6 h-6 ${colorScheme ? 'text-white' : 'text-blue-600'}`} />
+          <div className="flex items-center gap-1">
+            {tabs && tabs.length > 0 ? (
+              <div className={`flex items-center ${colorScheme ? 'bg-white/15' : 'bg-gray-100'} rounded-lg p-1`}>
+                {tabs.map(tab => {
+                  const Icon = tab.icon;
+                  const isActive = activeTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => onTabChange?.(tab.id)}
+                      className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                        isActive
+                          ? 'bg-white text-gray-900 shadow-sm'
+                          : colorScheme
+                            ? 'text-white/80 hover:text-white hover:bg-white/10'
+                            : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4" />
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
               <h1 className={`text-xl font-semibold ${colorScheme?.headerText || 'text-gray-900'}`}>Dave&apos;s Daily Planner</h1>
-            </div>
+            )}
           </div>
 
           {/* Day navigation */}
