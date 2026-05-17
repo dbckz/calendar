@@ -22,6 +22,7 @@ export interface CalendarEvent {
   // Asana-specific fields
   projects?: Array<{ gid: string; name: string }>;
   customFields?: AsanaCustomField[];
+  tags?: AsanaTag[];
   parentTask?: { gid: string; name: string };
   // Link to Asana task (when Google event represents a scheduled Asana task)
   linkedAsanaTaskId?: string;
@@ -34,6 +35,13 @@ export interface AsanaCustomField {
   displayValue: string | null;
   type: string;
   enumValueGid?: string; // GID of the selected enum option (for enum fields)
+  enumOptions?: Array<{ gid: string; name: string }>;
+}
+
+export interface AsanaTag {
+  gid: string;
+  name: string;
+  color?: string | null;
 }
 
 export interface AsanaTask {
@@ -55,6 +63,7 @@ export interface AsanaTask {
     name: string;
   }>;
   customFields?: AsanaCustomField[];
+  tags?: AsanaTag[];
   parent?: {
     gid: string;
     name: string;

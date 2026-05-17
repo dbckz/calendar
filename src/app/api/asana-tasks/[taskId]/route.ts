@@ -254,6 +254,14 @@ export async function PUT(
       asanaUpdateParams.removeProjects = updateParams.removeProjects;
     }
 
+    if (updateParams.addTags !== undefined) {
+      asanaUpdateParams.addTags = updateParams.addTags;
+    }
+
+    if (updateParams.removeTags !== undefined) {
+      asanaUpdateParams.removeTags = updateParams.removeTags;
+    }
+
     const updatedTask = await updateTask(credentials.accessToken, taskId, asanaUpdateParams);
     const event = asanaTaskToCalendarEvent(updatedTask);
 

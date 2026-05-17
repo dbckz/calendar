@@ -86,7 +86,7 @@ async function fetchTasksFromIntegration(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { integrationId, name, notes, dueOn, projectGid, customFields } = body;
+    const { integrationId, name, notes, dueOn, projectGid, customFields, tagGids } = body;
 
     if (!integrationId) {
       return NextResponse.json({ error: 'integrationId is required' }, { status: 400 });
@@ -139,6 +139,10 @@ export async function POST(request: NextRequest) {
 
     if (customFields && typeof customFields === 'object') {
       taskParams.customFields = customFields;
+    }
+
+    if (Array.isArray(tagGids) && tagGids.every((t) => typeof t === 'string')) {
+      taskParams.tagGids = tagGids;
     }
 
     const task = await createTask(
