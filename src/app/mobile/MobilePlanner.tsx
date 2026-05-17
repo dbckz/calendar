@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { addDays, format, isSameDay, startOfDay, subDays } from 'date-fns';
 import {
   CalendarDays,
@@ -353,9 +353,9 @@ function EventDetailSheet({
   );
 }
 
-function NowIndicator({ now }: { now: Date }) {
+const NowIndicator = forwardRef<HTMLDivElement, { now: Date }>(function NowIndicator({ now }, ref) {
   return (
-    <div className="flex items-center gap-2 px-1" aria-label="Current time">
+    <div ref={ref} className="flex items-center gap-2 px-1" aria-label="Current time">
       <span className="text-xs font-semibold text-red-500 tabular-nums">
         {format(now, 'HH:mm')}
       </span>
@@ -363,7 +363,7 @@ function NowIndicator({ now }: { now: Date }) {
       <div className="h-0.5 flex-1 bg-red-500" />
     </div>
   );
-}
+});
 
 function EmptyState() {
   return (
@@ -387,6 +387,8 @@ export function MobilePlanner() {
   const lastTapRef = useRef<{ time: number; x: number; y: number; side: 'left' | 'right' } | null>(null);
   const pendingEventOpenTimeoutRef = useRef<number | null>(null);
   const suppressNextEventOpenRef = useRef(false);
+  const nowIndicatorRef = useRef<HTMLDivElement | null>(null);
+  const hasAutoScrolledRef = useRef(false);
 
   const { getTasksForDate } = useTasks();
   const {
@@ -529,6 +531,26 @@ export function MobilePlanner() {
     const idx = timedEvents.findIndex(event => event.endTime.getTime() >= now.getTime());
     return idx === -1 ? timedEvents.length : idx;
   }, [isToday, timedEvents, now]);
+
+  useEffect(() => {
+    hasAutoScrolledRef.current = false;
+  }, [dateKey]);
+
+  useEffect(() => {
+    if (hasAutoScrolledRef.current) return;
+    if (!isToday) return;
+    if (isLoading) return;
+
+    const node = nowIndicatorRef.current;
+    if (!node) return;
+
+    const frameId = window.requestAnimationFrame(() => {
+      node.scrollIntoView({ block: 'center', behavior: 'auto' });
+      hasAutoScrolledRef.current = true;
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [isToday, isLoading, nowIndicatorIndex]);
 
   const dueTodayTasks = useMemo(() => {
     const todayStart = startOfDay(selectedDate).getTime();
@@ -764,7 +786,7 @@ export function MobilePlanner() {
             <>
               {timedEvents.map((event, index) => (
                 <Fragment key={`${event.integrationId || event.source}-${event.id}`}>
-                  {index === nowIndicatorIndex && <NowIndicator now={now} />}
+                  {index === nowIndicatorIndex && <NowIndicator ref={nowIndicatorRef} now={now} />}
                   <MobileEventCard
                     event={event}
                     onSelect={handleEventSelect}
@@ -773,11 +795,11 @@ export function MobilePlanner() {
                   />
                 </Fragment>
               ))}
-              {nowIndicatorIndex === timedEvents.length && <NowIndicator now={now} />}
+              {nowIndicatorIndex === timedEvents.length && <NowIndicator ref={nowIndicatorRef} now={now} />}
             </>
           ) : (
             <>
-              {isToday && <NowIndicator now={now} />}
+              {isToday && <NowIndicator ref={nowIndicatorRef} now={now} />}
               <EmptyState />
             </>
           )}
