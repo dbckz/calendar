@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { addDays, format, isSameDay, startOfDay, subDays } from 'date-fns';
 import {
   CalendarDays,
@@ -164,9 +164,13 @@ function renderLinkedText(text: string) {
 function MobileEventCard({
   event,
   onSelect,
+  isPast,
+  isCurrent,
 }: {
   event: CalendarEvent;
   onSelect: (event: CalendarEvent) => void;
+  isPast: boolean;
+  isCurrent: boolean;
 }) {
   const description = plainDescription(event.description);
   const sourceStyle = SOURCE_STYLES[event.source];
@@ -176,18 +180,32 @@ function MobileEventCard({
       type="button"
       onClick={() => onSelect(event)}
       data-event-open-trigger="true"
-      className="w-full rounded-lg border border-gray-200 bg-white p-3 text-left shadow-sm transition-colors active:bg-gray-50"
+      className={`w-full rounded-lg border bg-white p-3 text-left transition-colors active:bg-gray-50 ${
+        isPast ? 'opacity-50 grayscale-[30%]' : ''
+      } ${
+        isCurrent
+          ? 'border-red-300 shadow-lg shadow-red-500/20 ring-2 ring-red-400/70'
+          : 'border-gray-200 shadow-sm'
+      }`}
       style={{ borderLeftColor: event.color || undefined, borderLeftWidth: '4px' }}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <h3
-            className={`text-base font-semibold leading-snug text-gray-950 ${
-              event.completed ? 'line-through text-gray-500' : ''
-            }`}
-          >
-            {event.title}
-          </h3>
+          <div className="flex items-center gap-2">
+            <h3
+              className={`text-base font-semibold leading-snug text-gray-950 ${
+                event.completed ? 'line-through text-gray-500' : ''
+              }`}
+            >
+              {event.title}
+            </h3>
+            {isCurrent && (
+              <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-red-500 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+                Now
+              </span>
+            )}
+          </div>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-600">
             <span className="inline-flex items-center gap-1">
               <Clock className="h-4 w-4 text-gray-400" />
@@ -335,6 +353,18 @@ function EventDetailSheet({
   );
 }
 
+function NowIndicator({ now }: { now: Date }) {
+  return (
+    <div className="flex items-center gap-2 px-1" aria-label="Current time">
+      <span className="text-xs font-semibold text-red-500 tabular-nums">
+        {format(now, 'HH:mm')}
+      </span>
+      <div className="h-2 w-2 rounded-full bg-red-500" />
+      <div className="h-0.5 flex-1 bg-red-500" />
+    </div>
+  );
+}
+
 function EmptyState() {
   return (
     <div className="rounded-lg border border-dashed border-gray-300 bg-white px-4 py-10 text-center">
@@ -346,6 +376,7 @@ function EmptyState() {
 
 export function MobilePlanner() {
   const [selectedDate, setSelectedDate] = useState(() => new Date());
+  const [now, setNow] = useState(() => new Date());
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [colorSchemeIndex, setColorSchemeIndex] = useState(0);
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
@@ -410,6 +441,11 @@ export function MobilePlanner() {
   }, [fetchEventsForDate, selectedDate]);
 
   useEffect(() => {
+    const interval = window.setInterval(() => setNow(new Date()), 60 * 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
     if (!selectedEvent) return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -469,6 +505,30 @@ export function MobilePlanner() {
       .sort((a, b) => a.startTime.getTime() - b.startTime.getTime()),
     [allEvents]
   );
+
+  const isToday = useMemo(() => isSameDay(selectedDate, now), [selectedDate, now]);
+  const isPastDay = useMemo(
+    () => startOfDay(selectedDate).getTime() < startOfDay(now).getTime(),
+    [selectedDate, now]
+  );
+
+  const isEventPast = useCallback((event: CalendarEvent) => {
+    if (isPastDay) return true;
+    if (!isToday) return false;
+    return event.endTime.getTime() < now.getTime();
+  }, [isPastDay, isToday, now]);
+
+  const isEventCurrent = useCallback((event: CalendarEvent) => {
+    if (!isToday) return false;
+    const nowMs = now.getTime();
+    return event.startTime.getTime() <= nowMs && event.endTime.getTime() >= nowMs;
+  }, [isToday, now]);
+
+  const nowIndicatorIndex = useMemo(() => {
+    if (!isToday) return -1;
+    const idx = timedEvents.findIndex(event => event.endTime.getTime() >= now.getTime());
+    return idx === -1 ? timedEvents.length : idx;
+  }, [isToday, timedEvents, now]);
 
   const dueTodayTasks = useMemo(() => {
     const todayStart = startOfDay(selectedDate).getTime();
@@ -701,15 +761,25 @@ export function MobilePlanner() {
             <span className="text-sm text-gray-500">{timedEvents.length}</span>
           </div>
           {timedEvents.length > 0 ? (
-            timedEvents.map(event => (
-              <MobileEventCard
-                key={`${event.integrationId || event.source}-${event.id}`}
-                event={event}
-                onSelect={handleEventSelect}
-              />
-            ))
+            <>
+              {timedEvents.map((event, index) => (
+                <Fragment key={`${event.integrationId || event.source}-${event.id}`}>
+                  {index === nowIndicatorIndex && <NowIndicator now={now} />}
+                  <MobileEventCard
+                    event={event}
+                    onSelect={handleEventSelect}
+                    isPast={isEventPast(event)}
+                    isCurrent={isEventCurrent(event)}
+                  />
+                </Fragment>
+              ))}
+              {nowIndicatorIndex === timedEvents.length && <NowIndicator now={now} />}
+            </>
           ) : (
-            <EmptyState />
+            <>
+              {isToday && <NowIndicator now={now} />}
+              <EmptyState />
+            </>
           )}
         </section>
 
