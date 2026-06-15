@@ -36,12 +36,66 @@ function renderList(tag: 'ul' | 'ol', items: string[]): string {
   return `<${tag}>${items.map(item => `<li>${formatInline(item)}</li>`).join('')}</${tag}>`;
 }
 
+function renderParagraphsAsSingleListItem(paragraphs: string[]): string {
+  const content = paragraphs
+    .map(paragraph => formatInline(paragraph))
+    .join('<br><br>');
+  return `<ul><li>${content}</li></ul>`;
+}
+
 // Render a block of lines as the appropriate list (bulleted, ordered, or
 // single-item bullet wrapping the joined content).
 function renderBlockAsList(lines: string[]): string {
   if (isBulletBlock(lines)) return renderList('ul', stripPrefix(lines, BULLET_RE));
   if (isOrderedBlock(lines)) return renderList('ol', stripPrefix(lines, ORDERED_RE));
   return renderList('ul', [lines.join(' ')]);
+}
+
+function isHeadingBlock(lines: string[]): boolean {
+  return lines.length > 0 && HEADING_RE.test(lines[0]);
+}
+
+function collectContinuationParagraphs(blocks: string[][], startIndex: number): { paragraphs: string[]; nextIndex: number } {
+  const paragraphs: string[] = [];
+  let nextIndex = startIndex;
+
+  while (nextIndex < blocks.length) {
+    const block = blocks[nextIndex];
+    if (isHeadingBlock(block)) break;
+    if (isMetadataBlock(block)) break;
+    paragraphs.push(block.join(' '));
+    nextIndex += 1;
+  }
+
+  return { paragraphs, nextIndex };
+}
+
+function renderHeadingWithPossibleContinuations(
+  heading: string,
+  lines: string[],
+  blocks: string[][],
+  continuationStartIndex: number
+): { html: string; nextIndex: number } | null {
+  const continuation = collectContinuationParagraphs(blocks, continuationStartIndex);
+
+  if (isBulletBlock(lines)) {
+    const bulletItems = stripPrefix(lines, BULLET_RE);
+    if (bulletItems.length === 1 && continuation.paragraphs.length > 0) {
+      return {
+        html: `${heading}${renderParagraphsAsSingleListItem([bulletItems[0], ...continuation.paragraphs])}`,
+        nextIndex: continuation.nextIndex,
+      };
+    }
+  }
+
+  if (!isBulletBlock(lines) && !isOrderedBlock(lines) && continuation.paragraphs.length > 0) {
+    return {
+      html: `${heading}${renderParagraphsAsSingleListItem([lines.join(' '), ...continuation.paragraphs])}`,
+      nextIndex: continuation.nextIndex,
+    };
+  }
+
+  return null;
 }
 
 function parseMetadataLine(line: string): { label: string; value: string } | null {
@@ -70,6 +124,11 @@ function renderHeading(line: string): string {
   return `<strong>${escapeHtml(line.trim())}</strong>`;
 }
 
+export function looksLikeAsanaHtmlText(value: string): boolean {
+  const trimmed = value.trim();
+  return /^<body>[\s\S]*<\/body>$/.test(trimmed);
+}
+
 export function commentToAsanaHtmlText(comment: string): string {
   const blocks = comment
     .replace(/\r\n/g, '\n')
@@ -94,12 +153,26 @@ export function commentToAsanaHtmlText(comment: string): string {
       const remaining = block.slice(1);
 
       if (remaining.length > 0) {
+        const merged = renderHeadingWithPossibleContinuations(heading, remaining, blocks, i + 1);
+        if (merged) {
+          parts.push(merged.html);
+          i = merged.nextIndex - 1;
+          continue;
+        }
+
         parts.push(`${heading}${renderBlockAsList(remaining)}`);
         continue;
       }
 
       const next = blocks[i + 1];
       if (next) {
+        const merged = renderHeadingWithPossibleContinuations(heading, next, blocks, i + 2);
+        if (merged) {
+          parts.push(merged.html);
+          i = merged.nextIndex - 1;
+          continue;
+        }
+
         parts.push(`${heading}${renderBlockAsList(next)}`);
         i += 1;
         continue;

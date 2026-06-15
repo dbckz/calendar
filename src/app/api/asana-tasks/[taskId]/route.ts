@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { completeTask, addTaskComment, deleteTask, getTaskStories, refreshAsanaToken, updateTask, asanaTaskToCalendarEvent, UpdateTaskParams } from '@/lib/asana';
-import { commentToAsanaHtmlText } from '@/lib/asana-rich-text';
+import { commentToAsanaHtmlText, looksLikeAsanaHtmlText } from '@/lib/asana-rich-text';
 import { getIntegrationById, updateIntegration } from '@/lib/integration-storage';
 import { AsanaIntegration } from '@/types';
 
@@ -141,11 +141,16 @@ export async function POST(
       await updateIntegration(integration.id, { credentials });
     }
 
+    const normalizedRichComment = richComment
+      || (plainComment
+        ? (looksLikeAsanaHtmlText(plainComment) ? plainComment : commentToAsanaHtmlText(plainComment))
+        : undefined);
+
     await addTaskComment(
       credentials.accessToken,
       taskId,
       plainComment,
-      richComment || (plainComment ? commentToAsanaHtmlText(plainComment) : undefined)
+      normalizedRichComment
     );
 
     return NextResponse.json({ success: true });

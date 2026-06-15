@@ -885,7 +885,12 @@ export default function Home() {
               )}
             </div>
 
-            <Reminders />
+            <Reminders
+              asanaIntegrations={asanaIntegrations}
+              asanaProjects={asanaProjects}
+              asanaTypeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
+              onCreateAsanaTask={handleSidebarAsanaCreate}
+            />
           </div>
         </main>
 

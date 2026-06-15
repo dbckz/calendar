@@ -6,6 +6,7 @@ import { Calendar, GripVertical, Filter, X, ChevronDown, ChevronUp, ChevronRight
 import { format, parseISO, isToday, isPast } from 'date-fns';
 import { getAsanaTaskUrl } from '@/lib/asana';
 import { api } from '@/lib/api';
+import { CreateAsanaTaskModal, AsanaTypeFieldInfo as ImportedAsanaTypeFieldInfo } from './CreateAsanaTaskModal';
 
 // Helper component to render text with clickable links
 function LinkifiedText({ text, className }: { text: string; className?: string }) {
@@ -52,10 +53,7 @@ interface ColorScheme {
   mainBg: string;
 }
 
-interface AsanaSidebarTypeFieldInfo {
-  fieldGid: string;
-  enumOptions: Map<string, string>; // displayValue -> enumOptionGid
-}
+type AsanaSidebarTypeFieldInfo = ImportedAsanaTypeFieldInfo;
 
 interface UpdateTaskOptions {
   dueOn?: string | null;
@@ -999,7 +997,7 @@ export function AsanaSidebar({
 
       {/* Create Task Modal */}
       {showCreateTask && onCreateTask && (
-        <CreateTaskModal
+        <CreateAsanaTaskModal
           integrations={integrations}
           projects={projects}
           typeFieldInfoByIntegration={typeFieldInfoByIntegration}
@@ -1594,253 +1592,6 @@ function TaskDetailDialog({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// Create Task Modal Component
-interface CreateTaskModalProps {
-  integrations: { id: string; name: string }[];
-  projects: AsanaProject[];
-  typeFieldInfoByIntegration?: Map<string, AsanaSidebarTypeFieldInfo>;
-  lockedIntegrationId?: string;
-  onClose: () => void;
-  onCreateTask: (integrationId: string, name: string, options?: { notes?: string; dueOn?: string; projectGid?: string; customFields?: Record<string, string> }) => Promise<CalendarEvent | null>;
-}
-
-function CreateTaskModal({
-  integrations,
-  projects,
-  typeFieldInfoByIntegration,
-  lockedIntegrationId,
-  onClose,
-  onCreateTask,
-}: CreateTaskModalProps) {
-  const [name, setName] = useState('');
-  const [notes, setNotes] = useState('');
-  const [dueOn, setDueOn] = useState('');
-  const [selectedIntegration, setSelectedIntegration] = useState(lockedIntegrationId || integrations[0]?.id || '');
-  const [selectedProject, setSelectedProject] = useState('');
-  const [selectedType, setSelectedType] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Get typeFieldInfo for the selected integration
-  const typeFieldInfo = useMemo(() => {
-    if (!typeFieldInfoByIntegration || !selectedIntegration) return null;
-    return typeFieldInfoByIntegration.get(selectedIntegration) || null;
-  }, [typeFieldInfoByIntegration, selectedIntegration]);
-
-  // Get type values for the selected integration
-  const typeValues = useMemo(() => {
-    if (!typeFieldInfo) return [];
-    return Array.from(typeFieldInfo.enumOptions.keys()).sort();
-  }, [typeFieldInfo]);
-
-  // Type field is always required when type info is available
-  const typeRequired = typeFieldInfo && typeValues.length > 0;
-
-  // Filter projects by selected integration
-  const filteredProjects = useMemo(() => {
-    return projects.filter(p => p.integrationId === selectedIntegration);
-  }, [projects, selectedIntegration]);
-
-  // Reset project and type when integration changes
-  useEffect(() => {
-    setSelectedProject('');
-    setSelectedType('');
-  }, [selectedIntegration]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim() || !selectedIntegration) return;
-
-    // Type field is mandatory for all task creation
-    if (typeRequired && !selectedType) {
-      setError('Type field is required - please select a type for this task');
-      return;
-    }
-    
-    // Also check if we're creating for OM integration but don't have type info
-    if (selectedIntegration === 'cced5243-26a4-447f-bd1e-1e202ebe5130' && !typeRequired) {
-      setError('Type configuration missing for OM integration');
-      return;
-    }
-
-    setIsSubmitting(true);
-    setError(null);
-
-    try {
-      const options: { notes?: string; dueOn?: string; projectGid?: string; customFields?: Record<string, string> } = {};
-      if (notes.trim()) options.notes = notes.trim();
-      if (dueOn) options.dueOn = dueOn;
-      if (selectedProject) options.projectGid = selectedProject;
-
-      // Add custom field for Type if selected
-      if (selectedType && typeFieldInfo) {
-        const enumOptionGid = typeFieldInfo.enumOptions.get(selectedType);
-        if (enumOptionGid) {
-          options.customFields = {
-            [typeFieldInfo.fieldGid]: enumOptionGid,
-          };
-        }
-      }
-
-      await onCreateTask(selectedIntegration, name.trim(), options);
-      onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create task');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
-      <div
-        className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-          <h3 className="font-semibold text-gray-900">Create Asana Task</h3>
-          <button
-            onClick={onClose}
-            className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
-          {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
-              {error}
-            </div>
-          )}
-
-          {/* Integration selector (hidden when locked) */}
-          {integrations.length > 1 && !lockedIntegrationId && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Workspace
-              </label>
-              <select
-                value={selectedIntegration}
-                onChange={(e) => setSelectedIntegration(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
-              >
-                {integrations.map(int => (
-                  <option key={int.id} value={int.id}>{int.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {/* Task name */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Task name <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Enter task name"
-              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
-              autoFocus
-              required
-            />
-          </div>
-
-          {/* Notes */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Notes
-            </label>
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Add notes (optional)"
-              rows={3}
-              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none resize-none"
-            />
-          </div>
-
-          {/* Due date */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Due date
-            </label>
-            <div className="relative">
-              <input
-                type="date"
-                value={dueOn}
-                onChange={(e) => setDueOn(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none cursor-pointer [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:left-0 [&::-webkit-calendar-picker-indicator]:top-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
-              />
-            </div>
-          </div>
-
-          {/* Project selector */}
-          {filteredProjects.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Project
-              </label>
-              <select
-                value={selectedProject}
-                onChange={(e) => setSelectedProject(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
-              >
-                <option value="">No project</option>
-                {filteredProjects.map(project => (
-                  <option key={project.gid} value={project.gid}>{project.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {/* Type selector */}
-          {typeValues.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Type <span className="text-red-500">*</span>
-              </label>
-              <select
-                value={selectedType}
-                onChange={(e) => setSelectedType(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
-                required={true}
-              >
-                <option value="">Select type (required)</option>
-                {typeValues.map(type => (
-                  <option key={type} value={type}>{type}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {/* Actions */}
-          <div className="flex gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={!name.trim() || isSubmitting}
-              className="flex-1 px-4 py-2.5 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {isSubmitting ? 'Creating...' : 'Create Task'}
-            </button>
-          </div>
-        </form>
-      </div>
     </div>
   );
 }

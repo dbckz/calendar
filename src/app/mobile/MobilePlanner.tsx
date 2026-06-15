@@ -17,6 +17,7 @@ import { api } from '@/lib/api';
 import { containsHtml, htmlToReadableText } from '@/lib/html-utils';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { useTasks } from '@/hooks/useTasks';
+import { useToast } from '@/hooks/useToast';
 import { CalendarEvent, Reminder, SettingsResponse } from '@/types';
 
 const SOURCE_STYLES: Record<CalendarEvent['source'], { label: string; className: string; dot: string }> = {
@@ -375,6 +376,7 @@ function EmptyState() {
 }
 
 export function MobilePlanner() {
+  const toast = useToast();
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [now, setNow] = useState(() => new Date());
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
@@ -382,6 +384,12 @@ export function MobilePlanner() {
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [updatingReminderIds, setUpdatingReminderIds] = useState<Set<string>>(() => new Set());
+  const [undoReminderState, setUndoReminderState] = useState<{
+    id: string;
+    text: string;
+    previousCompleted: boolean;
+    nextCompleted: boolean;
+  } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const lastTapRef = useRef<{ time: number; x: number; y: number; side: 'left' | 'right' } | null>(null);
@@ -389,6 +397,7 @@ export function MobilePlanner() {
   const suppressNextEventOpenRef = useRef(false);
   const nowIndicatorRef = useRef<HTMLDivElement | null>(null);
   const hasAutoScrolledRef = useRef(false);
+  const undoTimeoutRef = useRef<number | null>(null);
 
   const { getTasksForDate } = useTasks();
   const {
@@ -459,6 +468,98 @@ export function MobilePlanner() {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [selectedEvent]);
+
+  const clearUndoReminderState = useCallback(() => {
+    if (undoTimeoutRef.current) {
+      window.clearTimeout(undoTimeoutRef.current);
+      undoTimeoutRef.current = null;
+    }
+    setUndoReminderState(null);
+  }, []);
+
+  const queueUndoReminderState = useCallback((reminder: Reminder, nextCompleted: boolean) => {
+    if (undoTimeoutRef.current) {
+      window.clearTimeout(undoTimeoutRef.current);
+    }
+
+    setUndoReminderState({
+      id: reminder.id,
+      text: reminder.text,
+      previousCompleted: reminder.completed,
+      nextCompleted,
+    });
+
+    undoTimeoutRef.current = window.setTimeout(() => {
+      undoTimeoutRef.current = null;
+      setUndoReminderState(null);
+    }, 10000);
+  }, []);
+
+  const undoReminderCompletion = useCallback(async () => {
+    if (!undoReminderState) return;
+
+    const state = undoReminderState;
+    clearUndoReminderState();
+    setReminders(prev => prev.map(reminder => (
+      reminder.id === state.id
+        ? { ...reminder, completed: state.previousCompleted }
+        : reminder
+    )));
+    setUpdatingReminderIds(prev => {
+      const next = new Set(prev);
+      next.add(state.id);
+      return next;
+    });
+
+    try {
+      await api.updateReminder(state.id, { completed: state.previousCompleted });
+      toast.success(`Reinstated "${state.text}"`);
+    } catch (error) {
+      console.error('Failed to undo reminder change:', error);
+      setReminders(prev => prev.map(reminder => (
+        reminder.id === state.id
+          ? { ...reminder, completed: state.nextCompleted }
+          : reminder
+      )));
+      toast.error('Failed to undo reminder change');
+    } finally {
+      setUpdatingReminderIds(prev => {
+        const next = new Set(prev);
+        next.delete(state.id);
+        return next;
+      });
+    }
+  }, [clearUndoReminderState, toast, undoReminderState]);
+
+  useEffect(() => {
+    return () => {
+      if (undoTimeoutRef.current) {
+        window.clearTimeout(undoTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!undoReminderState) return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (event.key.toLowerCase() !== 'z') return;
+
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      void undoReminderCompletion();
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [undoReminderCompletion, undoReminderState]);
 
   const dateKey = useMemo(() => format(selectedDate, 'yyyy-MM-dd'), [selectedDate]);
 
@@ -658,18 +759,22 @@ export function MobilePlanner() {
   }, [cancelPendingEventOpen, selectedEvent]);
 
   const handleCompleteReminder = useCallback(async (reminder: Reminder) => {
+    queueUndoReminderState(reminder, true);
     setUpdatingReminderIds(prev => {
       const next = new Set(prev);
       next.add(reminder.id);
       return next;
     });
     setReminders(prev => prev.map(item => item.id === reminder.id ? { ...item, completed: true } : item));
+    toast.info('Reminder completed. Press Cmd/Ctrl+Z to undo.');
 
     try {
       await api.updateReminder(reminder.id, { completed: true });
     } catch (error) {
       console.error('Failed to complete reminder:', error);
+      clearUndoReminderState();
       setReminders(prev => prev.map(item => item.id === reminder.id ? reminder : item));
+      toast.error('Failed to complete reminder');
     } finally {
       setUpdatingReminderIds(prev => {
         const next = new Set(prev);
@@ -677,7 +782,7 @@ export function MobilePlanner() {
         return next;
       });
     }
-  }, []);
+  }, [clearUndoReminderState, queueUndoReminderState, toast]);
 
   return (
     <div
@@ -829,13 +934,27 @@ export function MobilePlanner() {
           </section>
         )}
 
-        {activeReminders.length > 0 && (
+        {(activeReminders.length > 0 || undoReminderState) && (
           <section className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">Reminders</h2>
               <span className="text-sm text-gray-500">{activeReminders.length}</span>
             </div>
             <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+              {undoReminderState && (
+                <div className="mb-3 flex items-center justify-between gap-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                  <span className="min-w-0">
+                    Reminder completed. Press Cmd/Ctrl+Z to undo.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void undoReminderCompletion()}
+                    className="flex-shrink-0 rounded px-2 py-1 font-medium text-blue-700 hover:bg-blue-100"
+                  >
+                    Undo
+                  </button>
+                </div>
+              )}
               <div className="space-y-3">
                 {activeReminders.map(reminder => (
                   <div key={reminder.id} className="flex items-start gap-3">

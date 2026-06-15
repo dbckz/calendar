@@ -1,4 +1,4 @@
-import { commentToAsanaHtmlText } from '@/lib/asana-rich-text';
+import { commentToAsanaHtmlText, looksLikeAsanaHtmlText } from '@/lib/asana-rich-text';
 
 describe('commentToAsanaHtmlText', () => {
   it('renders section headings and bullet lists as rich text', () => {
@@ -74,5 +74,44 @@ Context:
     expect(commentToAsanaHtmlText(input)).toBe(
       '<body><strong>Container:</strong> ~flight-finder\n<strong>Status:</strong> 🟢 successful\n\n<strong>Quick take:</strong><ul><li>I reran the TPC26 Baltimore flight search.</li></ul>\n<strong>What you need to do:</strong><ul><li>Pick Option 1</li><li>Pick Option 3 only if saving money matters more than convenience</li></ul>\n<strong>Recommendation:</strong><ul><li>Option 1 — £645 round trip</li></ul>\n<strong>Context:</strong><ul><li>Google Flights URL: <a href="https://example.com/flights">https://example.com/flights</a></li></ul></body>'
     );
+  });
+
+  it('keeps a single multiline output together as one bullet item', () => {
+    const input = `Outputs:
+
+- First paragraph of the draft.
+
+Second paragraph of the draft.
+
+Best,
+Dave`;
+
+    expect(commentToAsanaHtmlText(input)).toBe(
+      '<body><strong>Outputs:</strong><ul><li>First paragraph of the draft.<br><br>Second paragraph of the draft.<br><br>Best, Dave</li></ul></body>'
+    );
+  });
+
+  it('keeps a single multiline output together when the first bullet shares the heading block', () => {
+    const input = `Outputs:
+- First paragraph of the draft.
+
+Second paragraph of the draft.
+
+Best,
+Dave`;
+
+    expect(commentToAsanaHtmlText(input)).toBe(
+      '<body><strong>Outputs:</strong><ul><li>First paragraph of the draft.<br><br>Second paragraph of the draft.<br><br>Best, Dave</li></ul></body>'
+    );
+  });
+});
+
+describe('looksLikeAsanaHtmlText', () => {
+  it('returns true for wrapped Asana html text', () => {
+    expect(looksLikeAsanaHtmlText('<body><strong>Hello</strong></body>')).toBe(true);
+  });
+
+  it('returns false for plain text', () => {
+    expect(looksLikeAsanaHtmlText('Container: hello')).toBe(false);
   });
 });
