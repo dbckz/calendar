@@ -295,6 +295,27 @@ describe('Asana API Functions', () => {
       );
     });
 
+    it('prefers html_text when provided', async () => {
+      const { addTaskComment } = await import('@/lib/asana');
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: {} }),
+      });
+
+      await addTaskComment('access-token', 'task-gid', 'My comment', '<body><strong>Hello</strong></body>');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://app.asana.com/api/1.0/tasks/task-gid/stories',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            data: { html_text: '<body><strong>Hello</strong></body>' },
+          }),
+        })
+      );
+    });
+
     it('throws error on failure', async () => {
       const { addTaskComment } = await import('@/lib/asana');
 

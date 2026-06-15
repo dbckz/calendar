@@ -126,7 +126,8 @@ export const api = {
     endTime: Date,
     title?: string,
     description?: string,
-    calendarId?: string
+    calendarId?: string,
+    colorId?: string
   ): Promise<CalendarEventResponse> {
     return fetchWithRetry<CalendarEventResponse>('/api/calendar', {
       method: 'PATCH',
@@ -139,6 +140,7 @@ export const api = {
         title,
         description,
         calendarId,
+        colorId,
       }),
     });
   },
@@ -177,14 +179,15 @@ export const api = {
   async addAsanaComment(
     taskId: string,
     integrationId: string,
-    comment: string
+    comment: string,
+    htmlText?: string
   ): Promise<{ success: true }> {
     return fetchWithRetry<{ success: true }>(
       `/api/asana-tasks/${taskId}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comment, integrationId }),
+        body: JSON.stringify({ comment, htmlText, integrationId }),
       }
     );
   },

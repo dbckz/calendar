@@ -341,17 +341,18 @@ export async function deleteTask(
 export async function addTaskComment(
   accessToken: string,
   taskGid: string,
-  text: string
+  text: string,
+  htmlText?: string
 ): Promise<void> {
+  const data: Record<string, string> = htmlText ? { html_text: htmlText } : { text };
+
   const response = await fetch(`${ASANA_API_BASE}/tasks/${taskGid}/stories`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      data: { text },
-    }),
+    body: JSON.stringify({ data }),
   });
 
   if (!response.ok) {
@@ -364,6 +365,7 @@ export interface AsanaStory {
   gid: string;
   type: string;
   text: string;
+  htmlText?: string;
   createdAt: string;
   createdBy?: {
     gid: string;
@@ -377,7 +379,7 @@ export async function getTaskStories(
   taskGid: string
 ): Promise<AsanaStory[]> {
   const response = await fetch(
-    `${ASANA_API_BASE}/tasks/${taskGid}/stories?opt_fields=type,text,created_at,created_by.name,resource_subtype`,
+    `${ASANA_API_BASE}/tasks/${taskGid}/stories?opt_fields=type,text,html_text,created_at,created_by.name,resource_subtype`,
     {
       headers: {
         'Authorization': `Bearer ${accessToken}`,
@@ -395,6 +397,7 @@ export async function getTaskStories(
     gid: story.gid as string,
     type: story.type as string,
     text: story.text as string || '',
+    htmlText: story.html_text as string | undefined,
     createdAt: story.created_at as string,
     createdBy: story.created_by ? {
       gid: (story.created_by as Record<string, string>).gid,

@@ -453,7 +453,7 @@ describe('useAsanaTasks hook', () => {
         await result.current.addAsanaComment('task-1', 'int-1', 'Test comment');
       });
 
-      expect(mockApi.addAsanaComment).toHaveBeenCalledWith('task-1', 'int-1', 'Test comment');
+      expect(mockApi.addAsanaComment).toHaveBeenCalledWith('task-1', 'int-1', 'Test comment', undefined);
     });
 
     it('creates a new Asana task', async () => {

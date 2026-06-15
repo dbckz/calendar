@@ -107,11 +107,17 @@ function parseGoogleDateOnly(dateStr: string): Date {
   return new Date(year, month - 1, day, 0, 0, 0, 0);
 }
 
+const DEFAULT_TIME_ZONE = 'Europe/London';
+
 function formatDateOnly(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: DEFAULT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+
+  return formatter.format(date);
 }
 
 function toCalendarEvent(
@@ -139,6 +145,13 @@ function toCalendarEvent(
     allDay: isAllDay,
     calendarId,
   };
+}
+
+// Build Google Calendar start/end payload based on all-day or timed event.
+function buildEventDate(date: Date, isAllDay: boolean): { date: string } | { dateTime: string; timeZone: string } {
+  return isAllDay
+    ? { date: formatDateOnly(date) }
+    : { dateTime: date.toISOString(), timeZone: DEFAULT_TIME_ZONE };
 }
 
 export async function getCalendarEvents(
@@ -180,7 +193,8 @@ export async function updateCalendarEvent(
   endTime: Date,
   title?: string,
   description?: string,
-  calendarId: string = 'primary'
+  calendarId: string = 'primary',
+  colorId?: string
 ): Promise<CalendarEvent> {
   const oauth2Client = createAuthenticatedClient(credentials, clientId, clientSecret);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
@@ -198,12 +212,9 @@ export async function updateCalendarEvent(
       ...event,
       summary: title !== undefined ? title : event.summary,
       description: description !== undefined ? description : event.description,
-      start: isAllDay
-        ? { date: startTime.toISOString().split('T')[0] }
-        : { dateTime: startTime.toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
-      end: isAllDay
-        ? { date: endTime.toISOString().split('T')[0] }
-        : { dateTime: endTime.toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+      colorId: colorId !== undefined ? colorId : event.colorId,
+      start: buildEventDate(startTime, isAllDay),
+      end: buildEventDate(endTime, isAllDay),
     },
   });
 
@@ -237,45 +248,27 @@ export async function createCalendarEvent(
 ): Promise<CalendarEvent> {
   const oauth2Client = createAuthenticatedClient(credentials, clientId, clientSecret);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
-  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const isAllDay = !!options?.allDay;
 
   const baseRequestBody = {
     summary: title,
     description,
-    start: isAllDay
-      ? { date: formatDateOnly(startTime) }
-      : {
-          dateTime: startTime.toISOString(),
-          timeZone,
-        },
-    end: isAllDay
-      ? { date: formatDateOnly(endTime) }
-      : {
-          dateTime: endTime.toISOString(),
-          timeZone,
-        },
+    start: buildEventDate(startTime, isAllDay),
+    end: buildEventDate(endTime, isAllDay),
     ...(options?.recurrence?.length ? { recurrence: options.recurrence } : {}),
   };
 
-  let event;
-
   // Try with requested eventType first, fall back to default if focusTime isn't supported
-  if (eventType === 'focusTime') {
-    try {
-      event = await calendar.events.insert({
-        calendarId,
-        requestBody: { ...baseRequestBody, eventType: 'focusTime' },
-      });
-    } catch (err) {
-      // focusTime may not be supported on this calendar, retry as default event
-      console.log('focusTime not supported, creating as default event');
-      event = await calendar.events.insert({
-        calendarId,
-        requestBody: { ...baseRequestBody, eventType: 'default' },
-      });
-    }
-  } else {
+  let event;
+  try {
+    event = await calendar.events.insert({
+      calendarId,
+      requestBody: { ...baseRequestBody, eventType: eventType ?? 'default' },
+    });
+  } catch (err) {
+    if (eventType !== 'focusTime') throw err;
+    // focusTime may not be supported on this calendar, retry as default event
+    console.log('focusTime not supported, creating as default event');
     event = await calendar.events.insert({
       calendarId,
       requestBody: { ...baseRequestBody, eventType: 'default' },

@@ -65,7 +65,7 @@ interface UseAsanaTasksReturn {
   unscheduleAllAsanaInstances: (asanaTaskId: string) => Promise<boolean>;
   getScheduledAsanaEventsForDate: (date: string) => CalendarEvent[];
   completeAsanaTask: (taskId: string, integrationId: string, completed: boolean) => Promise<void>;
-  addAsanaComment: (taskId: string, integrationId: string, comment: string) => Promise<void>;
+  addAsanaComment: (taskId: string, integrationId: string, comment: string, htmlText?: string) => Promise<void>;
   createAsanaTask: (integrationId: string, name: string, options?: CreateAsanaTaskOptions) => Promise<CalendarEvent | null>;
   updateAsanaTask: (taskId: string, integrationId: string, updates: UpdateAsanaTaskOptions) => Promise<CalendarEvent | null>;
   deleteAsanaTask: (taskId: string, integrationId: string) => Promise<boolean>;
@@ -675,9 +675,10 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
   const addAsanaComment = useCallback(async (
     taskId: string,
     integrationId: string,
-    comment: string
+    comment: string,
+    htmlText?: string
   ) => {
-    await api.addAsanaComment(taskId, integrationId, comment);
+    await api.addAsanaComment(taskId, integrationId, comment, htmlText);
   }, []);
 
   const createAsanaTask = useCallback(async (

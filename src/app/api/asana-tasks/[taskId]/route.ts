@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { completeTask, addTaskComment, deleteTask, getTaskStories, refreshAsanaToken, updateTask, asanaTaskToCalendarEvent, UpdateTaskParams } from '@/lib/asana';
+import { commentToAsanaHtmlText } from '@/lib/asana-rich-text';
 import { getIntegrationById, updateIntegration } from '@/lib/integration-storage';
 import { AsanaIntegration } from '@/types';
 
@@ -107,10 +108,12 @@ export async function POST(
 ) {
   try {
     const { taskId } = await params;
-    const { comment, integrationId } = await request.json();
+    const { comment, htmlText, integrationId } = await request.json();
+    const plainComment = typeof comment === 'string' ? comment.trim() : '';
+    const richComment = typeof htmlText === 'string' ? htmlText.trim() : '';
 
-    if (!comment || typeof comment !== 'string') {
-      return NextResponse.json({ error: 'comment must be a non-empty string' }, { status: 400 });
+    if (!plainComment && !richComment) {
+      return NextResponse.json({ error: 'comment or htmlText must be a non-empty string' }, { status: 400 });
     }
 
     if (!integrationId) {
@@ -138,7 +141,12 @@ export async function POST(
       await updateIntegration(integration.id, { credentials });
     }
 
-    await addTaskComment(credentials.accessToken, taskId, comment);
+    await addTaskComment(
+      credentials.accessToken,
+      taskId,
+      plainComment,
+      richComment || (plainComment ? commentToAsanaHtmlText(plainComment) : undefined)
+    );
 
     return NextResponse.json({ success: true });
   } catch (error) {

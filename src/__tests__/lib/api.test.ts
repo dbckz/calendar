@@ -226,6 +226,46 @@ describe('api methods', () => {
           integrationId: 'int-1',
           startTime: startTime.toISOString(),
           endTime: endTime.toISOString(),
+          title: undefined,
+          description: undefined,
+          calendarId: undefined,
+          colorId: undefined,
+        }),
+      });
+    });
+
+    it('passes colorId when provided', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true }),
+      });
+
+      const startTime = new Date('2024-01-15T10:00:00Z');
+      const endTime = new Date('2024-01-15T11:00:00Z');
+
+      await api.updateCalendarEvent(
+        'event-1',
+        'int-1',
+        startTime,
+        endTime,
+        'Updated title',
+        'Updated description',
+        'calendar-1',
+        '11'
+      );
+
+      expect(mockFetch).toHaveBeenCalledWith('/api/calendar', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          eventId: 'event-1',
+          integrationId: 'int-1',
+          startTime: startTime.toISOString(),
+          endTime: endTime.toISOString(),
+          title: 'Updated title',
+          description: 'Updated description',
+          calendarId: 'calendar-1',
+          colorId: '11',
         }),
       });
     });
@@ -296,6 +336,25 @@ describe('api methods', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ comment: 'My comment', integrationId: 'int-1' }),
+      });
+    });
+
+    it('passes htmlText when provided', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true }),
+      });
+
+      await api.addAsanaComment('task-1', 'int-1', 'Plain fallback', '<body><strong>Hello</strong></body>');
+
+      expect(mockFetch).toHaveBeenCalledWith('/api/asana-tasks/task-1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          comment: 'Plain fallback',
+          htmlText: '<body><strong>Hello</strong></body>',
+          integrationId: 'int-1',
+        }),
       });
     });
   });

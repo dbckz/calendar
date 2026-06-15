@@ -107,7 +107,7 @@ async function getValidatedIntegration(integrationId: string): Promise<
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
-    const { eventId, integrationId, startTime, endTime, title, description, calendarId } = body;
+    const { eventId, integrationId, startTime, endTime, title, description, calendarId, colorId } = body;
 
     if (!eventId || !integrationId || !startTime || !endTime) {
       return NextResponse.json(
@@ -130,7 +130,8 @@ export async function PATCH(request: NextRequest) {
       new Date(endTime),
       title,
       description,
-      calendarId || 'primary'
+      calendarId || 'primary',
+      colorId
     );
 
     return NextResponse.json({
