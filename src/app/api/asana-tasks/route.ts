@@ -96,11 +96,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'name is required' }, { status: 400 });
     }
 
-    // Validate Type custom field is provided
-    const TYPE_FIELD_GID = '1209133875609090';
-    if (!customFields || !customFields[TYPE_FIELD_GID]) {
-      return NextResponse.json({ error: 'Type custom field is required' }, { status: 400 });
-    }
+    // Note: the Type custom field is only required for integrations whose
+    // workspace actually defines it (e.g. OM). The client enforces this
+    // per-integration based on the workspace's real field config, so the
+    // server does not hardcode any workspace-specific required field here.
 
     const integration = await getIntegrationById(integrationId);
 
