@@ -12,6 +12,24 @@ const repoRoot = process.env.CALENDAR_APP_DIR || process.cwd();
 // code (avoids pulling in server modules that touch integrations.json).
 const DATA_DIR = path.join(homedir(), '.claude', 'data', 'calendar');
 
+// Tool allowlist for the headless `claude -p` agent runner. The user has
+// deliberately chosen an explicit allowlist WITHOUT Bash (and without
+// --dangerously-skip-permissions): tasks that need shell access fail cleanly
+// rather than run unsandboxed. Override via CLAUDE_ALLOWED_TOOLS if needed.
+const DEFAULT_ALLOWED_TOOLS = [
+  'Skill',
+  'Read',
+  'Write',
+  'WebSearch',
+  'WebFetch',
+  'mcp__claude_ai_Google_Calendar',
+  'mcp__claude_ai_Gmail',
+  'mcp__claude_ai_Asana',
+  'mcp__claude_ai_Slack',
+  'mcp__claude_ai_HubSpot',
+  'mcp__claude_ai_Google_Drive',
+].join(',');
+
 function resolvePlannerBaseUrl(): string {
   if (process.env.PLANNER_BASE_URL) {
     return process.env.PLANNER_BASE_URL;
@@ -40,8 +58,12 @@ export const config = {
   inProgressTagName: process.env.ASANA_IN_PROGRESS_TAG || 'agent_in_progress',
   completeTagName: process.env.ASANA_COMPLETE_TAG || 'agent_complete',
   failedTagName: process.env.ASANA_FAILED_TAG || 'agent_failed',
-  openclawAgent: process.env.OPENCLAW_AGENT_ID || 'main',
-  openclawTimeoutSeconds: Number(process.env.OPENCLAW_TIMEOUT_SECONDS || 600),
+  // Headless Claude Code agent runner (see claude-runner.ts).
+  claudeBin: process.env.CLAUDE_BIN || path.join(homedir(), '.local', 'bin', 'claude'),
+  claudeTimeoutSeconds: Number(process.env.CLAUDE_TIMEOUT_SECONDS || 900),
+  claudeAllowedTools: process.env.CLAUDE_ALLOWED_TOOLS || DEFAULT_ALLOWED_TOOLS,
+  // Scratch workspace so the agent's Write output lands here, not in the repo.
+  agentWorkspace: path.join(DATA_DIR, 'agent-workspace'),
 };
 
 export type OrchestratorConfig = typeof config;

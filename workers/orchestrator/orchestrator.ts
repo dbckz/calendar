@@ -11,8 +11,8 @@ import {
 } from './planner-client';
 import { parseAgentWorkContainers, isSkillContainer, skillNameFromContainer } from './containers';
 import { getTag, hasTag, resolveWorkspaceTag, taskUrl } from './asana-task-utils';
-import { runOpenClawTask } from './openclaw-runner';
-import { buildFlightFinderPrompt, buildPlainContainerPrompt } from './prompts';
+import { runClaudeTask } from './claude-runner';
+import { buildSkillContainerPrompt, buildPlainContainerPrompt } from './prompts';
 import { formatComment } from './reporting';
 import {
   acquireLock,
@@ -155,31 +155,30 @@ interface ExecuteContainerInput {
 }
 
 async function executeContainer({ task, stories, container }: ExecuteContainerInput): Promise<ContainerReport> {
-  const sessionKey = buildSessionKey(task.id, container);
+  const runnerOpts = {
+    timeoutSeconds: config.claudeTimeoutSeconds,
+    allowedTools: config.claudeAllowedTools,
+  };
 
   if (isSkillContainer(container)) {
     const skillName = skillNameFromContainer(container);
-    if (skillName === 'flight-finder') {
-      return normalizeReport(await runOpenClawTask({
-        agent: config.openclawAgent,
-        timeoutSeconds: config.openclawTimeoutSeconds,
-        sessionKey,
-        prompt: buildFlightFinderPrompt({ task, stories, container }),
-      }));
+    if (!skillName) {
+      return {
+        status: 'failed',
+        summary: `Empty skill container: ${container}`,
+        outputs: [],
+        next: 'Name a skill after the ~ or change the container text.',
+      };
     }
 
-    return {
-      status: 'failed',
-      summary: `Unknown skill container: ${container}`,
-      outputs: [],
-      next: 'Add the missing skill or change the container text.',
-    };
+    return normalizeReport(await runClaudeTask({
+      ...runnerOpts,
+      prompt: buildSkillContainerPrompt({ task, stories, container, skillName }),
+    }));
   }
 
-  return normalizeReport(await runOpenClawTask({
-    agent: config.openclawAgent,
-    timeoutSeconds: config.openclawTimeoutSeconds,
-    sessionKey,
+  return normalizeReport(await runClaudeTask({
+    ...runnerOpts,
     prompt: buildPlainContainerPrompt({ task, stories, container }),
   }));
 }
@@ -199,15 +198,6 @@ function compareTasks(a: EligibleTask, b: EligibleTask): number {
   const bDue = b.dueOn || '9999-12-31';
   if (aDue !== bDue) return aDue.localeCompare(bDue);
   return a.title.localeCompare(b.title);
-}
-
-function buildSessionKey(taskId: string, container: string): string {
-  const slug = String(container)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48) || 'container';
-  return `workflow-${taskId}-${slug}-${Date.now()}`;
 }
 
 async function ensureWorkspaceTag(integrationId: string, tags: AsanaTag[], name: string, color: string): Promise<AsanaTag> {

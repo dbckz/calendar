@@ -26,13 +26,19 @@ interface PromptInput {
   container: string;
 }
 
-export function buildFlightFinderPrompt({ task, stories, container }: PromptInput): string {
+interface SkillPromptInput extends PromptInput {
+  skillName: string;
+}
+
+// A `~name` container maps to one of the user's Claude Code skills, which are
+// available to the headless `claude -p` runner via the Skill tool.
+export function buildSkillContainerPrompt({ task, stories, container, skillName }: SkillPromptInput): string {
   return [
-    'Use the flight-finder skill for this task.',
+    `Use your ${skillName} skill for this task.`,
     'Follow the skill exactly and do the actual work now.',
     'Return ONLY valid JSON with this schema:',
     '{"status":"successful|failed","summary":"string","outputs":["string"],"next":"string"}',
-    'outputs should be a short list of concrete review items such as the Google Flights URL, shortlisted flight options, or key caveats.',
+    'outputs should be a short list of concrete review items such as URLs, artefacts produced, or key caveats.',
     'If information is missing, set status to failed and explain the blocker in summary/next.',
     '',
     baseTaskBlock(task, stories, container),

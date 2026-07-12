@@ -1,16 +1,16 @@
 // Dry-run tests for runOnce with a fully mocked planner client + status layer.
-// No real HTTP, no openclaw CLI, no Asana side effects.
+// No real HTTP, no claude CLI, no Asana side effects.
 import { runOnce } from '../orchestrator';
 import * as planner from '../planner-client';
-import * as openclaw from '../openclaw-runner';
+import * as claudeRunner from '../claude-runner';
 import * as status from '../status';
 
 jest.mock('../planner-client');
-jest.mock('../openclaw-runner');
+jest.mock('../claude-runner');
 jest.mock('../status');
 
 const mockedPlanner = planner as jest.Mocked<typeof planner>;
-const mockedOpenclaw = openclaw as jest.Mocked<typeof openclaw>;
+const mockedClaude = claudeRunner as jest.Mocked<typeof claudeRunner>;
 const mockedStatus = status as jest.Mocked<typeof status>;
 
 beforeEach(() => {
@@ -50,7 +50,7 @@ describe('runOnce', () => {
 
     expect(result.picked).toBeNull();
     expect(result.message).toMatch(/No eligible tasks/i);
-    expect(mockedOpenclaw.runOpenClawTask).not.toHaveBeenCalled();
+    expect(mockedClaude.runClaudeTask).not.toHaveBeenCalled();
     expect(mockedStatus.releaseLock).toHaveBeenCalledTimes(1);
   });
 
@@ -75,7 +75,7 @@ describe('runOnce', () => {
     mockedPlanner.fetchTaskStories.mockResolvedValue([]);
     mockedPlanner.updateTaskTags.mockResolvedValue({ success: true });
     mockedPlanner.addTaskComment.mockResolvedValue({ success: true });
-    mockedOpenclaw.runOpenClawTask.mockResolvedValue({
+    mockedClaude.runClaudeTask.mockResolvedValue({
       status: 'successful',
       summary: 'Wrote the memo.',
       outputs: ['memo.md'],
