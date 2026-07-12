@@ -1,0 +1,409 @@
+// Pure, deterministic "Plan my week" scheduling engine.
+//
+// Given a workflow config, the week's busy intervals, candidate tasks and what
+// is already scheduled, proposeBlocks() greedily places task blocks into free
+// time to fill each category's remaining weekly quota. No I/O — every input is
+// passed in and the output is a plain list of proposals, so it is heavily
+// unit-testable and the API routes stay thin.
+//
+// Algorithm summary (documented decisions):
+//  * Category order: categories that have at least one candidate with a HARD
+//    deadline are processed first; within each group, by remaining quota
+//    descending; ties broken by category name. (This is the "hard-deadline
+//    categories first, then by remaining quota desc" option.)
+//  * Task ranking within a category: deadline (hard > soft > aspirational >
+//    none), then earliest due date, then energy (high first, so high-energy
+//    work grabs the earlier/preferred — typically morning — slots), then
+//    bestTime (morning > afternoon > evening), then title/id for stability.
+//  * Slot search: for each task we build an ordered list of search windows.
+//    Tier 1 is the category's PREFERRED windows (which may sit outside working
+//    hours — e.g. Deep Work 21:00-23:00 — and override working hours by design),
+//    ordered so windows matching the task's bestTime come first, then by date;
+//    Tier 2 is the working-hours window on each working day. We first-fit the
+//    earliest 15-minute-aligned slot of the category's target length that has
+//    the required buffer on both sides against busy intervals AND proposals
+//    already accepted in this run, is >= now, and does not exceed maxTasksPerDay
+//    for its date.
+//  * If a category still has quota but no candidate task fits/remains, we emit a
+//    task-less "reserved" block instead.
+//
+// Categories with no weeklyCount (e.g. a catch-all "General Todos") are skipped
+// — without a target count there is nothing to fill toward.
+
+import { classifyBlockCategory, parseTargetLength, type CapacityQuota } from '@/lib/capacity';
+import type { BestTime } from '@/types';
+import type {
+  CandidateTask,
+  ProposeBlocksInput,
+  ProposedBlock,
+} from './types';
+
+const SLOT_STEP_MINUTES = 15;
+const MS_PER_MINUTE = 60 * 1000;
+
+const WEEKDAY_NAMES = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+];
+
+interface TimeOfDay {
+  h: number;
+  m: number;
+}
+
+interface Window {
+  date: Date; // local midnight of the day
+  dateStr: string; // yyyy-MM-dd
+  startMs: number;
+  endMs: number;
+  preferred: boolean;
+  bestTimeMatch: boolean;
+}
+
+interface BusyMs {
+  start: number;
+  end: number;
+}
+
+function parseTimeOfDay(value: string): TimeOfDay | null {
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  if (h < 0 || h > 24 || m < 0 || m > 59) return null;
+  return { h, m };
+}
+
+// "09:00-11:00" -> [{h,m},{h,m}]
+function parsePreferredWindow(value: string): [TimeOfDay, TimeOfDay] | null {
+  const parts = value.split('-');
+  if (parts.length !== 2) return null;
+  const start = parseTimeOfDay(parts[0]);
+  const end = parseTimeOfDay(parts[1]);
+  if (!start || !end) return null;
+  return [start, end];
+}
+
+function localDateStr(date: Date): string {
+  const y = date.getFullYear();
+  const mo = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${mo}-${d}`;
+}
+
+function timeStr(ms: number): string {
+  const date = new Date(ms);
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+// Absolute ms for a time-of-day on a given local day.
+function msAt(day: Date, time: TimeOfDay): number {
+  const d = new Date(day.getFullYear(), day.getMonth(), day.getDate(), time.h, time.m, 0, 0);
+  return d.getTime();
+}
+
+// Round a timestamp up to the next SLOT_STEP boundary within its day.
+function ceilToStep(ms: number): number {
+  const stepMs = SLOT_STEP_MINUTES * MS_PER_MINUTE;
+  return Math.ceil(ms / stepMs) * stepMs;
+}
+
+const BEST_TIME_RANGES: Record<BestTime, [number, number]> = {
+  morning: [5, 12],
+  afternoon: [12, 17],
+  evening: [17, 24],
+};
+
+function windowMatchesBestTime(startMs: number, bestTime?: BestTime): boolean {
+  if (!bestTime) return false;
+  const hour = new Date(startMs).getHours();
+  const [lo, hi] = BEST_TIME_RANGES[bestTime];
+  return hour >= lo && hour < hi;
+}
+
+const DEADLINE_RANK: Record<string, number> = { hard: 0, soft: 1, aspirational: 2 };
+const ENERGY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
+const BEST_TIME_RANK: Record<string, number> = { morning: 0, afternoon: 1, evening: 2 };
+
+function taskSortKey(task: CandidateTask): Array<number | string> {
+  return [
+    task.deadlineType ? DEADLINE_RANK[task.deadlineType] : 3,
+    task.dueDate ?? '9999-12-31',
+    task.energyLevel ? ENERGY_RANK[task.energyLevel] : 1,
+    task.bestTime ? BEST_TIME_RANK[task.bestTime] : 1,
+    task.title,
+    task.gid ?? task.adhocId ?? '',
+  ];
+}
+
+function compareKeys(a: Array<number | string>, b: Array<number | string>): number {
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] < b[i]) return -1;
+    if (a[i] > b[i]) return 1;
+  }
+  return 0;
+}
+
+// Does [start, end] have `buffer` minutes of clearance from every busy interval?
+function slotIsFree(start: number, end: number, buffer: number, busy: BusyMs[]): boolean {
+  const bufferMs = buffer * MS_PER_MINUTE;
+  const paddedStart = start - bufferMs;
+  const paddedEnd = end + bufferMs;
+  for (const b of busy) {
+    // Conflict when the busy interval overlaps the padded region. Exact
+    // boundary touching (busy ends exactly `buffer` before start) is allowed.
+    if (b.start < paddedEnd && b.end > paddedStart) return false;
+  }
+  return true;
+}
+
+// Build the ordered list of working days in the week (>= today), each with its
+// working-hours window bounds.
+function buildWorkingDays(
+  input: ProposeBlocksInput,
+  workingHours: { start: TimeOfDay; end: TimeOfDay },
+  workingDayNames: Set<string>
+): Array<{ date: Date; dateStr: string; whStartMs: number; whEndMs: number }> {
+  const days: Array<{ date: Date; dateStr: string; whStartMs: number; whEndMs: number }> = [];
+  const todayStr = localDateStr(input.now);
+  for (let i = 0; i < 7; i++) {
+    const day = new Date(
+      input.weekStart.getFullYear(),
+      input.weekStart.getMonth(),
+      input.weekStart.getDate() + i
+    );
+    const dateStr = localDateStr(day);
+    if (dateStr < todayStr) continue; // past days in the week
+    if (!workingDayNames.has(WEEKDAY_NAMES[day.getDay()])) continue;
+    days.push({
+      date: day,
+      dateStr,
+      whStartMs: msAt(day, workingHours.start),
+      whEndMs: msAt(day, workingHours.end),
+    });
+  }
+  return days;
+}
+
+// Build candidate search windows for a task (or reserved block when bestTime is
+// undefined): preferred windows first (bestTime-matching first), then
+// working-hours fallback windows. All ordered by date within each tier.
+function buildWindowsForTask(
+  bestTime: BestTime | undefined,
+  preferredWindows: Array<[TimeOfDay, TimeOfDay]>,
+  workingDays: Array<{ date: Date; dateStr: string; whStartMs: number; whEndMs: number }>
+): Window[] {
+  const preferred: Window[] = [];
+  for (const day of workingDays) {
+    for (const [ws, we] of preferredWindows) {
+      const startMs = msAt(day.date, ws);
+      const endMs = msAt(day.date, we);
+      if (endMs <= startMs) continue;
+      preferred.push({
+        date: day.date,
+        dateStr: day.dateStr,
+        startMs,
+        endMs,
+        preferred: true,
+        bestTimeMatch: windowMatchesBestTime(startMs, bestTime),
+      });
+    }
+  }
+  // Within preferred tier: bestTime-matching windows first, then by date/start.
+  preferred.sort((a, b) => {
+    if (a.bestTimeMatch !== b.bestTimeMatch) return a.bestTimeMatch ? -1 : 1;
+    return a.startMs - b.startMs;
+  });
+
+  const fallback: Window[] = workingDays.map(day => ({
+    date: day.date,
+    dateStr: day.dateStr,
+    startMs: day.whStartMs,
+    endMs: day.whEndMs,
+    preferred: false,
+    bestTimeMatch: false,
+  }));
+  fallback.sort((a, b) => a.startMs - b.startMs);
+
+  return [...preferred, ...fallback];
+}
+
+// Find the earliest valid slot for a block of `duration` minutes across the
+// given windows, respecting buffer, now-cutoff and maxTasksPerDay.
+function findSlot(
+  windows: Window[],
+  duration: number,
+  buffer: number,
+  busy: BusyMs[],
+  nowMs: number,
+  maxPerDay: number,
+  countByDate: Record<string, number>
+): { startMs: number; endMs: number; dateStr: string; preferred: boolean } | null {
+  const durationMs = duration * MS_PER_MINUTE;
+  const stepMs = SLOT_STEP_MINUTES * MS_PER_MINUTE;
+
+  for (const win of windows) {
+    if ((countByDate[win.dateStr] ?? 0) >= maxPerDay) continue;
+    // Start at the window start (or now if later), aligned up to the step grid.
+    let start = ceilToStep(Math.max(win.startMs, nowMs));
+    while (start + durationMs <= win.endMs) {
+      const end = start + durationMs;
+      if (start >= nowMs && slotIsFree(start, end, buffer, busy)) {
+        return { startMs: start, endMs: end, dateStr: win.dateStr, preferred: win.preferred };
+      }
+      start += stepMs;
+    }
+  }
+  return null;
+}
+
+export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
+  const { config, candidateTasks } = input;
+  const scheduling = config.scheduling;
+
+  const workingHoursStart = parseTimeOfDay(scheduling.workingHours.start) ?? { h: 9, m: 0 };
+  const workingHoursEnd = parseTimeOfDay(scheduling.workingHours.end) ?? { h: 17, m: 0 };
+  const workingDayNames = new Set(
+    scheduling.workingDays.map(d => d.charAt(0).toUpperCase() + d.slice(1).toLowerCase())
+  );
+  const buffer = parseTargetLength(scheduling.bufferBetweenTasks);
+  const maxPerDay = scheduling.maxTasksPerDay > 0 ? scheduling.maxTasksPerDay : Infinity;
+
+  const workingDays = buildWorkingDays(
+    input,
+    { start: workingHoursStart, end: workingHoursEnd },
+    workingDayNames
+  );
+
+  // Quotas in the capacity lib's shape, for classification reuse.
+  const quotas: CapacityQuota[] = Object.entries(config.taskQuotas).map(([category, quota]) => ({
+    category,
+    weeklyCount: quota.weeklyCount,
+    targetLength: quota.targetLength,
+    types: config.typeMapping?.[category] ?? [],
+  }));
+
+  // Bucket candidate tasks by category (via the shared classifier).
+  const tasksByCategory = new Map<string, CandidateTask[]>();
+  for (const task of candidateTasks) {
+    const category = classifyBlockCategory(task.typeSignals, quotas);
+    if (!category) continue;
+    const list = tasksByCategory.get(category) ?? [];
+    list.push(task);
+    tasksByCategory.set(category, list);
+  }
+  for (const list of tasksByCategory.values()) {
+    list.sort((a, b) => compareKeys(taskSortKey(a), taskSortKey(b)));
+  }
+
+  // Remaining quota per category.
+  const remainingByCategory = new Map<string, number>();
+  for (const quota of quotas) {
+    const weeklyCount = quota.weeklyCount ?? 0;
+    if (weeklyCount <= 0) continue; // catch-all / no target -> skip
+    const already = input.existingScheduledCounts[quota.category] ?? 0;
+    const remaining = Math.max(0, weeklyCount - already);
+    if (remaining > 0) remainingByCategory.set(quota.category, remaining);
+  }
+
+  // Category processing order: hard-deadline categories first, then by
+  // remaining quota desc, then name.
+  const categoryHasHard = (category: string): boolean =>
+    (tasksByCategory.get(category) ?? []).some(t => t.deadlineType === 'hard');
+
+  const orderedCategories = [...remainingByCategory.keys()].sort((a, b) => {
+    const hardA = categoryHasHard(a);
+    const hardB = categoryHasHard(b);
+    if (hardA !== hardB) return hardA ? -1 : 1;
+    const remA = remainingByCategory.get(a)!;
+    const remB = remainingByCategory.get(b)!;
+    if (remA !== remB) return remB - remA;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+
+  // Mutable run state.
+  const busy: BusyMs[] = input.busyIntervals.map(i => ({
+    start: i.start.getTime(),
+    end: i.end.getTime(),
+  }));
+  const countByDate: Record<string, number> = { ...input.existingBlocksByDate };
+  const usedTaskIds = new Set<string>();
+  const nowMs = input.now.getTime();
+  const proposals: ProposedBlock[] = [];
+
+  const quotaByCategory = new Map(quotas.map(q => [q.category, q]));
+
+  for (const category of orderedCategories) {
+    const quota = quotaByCategory.get(category)!;
+    const duration = parseTargetLength(quota.targetLength) || 30;
+    const preferredWindows = (config.taskQuotas[category]?.preferredTimes ?? [])
+      .map(parsePreferredWindow)
+      .filter((w): w is [TimeOfDay, TimeOfDay] => w !== null);
+
+    let remaining = remainingByCategory.get(category)!;
+    const categoryTasks = tasksByCategory.get(category) ?? [];
+
+    while (remaining > 0) {
+      const task = categoryTasks.find(t => {
+        const id = t.gid ?? t.adhocId;
+        return id ? !usedTaskIds.has(id) : true;
+      });
+
+      const windows = buildWindowsForTask(task?.bestTime, preferredWindows, workingDays);
+      const slot = findSlot(windows, duration, buffer, busy, nowMs, maxPerDay, countByDate);
+      if (!slot) break; // no more room this week for this category
+
+      const start = timeStr(slot.startMs);
+      const blockId = `${slot.dateStr}-${start}-${category}`;
+
+      if (task) {
+        const id = task.gid ?? task.adhocId!;
+        usedTaskIds.add(id);
+        proposals.push({
+          id: blockId,
+          category,
+          task: {
+            gid: task.gid,
+            adhocId: task.adhocId,
+            title: task.title,
+            integrationId: task.integrationId,
+          },
+          date: slot.dateStr,
+          start,
+          durationMinutes: duration,
+          reason: buildReason(category, slot.preferred, task),
+        });
+      } else {
+        proposals.push({
+          id: blockId,
+          category,
+          date: slot.dateStr,
+          start,
+          durationMinutes: duration,
+          reason: `Reserved ${category} time — quota not yet met and no matching task available.`,
+        });
+      }
+
+      // Occupy the slot for the rest of the run.
+      busy.push({ start: slot.startMs, end: slot.endMs });
+      countByDate[slot.dateStr] = (countByDate[slot.dateStr] ?? 0) + 1;
+      remaining -= 1;
+    }
+  }
+
+  return proposals;
+}
+
+function buildReason(category: string, preferred: boolean, task: CandidateTask): string {
+  const bits: string[] = [`${category} block`];
+  if (task.deadlineType === 'hard') bits.push('hard deadline');
+  else if (task.deadlineType) bits.push(`${task.deadlineType} deadline`);
+  if (task.dueDate) bits.push(`due ${task.dueDate}`);
+  bits.push(preferred ? 'in a preferred window' : 'in working hours');
+  return bits.join(', ') + '.';
+}
