@@ -790,6 +790,7 @@ export default function Home() {
         activeTab={activeTab}
         tabs={tabs}
         onTabChange={handleTabChange}
+        notificationEvents={googleEvents}
       />
 
       {activeTab === 'rituals' ? (

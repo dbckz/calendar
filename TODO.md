@@ -1,2 +1,1 @@
-- Add cross-tab sync using BroadcastChannel API so changes in one browser tab are reflected in other tabs in near real-time (broadcast mutations, other tabs refetch)
 - Add a: "time worked on DBC today" and "time worked on OM" today and figure out how to track these

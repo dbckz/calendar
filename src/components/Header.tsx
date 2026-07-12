@@ -3,6 +3,8 @@
 import { format, addDays, subDays, isSameDay } from 'date-fns';
 import { Settings, RefreshCw, Star, ChevronLeft, ChevronRight, LucideIcon } from 'lucide-react';
 import Link from 'next/link';
+import { CalendarEvent } from '@/types';
+import { NotificationBell } from './NotificationBell';
 
 interface ColorScheme {
   headerBg: string;
@@ -34,6 +36,7 @@ interface HeaderProps {
   activeTab?: string;
   tabs?: Tab[];
   onTabChange?: (tabId: string) => void;
+  notificationEvents?: CalendarEvent[];
 }
 
 function formatDuration(minutes: number): string {
@@ -56,7 +59,7 @@ function getDayLabel(date: Date): string {
   return format(date, 'EEE, MMM d');
 }
 
-export function Header({ selectedDate, onDateChange, onRefresh, isLoading, colorScheme, timeWorkedByIntegration, integrations, activeTab, tabs, onTabChange }: HeaderProps) {
+export function Header({ selectedDate, onDateChange, onRefresh, isLoading, colorScheme, timeWorkedByIntegration, integrations, activeTab, tabs, onTabChange, notificationEvents }: HeaderProps) {
   const prevDay = subDays(selectedDate, 1);
   const nextDay = addDays(selectedDate, 1);
 
@@ -164,6 +167,9 @@ export function Header({ selectedDate, onDateChange, onRefresh, isLoading, color
           )}
 
           <div className="flex items-center gap-2">
+            {notificationEvents && (
+              <NotificationBell events={notificationEvents} onColoredBg={!!colorScheme} />
+            )}
             <button
               onClick={onRefresh}
               disabled={isLoading}

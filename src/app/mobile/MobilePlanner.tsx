@@ -16,6 +16,7 @@ import {
 import { api } from '@/lib/api';
 import { containsHtml, htmlToReadableText } from '@/lib/html-utils';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
+import { NotificationBell } from '@/components/NotificationBell';
 import { useTasks } from '@/hooks/useTasks';
 import { useToast } from '@/hooks/useToast';
 import { CalendarEvent, Reminder, SettingsResponse } from '@/types';
@@ -796,15 +797,22 @@ export function MobilePlanner() {
               <p className={`text-xs font-medium uppercase tracking-wide ${colorScheme.subText}`}>Daily Planner</p>
               <h1 className="truncate text-xl font-semibold">Dave&apos;s Calendar</h1>
             </div>
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={showLoading}
-              className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md bg-white/10 text-white transition-colors hover:bg-white/20 disabled:opacity-60"
-              aria-label="Refresh"
-            >
-              <RefreshCw className={`h-5 w-5 ${showLoading ? 'animate-spin' : ''}`} />
-            </button>
+            <div className="flex flex-shrink-0 items-center gap-2">
+              <NotificationBell
+                events={googleEvents}
+                className="flex h-10 w-10 items-center justify-center rounded-md bg-white/10 text-white transition-colors hover:bg-white/20"
+                iconClassName="h-5 w-5"
+              />
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={showLoading}
+                className="flex h-10 w-10 items-center justify-center rounded-md bg-white/10 text-white transition-colors hover:bg-white/20 disabled:opacity-60"
+                aria-label="Refresh"
+              >
+                <RefreshCw className={`h-5 w-5 ${showLoading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
           </div>
 
           <div className="mt-4 flex items-center gap-2">
