@@ -815,6 +815,7 @@ export default function Home() {
         tabs={tabs}
         onTabChange={handleTabChange}
         notificationEvents={googleEvents}
+        showDateNav={activeTab === 'calendar'}
       />
 
       {activeTab === 'dashboard' ? (

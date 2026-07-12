@@ -37,6 +37,7 @@ interface HeaderProps {
   tabs?: Tab[];
   onTabChange?: (tabId: string) => void;
   notificationEvents?: CalendarEvent[];
+  showDateNav?: boolean;
 }
 
 function formatDuration(minutes: number): string {
@@ -59,7 +60,7 @@ function getDayLabel(date: Date): string {
   return format(date, 'EEE, MMM d');
 }
 
-export function Header({ selectedDate, onDateChange, onRefresh, isLoading, colorScheme, timeWorkedByIntegration, integrations, activeTab, tabs, onTabChange, notificationEvents }: HeaderProps) {
+export function Header({ selectedDate, onDateChange, onRefresh, isLoading, colorScheme, timeWorkedByIntegration, integrations, activeTab, tabs, onTabChange, notificationEvents, showDateNav = true }: HeaderProps) {
   const prevDay = subDays(selectedDate, 1);
   const nextDay = addDays(selectedDate, 1);
 
@@ -100,6 +101,7 @@ export function Header({ selectedDate, onDateChange, onRefresh, isLoading, color
           </div>
 
           {/* Day navigation */}
+          {showDateNav && (
           <div className="relative flex items-center">
             <div className={`flex items-center gap-1 ${colorScheme ? 'bg-white/20' : 'bg-gray-100'} rounded-lg p-1`}>
               <button
@@ -145,6 +147,7 @@ export function Header({ selectedDate, onDateChange, onRefresh, isLoading, color
               </button>
             )}
           </div>
+          )}
 
           {/* Time worked stats */}
           {integrations && integrations.length > 0 && (
