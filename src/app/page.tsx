@@ -826,6 +826,7 @@ export default function Home() {
             timeWorkedByIntegration={timeWorkedByIntegration}
             asanaIntegrations={asanaIntegrations}
             onOpenTask={handleOpenAsanaTask}
+            onPlanApplied={fetchAllEvents}
           />
         </div>
       ) : activeTab === 'rituals' ? (

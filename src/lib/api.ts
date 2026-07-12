@@ -2,6 +2,33 @@
 
 import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { CapacityRow } from '@/lib/capacity';
+import type { ProposedBlock } from '@/lib/scheduling/types';
+
+export interface QuotaSummaryRow {
+  category: string;
+  weeklyCount: number;
+  existing: number;
+  proposed: number;
+  unmet: number;
+}
+
+export interface ProposeWeekResponse {
+  weekStart: string;
+  weekEnd: string;
+  proposals: ProposedBlock[];
+  quotaSummary: QuotaSummaryRow[];
+}
+
+export interface ConfirmWeekResult {
+  id: string;
+  success: boolean;
+  googleEventId?: string;
+  error?: string;
+}
+
+export interface ConfirmWeekResponse {
+  results: ConfirmWeekResult[];
+}
 
 export interface ClientTimeRow {
   integrationId: string;
@@ -587,6 +614,26 @@ export const api = {
   // Dashboard capacity + client-time for the current ISO week
   async getDashboardCapacity(): Promise<DashboardCapacityResponse> {
     return fetchWithRetry<DashboardCapacityResponse>('/api/dashboard/capacity');
+  },
+
+  // "Plan my week" auto-scheduling
+  async proposeWeeklyPlan(weekStart?: string): Promise<ProposeWeekResponse> {
+    return fetchWithRetry<ProposeWeekResponse>('/api/scheduling/propose', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(weekStart ? { weekStart } : {}),
+    });
+  },
+
+  async confirmWeeklyPlan(
+    proposals: ProposedBlock[],
+    googleIntegrationId?: string
+  ): Promise<ConfirmWeekResponse> {
+    return fetchWithRetry<ConfirmWeekResponse>('/api/scheduling/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proposals, googleIntegrationId }),
+    });
   },
 };
 
