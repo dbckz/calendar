@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { format } from 'date-fns';
-import { Calendar, Repeat } from 'lucide-react';
+import { Calendar, Repeat, LayoutDashboard } from 'lucide-react';
 import { Header } from '@/components/Header';
 import { Timeline } from '@/components/Timeline';
 import { IntegrationStatus } from '@/components/IntegrationStatus';
@@ -11,8 +11,10 @@ import { AddTaskModal } from '@/components/AddTaskModal';
 import { AllDayEventsBar } from '@/components/AllDayEventsBar';
 import { Reminders } from '@/components/Reminders';
 import { RitualsContent } from '@/components/RitualsContent';
+import { DashboardContent } from '@/components/dashboard/DashboardContent';
 import { useTasks } from '@/hooks/useTasks';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
+import { useTaskMetadata } from '@/hooks/useTaskMetadata';
 import { useToast } from '@/hooks/useToast';
 import { CalendarEvent, DragItem, TaskType, SettingsResponse, AsanaFilterState } from '@/types';
 import { api } from '@/lib/api';
@@ -70,15 +72,18 @@ const COLOR_SCHEMES = [
 ];
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<'calendar' | 'rituals'>(() => {
-    if (typeof window !== 'undefined' && window.location.hash === '#rituals') return 'rituals';
-    return 'calendar';
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'rituals'>(() => {
+    if (typeof window !== 'undefined') {
+      if (window.location.hash === '#rituals') return 'rituals';
+      if (window.location.hash === '#calendar') return 'calendar';
+    }
+    return 'dashboard';
   });
 
   const handleTabChange = useCallback((tab: string) => {
-    const t = tab as 'calendar' | 'rituals';
+    const t = tab as 'dashboard' | 'calendar' | 'rituals';
     setActiveTab(t);
-    window.location.hash = t === 'calendar' ? '' : t;
+    window.location.hash = t === 'dashboard' ? '' : t;
   }, []);
 
   const [selectedDate, setSelectedDate] = useState(new Date());
@@ -93,6 +98,7 @@ export default function Home() {
   const colorScheme = COLOR_SCHEMES[colorSchemeIndex];
 
   const toast = useToast();
+  const { metadataByGid, saveMetadata } = useTaskMetadata();
   const { addTask, updateTask, removeTask, getTasksForDate } = useTasks();
   const {
     googleEvents,
@@ -219,10 +225,8 @@ export default function Home() {
     return startDateStr === targetDate;
   }, []);
 
-  // Combine calendar events, filtering out duplicates from synced Google events
-  const allEvents = useMemo((): CalendarEvent[] => {
-    const dateStr = format(selectedDate, 'yyyy-MM-dd');
-
+  // Combine calendar events for a given date, filtering out duplicates from synced Google events
+  const buildEventsForDate = useCallback((dateStr: string): CalendarEvent[] => {
     const filteredGoogleEvents = googleEvents.filter(event => isEventOnDate(event, dateStr));
 
     const enrichedGoogleEvents = filteredGoogleEvents.map(event => {
@@ -250,11 +254,22 @@ export default function Home() {
     });
 
     return [...enrichedGoogleEvents, ...adhocEvents, ...scheduledAsanaEvents];
-  }, [googleEvents, selectedDate, getTasksForDate, adhocToCalendarEvent, getScheduledAsanaEventsForDate, scheduledAsanaTasks, isEventOnDate]);
+  }, [googleEvents, getTasksForDate, adhocToCalendarEvent, getScheduledAsanaEventsForDate, scheduledAsanaTasks, isEventOnDate]);
+
+  const allEvents = useMemo(
+    () => buildEventsForDate(format(selectedDate, 'yyyy-MM-dd')),
+    [buildEventsForDate, selectedDate]
+  );
 
   // Separate all-day events from timed events
   const allDayEvents = useMemo(() => allEvents.filter(e => e.allDay), [allEvents]);
   const timedEvents = useMemo(() => allEvents.filter(e => !e.allDay), [allEvents]);
+
+  // Today's timed events for the Command Center dashboard (independent of selectedDate)
+  const todayTimedEvents = useMemo(
+    () => buildEventsForDate(format(new Date(), 'yyyy-MM-dd')).filter(e => !e.allDay),
+    [buildEventsForDate]
+  );
 
   // Resolve the Asana integration ID for an event, checking linked tasks,
   // Asana source events, and manual Google event attributions
@@ -773,9 +788,16 @@ export default function Home() {
   );
 
   const tabs = [
+    { id: 'dashboard' as const, label: 'Command Center', icon: LayoutDashboard },
     { id: 'calendar' as const, label: 'Daily Calendar', icon: Calendar },
     { id: 'rituals' as const, label: 'Rituals', icon: Repeat },
   ];
+
+  const handleOpenAsanaTask = useCallback((taskId: string) => {
+    setActiveTab('calendar');
+    window.location.hash = 'calendar';
+    setOpenTaskDialogId(taskId);
+  }, []);
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
@@ -793,7 +815,18 @@ export default function Home() {
         notificationEvents={googleEvents}
       />
 
-      {activeTab === 'rituals' ? (
+      {activeTab === 'dashboard' ? (
+        <div className="flex-1 overflow-y-auto bg-gray-50">
+          <DashboardContent
+            todayEvents={todayTimedEvents}
+            asanaTasks={allAsanaTasks}
+            metadataByGid={metadataByGid}
+            timeWorkedByIntegration={timeWorkedByIntegration}
+            asanaIntegrations={asanaIntegrations}
+            onOpenTask={handleOpenAsanaTask}
+          />
+        </div>
+      ) : activeTab === 'rituals' ? (
         <div className="flex-1 overflow-y-auto">
           <RitualsContent />
         </div>
@@ -824,6 +857,8 @@ export default function Home() {
             onClearHighlight={handleClearHighlight}
             openTaskDialogId={openTaskDialogId}
             onClearOpenTaskDialog={handleClearOpenTaskDialog}
+            taskMetadata={metadataByGid}
+            onSaveTaskMetadata={saveMetadata}
           />
         </aside>
 
@@ -920,6 +955,8 @@ export default function Home() {
             onClearHighlight={handleClearHighlight}
             openTaskDialogId={openTaskDialogId}
             onClearOpenTaskDialog={handleClearOpenTaskDialog}
+            taskMetadata={metadataByGid}
+            onSaveTaskMetadata={saveMetadata}
           />
         </aside>
       </div>

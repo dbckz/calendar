@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { format, startOfWeek, endOfWeek } from 'date-fns';
 
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
-import { getScheduledAsanaTasks, getAdHocTasks } from '@/lib/user-data-storage';
-import { getCustomTaskTypes } from '@/lib/user-data-storage';
+import { getScheduledAsanaTasks, getAdHocTasks, getCustomTaskTypes } from '@/lib/user-data-storage';
 import { getDailyRecord } from '@/lib/time-tracking-storage';
 import { getEnabledAsanaIntegrations, updateIntegration } from '@/lib/integration-storage';
 import { getIncompleteTasks, refreshAsanaToken } from '@/lib/asana';
