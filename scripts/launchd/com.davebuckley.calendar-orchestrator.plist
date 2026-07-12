@@ -35,6 +35,9 @@
     <dict>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- orchestrator-run.sh also prepends $HOME/.local/bin (the headless
+             `claude` binary lives there). -->
+
     </dict>
 
     <key>WorkingDirectory</key>
