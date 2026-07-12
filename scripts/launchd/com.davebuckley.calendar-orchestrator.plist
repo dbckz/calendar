@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Reference template for the calendar orchestrator launchd agent.
+  The __APP_DIR__ and __LOG_DIR__ placeholders are substituted by
+  scripts/install-orchestrator.sh, which writes the resolved plist to
+  ~/Library/LaunchAgents/com.davebuckley.calendar-orchestrator.plist.
+  Do not load this template directly.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.davebuckley.calendar-orchestrator</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__APP_DIR__/scripts/orchestrator-run.sh</string>
+    </array>
+
+    <!-- Fire a single pass every 10 minutes. Runs are idempotent and the
+         worker's own stale-lock handling guards against overlap. -->
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/orchestrator.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/orchestrator.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>__APP_DIR__</string>
+</dict>
+</plist>
