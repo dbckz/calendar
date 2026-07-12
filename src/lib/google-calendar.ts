@@ -8,6 +8,10 @@ export const SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/calendar.readonly',
   'https://www.googleapis.com/auth/tasks',
+  // Send-only Gmail access, used by the morning meeting-briefings job to email
+  // the daily digest. The app itself does not send mail; this scope rides along
+  // so a reconnected integration's token can be reused by that local job.
+  'https://www.googleapis.com/auth/gmail.send',
 ];
 
 export function createOAuth2Client(clientId: string, clientSecret: string, redirectUri?: string) {
