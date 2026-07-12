@@ -402,6 +402,8 @@ export default function Home() {
       customFields?: Record<string, string | null>;
       addProjects?: string[];
       removeProjects?: string[];
+      addTags?: string[];
+      removeTags?: string[];
     }
   ) => {
     updateAsanaTask(taskId, integrationId, updates).catch(err => {

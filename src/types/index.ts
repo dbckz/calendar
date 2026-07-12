@@ -98,6 +98,23 @@ export type AsanaFilterLogic = 'and' | 'or';
 
 export type AsanaGroupBy = 'none' | 'type';
 
+// Orchestrator worker status (written by workers/orchestrator, read via
+// /api/orchestrator/status). Mirrors workers/orchestrator/status.ts.
+export interface OrchestratorHistoryEntry {
+  ranAt: string;
+  taskGid: string | null;
+  title: string | null;
+  finalStatus: string;
+  summary: string;
+}
+
+export interface OrchestratorStatus {
+  lastRunAt: string | null;
+  running: { pid: number; startedAt: string; heartbeatAt: string } | null;
+  currentTask?: { gid: string; title: string };
+  history: OrchestratorHistoryEntry[];
+}
+
 export interface AsanaFilterState {
   integrationIds: string[];
   projectIds: string[];

@@ -19,6 +19,8 @@ interface UpdateAsanaTaskOptions {
   customFields?: Record<string, string | null>;
   addProjects?: string[];
   removeProjects?: string[];
+  addTags?: string[];
+  removeTags?: string[];
 }
 
 interface TypeFieldInfo {
@@ -762,6 +764,23 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
           });
         }
         optimisticTask.projects = newProjects;
+      }
+      // Optimistically update tags. We only know the gids being added, so for
+      // additions we drop in a placeholder tag; the server response reconciles
+      // the real name/color shortly after.
+      if (updates.addTags || updates.removeTags) {
+        let newTags = [...(optimisticTask.tags || [])];
+        if (updates.removeTags) {
+          newTags = newTags.filter(t => !updates.removeTags!.includes(t.gid));
+        }
+        if (updates.addTags) {
+          updates.addTags.forEach(gid => {
+            if (!newTags.find(t => t.gid === gid)) {
+              newTags.push({ gid, name: '…' });
+            }
+          });
+        }
+        optimisticTask.tags = newTags;
       }
 
       const updated = prev.map(t => t.id === taskId ? optimisticTask : t);

@@ -1,6 +1,6 @@
 // API utilities with retry logic and proper typing
 
-import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, GoogleSubCalendar, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
+import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { CapacityRow } from '@/lib/capacity';
 
 export interface ClientTimeRow {
@@ -262,6 +262,8 @@ export const api = {
       customFields?: Record<string, string | null>;
       addProjects?: string[];
       removeProjects?: string[];
+      addTags?: string[];
+      removeTags?: string[];
     }
   ): Promise<{ success: true; task: CalendarEventResponse }> {
     return fetchWithRetry<{ success: true; task: CalendarEventResponse }>(
@@ -279,6 +281,24 @@ export const api = {
 
   async getAsanaProjects(): Promise<{ projects: AsanaProject[] }> {
     return fetchWithRetry<{ projects: AsanaProject[] }>('/api/asana-projects');
+  },
+
+  async getAsanaTags(integrationId: string): Promise<AsanaTag[]> {
+    return fetchWithRetry<AsanaTag[]>(
+      `/api/asana-tags?integrationId=${encodeURIComponent(integrationId)}`
+    );
+  },
+
+  async createAsanaTag(integrationId: string, name: string, color?: string): Promise<AsanaTag> {
+    return fetchWithRetry<AsanaTag>('/api/asana-tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ integrationId, name, color }),
+    });
+  },
+
+  async getOrchestratorStatus(): Promise<OrchestratorStatus> {
+    return fetchWithRetry<OrchestratorStatus>('/api/orchestrator/status');
   },
 
   async getSettings(): Promise<SettingsResponse> {
