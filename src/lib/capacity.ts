@@ -1,0 +1,97 @@
+// Pure capacity-computation logic for the Command Center dashboard.
+// Kept free of I/O so it can be unit-tested in isolation. The dashboard route
+// builds the inputs (from workflow-config quotas + scheduled/ad-hoc blocks) and
+// calls computeCapacity to produce the per-category rows the widget renders.
+
+export interface CapacityQuota {
+  category: string;
+  weeklyCount?: number;
+  targetLength: string; // e.g. "2h", "1.5h", "45min", "1h 30min"
+  types: string[]; // typeMapping[category] - task types that count toward this category
+}
+
+export interface CapacityBlock {
+  // Type signals associated with the block. For an Asana task this is its
+  // "Type" custom field value; for an ad-hoc task, its taskType id and label.
+  typeSignals: string[];
+  minutes: number;
+  completed: boolean;
+}
+
+export interface CapacityRow {
+  category: string;
+  weeklyCount: number;
+  scheduledCount: number;
+  completedCount: number;
+  scheduledMinutes: number;
+  targetMinutes: number;
+}
+
+// Parse a human target length like "2h", "1.5h", "90min", "1h 30min" into minutes.
+export function parseTargetLength(input: string | undefined): number {
+  if (!input) return 0;
+  let minutes = 0;
+  const hourMatch = input.match(/(\d+(?:\.\d+)?)\s*h/i);
+  if (hourMatch) minutes += parseFloat(hourMatch[1]) * 60;
+  const minMatch = input.match(/(\d+(?:\.\d+)?)\s*(?:min|m)\b/i);
+  if (minMatch) minutes += parseFloat(minMatch[1]);
+  // Bare number with no unit -> treat as minutes
+  if (!hourMatch && !minMatch) {
+    const bare = parseFloat(input);
+    if (!Number.isNaN(bare)) minutes = bare;
+  }
+  return Math.round(minutes);
+}
+
+function normalize(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+// Return the first category a block's type signals map to, or null.
+// A signal matches a category if it equals one of the category's mapped types
+// (case-insensitively) or equals the category name directly.
+export function classifyBlockCategory(
+  typeSignals: string[],
+  quotas: CapacityQuota[]
+): string | null {
+  const signals = new Set(typeSignals.filter(Boolean).map(normalize));
+  if (signals.size === 0) return null;
+
+  for (const quota of quotas) {
+    if (signals.has(normalize(quota.category))) return quota.category;
+    for (const type of quota.types) {
+      if (signals.has(normalize(type))) return quota.category;
+    }
+  }
+  return null;
+}
+
+export function computeCapacity(
+  quotas: CapacityQuota[],
+  blocks: CapacityBlock[]
+): CapacityRow[] {
+  const rows: Record<string, CapacityRow> = {};
+  for (const quota of quotas) {
+    const perBlockMinutes = parseTargetLength(quota.targetLength);
+    const weeklyCount = quota.weeklyCount ?? 0;
+    rows[quota.category] = {
+      category: quota.category,
+      weeklyCount,
+      scheduledCount: 0,
+      completedCount: 0,
+      scheduledMinutes: 0,
+      targetMinutes: perBlockMinutes * weeklyCount,
+    };
+  }
+
+  for (const block of blocks) {
+    const category = classifyBlockCategory(block.typeSignals, quotas);
+    if (!category) continue;
+    const row = rows[category];
+    row.scheduledCount += 1;
+    row.scheduledMinutes += block.minutes;
+    if (block.completed) row.completedCount += 1;
+  }
+
+  return quotas.map(q => rows[q.category]);
+}

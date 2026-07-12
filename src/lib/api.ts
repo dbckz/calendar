@@ -1,6 +1,20 @@
 // API utilities with retry logic and proper typing
 
-import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, GoogleSubCalendar, Reminder, ScheduledAsanaTask, SettingsResponse, TaskTemplate } from '@/types';
+import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, GoogleSubCalendar, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
+import type { CapacityRow } from '@/lib/capacity';
+
+export interface ClientTimeRow {
+  integrationId: string;
+  integrationName: string;
+  totalMinutes: number;
+}
+
+export interface DashboardCapacityResponse {
+  weekStart: string;
+  weekEnd: string;
+  capacity: CapacityRow[];
+  clientTime: ClientTimeRow[];
+}
 
 interface RetryOptions {
   maxRetries?: number;
@@ -531,6 +545,28 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ date, integrationTotals, events }),
     });
+  },
+
+  // Task metadata (enrichment layer, keyed by Asana task GID)
+  async getTaskMetadata(): Promise<{ metadata: Record<string, TaskMetadata> }> {
+    return fetchWithRetry<{ metadata: Record<string, TaskMetadata> }>('/api/user-data/task-metadata');
+  },
+
+  async upsertTaskMetadata(
+    asanaTaskGid: string,
+    integrationId: string,
+    updates: Partial<Omit<TaskMetadata, 'asanaTaskGid' | 'integrationId' | 'updatedAt'>>
+  ): Promise<{ metadata: TaskMetadata }> {
+    return fetchWithRetry<{ metadata: TaskMetadata }>('/api/user-data/task-metadata', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ asanaTaskGid, integrationId, ...updates }),
+    });
+  },
+
+  // Dashboard capacity + client-time for the current ISO week
+  async getDashboardCapacity(): Promise<DashboardCapacityResponse> {
+    return fetchWithRetry<DashboardCapacityResponse>('/api/dashboard/capacity');
   },
 };
 

@@ -376,3 +376,21 @@ export interface TemplateGroup {
   name: string;
   order: number;
 }
+
+// Enrichment metadata attached to an Asana task (keyed by task GID).
+// Used for ranking in the Command Center and, later, for auto-scheduling.
+export type EnergyLevel = 'high' | 'medium' | 'low';
+export type DeadlineType = 'hard' | 'soft' | 'aspirational';
+export type BestTime = 'morning' | 'afternoon' | 'evening';
+
+export interface TaskMetadata {
+  asanaTaskGid: string;
+  integrationId: string;
+  energyLevel?: EnergyLevel;
+  aiDelegable?: boolean;
+  deadlineType?: DeadlineType;
+  bestTime?: BestTime;
+  effortMinutes?: number;
+  dependsOn?: string[]; // GIDs of tasks this depends on
+  updatedAt: string;
+}

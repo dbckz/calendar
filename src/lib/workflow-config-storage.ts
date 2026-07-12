@@ -26,6 +26,11 @@ export interface SchedulingConfig {
 export interface WorkflowConfig {
   taskQuotas: Record<string, TaskQuota>;
   scheduling: SchedulingConfig;
+  // Maps each quota category to the task types that count toward it.
+  // Values are matched (case-insensitively) against an Asana task's "Type"
+  // custom field value and against an ad-hoc task's taskType. A block also
+  // matches a category when its type equals the category name directly.
+  typeMapping: Record<string, string[]>;
   lastUpdated: string;
 }
 
@@ -65,6 +70,16 @@ const DEFAULT_CONFIG: WorkflowConfig = {
       start: '09:00',
       end: '17:00',
     },
+  },
+  // By default, each category matches an Asana Type / ad-hoc taskType with the
+  // same name (handled by the direct category-name match in capacity logic),
+  // plus the one built-in task type whose id matches a category name.
+  typeMapping: {
+    'Writing/Deep Work': [],
+    Blogs: [],
+    Batch: ['batch'],
+    'Engagement/Outreach': [],
+    'General Todos': [],
   },
   lastUpdated: new Date().toISOString(),
 };
@@ -117,7 +132,24 @@ export async function getWorkflowConfig(): Promise<WorkflowConfig> {
     }
 
     const data = await fs.readFile(WORKFLOW_CONFIG_FILE, 'utf-8');
-    return JSON.parse(data) as WorkflowConfig;
+    const parsed = JSON.parse(data) as Partial<WorkflowConfig>;
+
+    // Backward compat: older config files predate typeMapping. Default it to
+    // an entry per existing quota category (empty array => category-name match).
+    let typeMapping = parsed.typeMapping;
+    if (!typeMapping) {
+      typeMapping = {};
+      for (const category of Object.keys(parsed.taskQuotas || {})) {
+        typeMapping[category] = DEFAULT_CONFIG.typeMapping[category] || [];
+      }
+    }
+
+    return {
+      taskQuotas: parsed.taskQuotas || DEFAULT_CONFIG.taskQuotas,
+      scheduling: parsed.scheduling || DEFAULT_CONFIG.scheduling,
+      typeMapping,
+      lastUpdated: parsed.lastUpdated || new Date().toISOString(),
+    };
   } catch (error) {
     console.error('Error reading workflow config:', error);
     return { ...DEFAULT_CONFIG };
@@ -131,6 +163,7 @@ export async function saveWorkflowConfig(
 
   const configToWrite: WorkflowConfig = {
     ...config,
+    typeMapping: config.typeMapping ?? {},
     lastUpdated: new Date().toISOString(),
   };
 

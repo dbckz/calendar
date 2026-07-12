@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { api } from '@/lib/api';
+import { BUILT_IN_TASK_TYPE_LABELS, BuiltInTaskType, CustomTaskType } from '@/types';
 
 interface TaskQuota {
   weeklyCount?: number;
@@ -23,6 +25,7 @@ interface WorkflowConfig {
     [key: string]: TaskQuota;
   };
   scheduling: SchedulingConfig;
+  typeMapping?: Record<string, string[]>;
   lastUpdated?: string;
 }
 
@@ -61,18 +64,44 @@ const DEFAULT_CONFIG: WorkflowConfig = {
       start: '09:00',
       end: '17:00'
     }
-  }
+  },
+  typeMapping: {}
 };
 
 export default function WorkflowConfig() {
   const [config, setConfig] = useState<WorkflowConfig>(DEFAULT_CONFIG);
+  const [customTypes, setCustomTypes] = useState<CustomTaskType[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
 
   useEffect(() => {
     loadConfig();
+    api.getCustomTaskTypes()
+      .then(({ customTypes }) => setCustomTypes(customTypes))
+      .catch(err => console.error('Failed to load custom task types:', err));
   }, []);
+
+  // Known task types available for mapping: built-ins + user custom types.
+  const typeOptions: { value: string; label: string }[] = [
+    ...(Object.entries(BUILT_IN_TASK_TYPE_LABELS) as [BuiltInTaskType, string][]).map(
+      ([value, label]) => ({ value, label })
+    ),
+    ...customTypes.map(c => ({ value: `custom:${c.id}`, label: `${c.emoji} ${c.label}` })),
+  ];
+
+  const toggleTypeMapping = (category: string, typeValue: string) => {
+    setConfig(prev => {
+      const current = prev.typeMapping?.[category] || [];
+      const next = current.includes(typeValue)
+        ? current.filter(t => t !== typeValue)
+        : [...current, typeValue];
+      return {
+        ...prev,
+        typeMapping: { ...(prev.typeMapping || {}), [category]: next },
+      };
+    });
+  };
 
   const loadConfig = async () => {
     try {
@@ -270,6 +299,44 @@ export default function WorkflowConfig() {
                     </div>
                   </div>
                 )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Type Mapping Section */}
+      <div className="mb-8">
+        <h3 className="text-xl font-semibold mb-2">Category → Task Type Mapping</h3>
+        <p className="text-gray-600 text-sm mb-4">
+          Choose which task types count toward each quota category. A category also
+          matches any task whose type equals the category name.
+        </p>
+        <div className="space-y-4">
+          {Object.keys(config.taskQuotas).map(category => {
+            const mapped = config.typeMapping?.[category] || [];
+            return (
+              <div key={category} className="border rounded-lg p-4 bg-gray-50">
+                <h4 className="font-medium mb-3">{category}</h4>
+                <div className="flex flex-wrap gap-2">
+                  {typeOptions.map(option => {
+                    const selected = mapped.includes(option.value);
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => toggleTypeMapping(category, option.value)}
+                        className={`px-3 py-1.5 text-sm rounded-full border transition-colors ${
+                          selected
+                            ? 'bg-blue-600 text-white border-blue-600'
+                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             );
           })}

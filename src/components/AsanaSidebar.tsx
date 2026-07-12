@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, memo, useMemo, useCallback, useRef, useEffect, forwardRef } from 'react';
-import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDateFilter, AsanaSortField, AsanaFilterLogic, AsanaGroupBy, ScheduledAsanaTask, AsanaStory } from '@/types';
+import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDateFilter, AsanaSortField, AsanaFilterLogic, AsanaGroupBy, ScheduledAsanaTask, AsanaStory, TaskMetadata } from '@/types';
 import { Calendar, GripVertical, Filter, X, ChevronDown, ChevronUp, ChevronRight, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle, Plus, Trash2, MessageSquare, Loader2, Layers, Search } from 'lucide-react';
 import { format, parseISO, isToday, isPast } from 'date-fns';
 import { getAsanaTaskUrl } from '@/lib/asana';
 import { api } from '@/lib/api';
 import { CreateAsanaTaskModal, AsanaTypeFieldInfo as ImportedAsanaTypeFieldInfo } from './CreateAsanaTaskModal';
+import { TaskMetadataEditor, TaskMetadataBadges } from './TaskMetadataEditor';
 
 // Helper component to render text with clickable links
 function LinkifiedText({ text, className }: { text: string; className?: string }) {
@@ -91,6 +92,13 @@ interface AsanaSidebarProps {
   // Open task dialog from calendar double-click
   openTaskDialogId?: string | null;
   onClearOpenTaskDialog?: () => void;
+  // Task enrichment metadata (keyed by Asana task GID) + saver
+  taskMetadata?: Record<string, TaskMetadata>;
+  onSaveTaskMetadata?: (
+    asanaTaskGid: string,
+    integrationId: string,
+    updates: Partial<Omit<TaskMetadata, 'asanaTaskGid' | 'integrationId' | 'updatedAt'>>
+  ) => Promise<void>;
 }
 
 const DATE_FILTER_OPTIONS: { value: AsanaDateFilter; label: string }[] = [
@@ -137,6 +145,8 @@ export function AsanaSidebar({
   onClearHighlight,
   openTaskDialogId,
   onClearOpenTaskDialog,
+  taskMetadata,
+  onSaveTaskMetadata,
 }: AsanaSidebarProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
@@ -940,6 +950,7 @@ export function AsanaSidebar({
                           isHighlighted={highlightedTaskId === task.id}
                           onComplete={onToggleComplete}
                           onDelete={onDeleteTask}
+                          metadata={taskMetadata?.[task.id]}
                           ref={(el) => {
                             if (el) taskRefs.current.set(task.id, el);
                             else taskRefs.current.delete(task.id);
@@ -966,6 +977,7 @@ export function AsanaSidebar({
                 isHighlighted={highlightedTaskId === task.id}
                 onComplete={onToggleComplete}
                 onDelete={onDeleteTask}
+                metadata={taskMetadata?.[task.id]}
                 ref={(el) => {
                   if (el) taskRefs.current.set(task.id, el);
                   else taskRefs.current.delete(task.id);
@@ -992,6 +1004,8 @@ export function AsanaSidebar({
           onDeleteTask={onDeleteTask}
           projects={projects}
           typeFieldInfoByIntegration={typeFieldInfoByIntegration}
+          metadata={taskMetadata?.[selectedTask.id]}
+          onSaveMetadata={onSaveTaskMetadata}
         />
       )}
 
@@ -1022,6 +1036,12 @@ interface TaskDetailDialogProps {
   onDeleteTask?: (taskId: string, integrationId: string) => void;
   projects?: AsanaProject[];
   typeFieldInfoByIntegration?: Map<string, AsanaSidebarTypeFieldInfo>;
+  metadata?: TaskMetadata;
+  onSaveMetadata?: (
+    asanaTaskGid: string,
+    integrationId: string,
+    updates: Partial<Omit<TaskMetadata, 'asanaTaskGid' | 'integrationId' | 'updatedAt'>>
+  ) => Promise<void>;
 }
 
 function getDueDateStyles(dueOn: string): string {
@@ -1042,6 +1062,8 @@ function TaskDetailDialog({
   onDeleteTask,
   projects = [],
   typeFieldInfoByIntegration,
+  metadata,
+  onSaveMetadata,
 }: TaskDetailDialogProps) {
   const [comment, setComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1455,6 +1477,21 @@ function TaskDetailDialog({
                 </div>
               )}
 
+              {/* Metadata enrichment */}
+              {onSaveMetadata && task.integrationId && (
+                <div>
+                  <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1 mb-2">
+                    <Layers className="w-3 h-3" /> Metadata
+                  </label>
+                  <TaskMetadataEditor
+                    metadata={metadata}
+                    onChange={(updates) => {
+                      onSaveMetadata(task.id, task.integrationId!, updates);
+                    }}
+                  />
+                </div>
+              )}
+
               {/* Comments Section */}
               <div>
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wide flex items-center gap-1">
@@ -1605,11 +1642,12 @@ interface TaskItemProps {
   isHighlighted?: boolean;
   onComplete?: (taskId: string, integrationId: string, completed: boolean) => void;
   onDelete?: (taskId: string, integrationId: string) => void;
+  metadata?: TaskMetadata;
 }
 
 const MemoizedTaskItem = memo(
   forwardRef<HTMLLIElement, TaskItemProps>(function TaskItem(
-    { task, onDragStart, scheduledDuration, formatDuration, onClick, isHighlighted, onComplete, onDelete },
+    { task, onDragStart, scheduledDuration, formatDuration, onClick, isHighlighted, onComplete, onDelete, metadata },
     ref
   ) {
     const formatDueDate = (dueOn: string | undefined) => {
@@ -1668,6 +1706,7 @@ const MemoizedTaskItem = memo(
               <span>{formatDueDate(task.dueOn)}</span>
             </div>
             <div className="flex items-center gap-1">
+              <TaskMetadataBadges metadata={metadata} />
               {scheduledDuration !== undefined && scheduledDuration > 0 && (
                 <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">
                   {formatDuration(scheduledDuration)} scheduled

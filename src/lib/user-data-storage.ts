@@ -2,7 +2,7 @@
 // Uses file-based storage in ~/.claude/data/calendar/ for persistence across builds
 
 import { promises as fs } from 'fs';
-import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState, TemplateGroup } from '@/types';
+import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState, TemplateGroup, TaskMetadata } from '@/types';
 import { DATA_DIR, USER_DATA_FILE } from './data-paths';
 
 const DEFAULT_ASANA_FILTERS: AsanaFilterState = {
@@ -36,6 +36,7 @@ interface UserData {
   asanaFilterPreferences?: AsanaFilterState; // Legacy: kept for migration
   asanaFilterPreferencesMap?: Record<string, AsanaFilterState>; // Key is integration ID or "default"
   googleEventAttributions?: GoogleEventAttribution[];
+  taskMetadata?: Record<string, TaskMetadata>; // Key is Asana task GID
 }
 
 const DEFAULT_USER_DATA: UserData = {
@@ -46,6 +47,7 @@ const DEFAULT_USER_DATA: UserData = {
   scheduledAsanaTasks: [],
   asanaFilterPreferencesMap: {},
   googleEventAttributions: [],
+  taskMetadata: {},
 };
 
 async function ensureDataDir(): Promise<void> {
@@ -78,6 +80,7 @@ export async function getUserData(): Promise<UserData> {
       scheduledAsanaTasks: parsed.scheduledAsanaTasks || [],
       asanaFilterPreferencesMap: filterMap,
       googleEventAttributions: parsed.googleEventAttributions || [],
+      taskMetadata: parsed.taskMetadata || {},
     };
   } catch {
     return { ...DEFAULT_USER_DATA };
@@ -481,5 +484,35 @@ export async function removeGoogleEventAttribution(googleEventId: string): Promi
 
   await saveUserData(data);
   return true;
+}
+
+// Task Metadata (enrichment layer keyed by Asana task GID)
+export async function getAllTaskMetadata(): Promise<Record<string, TaskMetadata>> {
+  const data = await getUserData();
+  return data.taskMetadata || {};
+}
+
+export async function upsertTaskMetadata(
+  asanaTaskGid: string,
+  integrationId: string,
+  updates: Partial<Omit<TaskMetadata, 'asanaTaskGid' | 'integrationId' | 'updatedAt'>>
+): Promise<TaskMetadata> {
+  const data = await getUserData();
+  if (!data.taskMetadata) {
+    data.taskMetadata = {};
+  }
+
+  const existing = data.taskMetadata[asanaTaskGid];
+  const merged: TaskMetadata = {
+    ...existing,
+    ...updates,
+    asanaTaskGid,
+    integrationId,
+    updatedAt: new Date().toISOString(),
+  };
+
+  data.taskMetadata[asanaTaskGid] = merged;
+  await saveUserData(data);
+  return merged;
 }
 
