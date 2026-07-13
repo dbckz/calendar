@@ -75,7 +75,31 @@ The drain loop is budget-aware so a 100-task queue never torches your limits:
 - **Optional quiet/active hours** (e.g. drain harder overnight when you're
   not using Claude interactively).
 
-### 5. Full results rendered in-app
+### 5. Trace visibility (added 2026-07-13)
+Headless runs are not a black box. Verified against Claude Code docs
+(code.claude.com/docs/en/headless.md, sessions.md, errors.md):
+- **Live structured trace**: the runner invokes
+  `--output-format stream-json --verbose` (instead of `json`), which emits
+  every event — tool calls, tool results, text — as JSONL on stdout in real
+  time. The runner tees this to a per-run trace file
+  (`~/.claude/data/calendar/agent-runs/<taskGid>-<ts>.jsonl`). The app
+  renders it as a timeline in the task dialog / Delegation widget, live-tailed
+  while the run is in progress.
+- **Session resume**: each run's `session_id` is stored with the result.
+  Headless sessions persist like interactive ones, so
+  `claude --resume <session-id>` (run from the agent workspace directory —
+  sessions are cwd-keyed) opens the full session in a terminal to inspect or
+  *continue* the task interactively. The UI shows a copyable resume command
+  per run.
+- **Fallback transcript** exists at
+  `~/.claude/projects/<workspace-dir>/<session-id>.jsonl`, but its format is
+  internal/version-dependent — the UI renders from our own trace file, never
+  from this.
+- **Usage-limit parsing confirmed**: limit errors print
+  `You've hit your session limit · resets 3:45pm` on stderr; the pacer parses
+  the `resets <time>` fragment for its `pausedUntil` backoff.
+
+### 6. Full results rendered in-app
 The worker stores the complete markdown report per run; the task dialog and
 the Delegation widget render it (queue position, running, recent results).
 The Asana comment is still posted as the permanent record.
