@@ -127,3 +127,37 @@ Somewhat larger than the 2026-07-12 version: queue store + API, compose modal
 (with bulk enqueue), detached spawn path, pacer rewrite of the worker
 (budget policy + usage-limit backoff), report rendering. Still one focused
 phase; the pacer replaces rather than adds to the existing poller code.
+
+## Implementation notes for the executing session
+
+Repo state when this was written (2026-07-13): branch `feat/command-center`,
+~15 commits ahead of `claude/daily-planner-app-g6aCf`, NOT pushed. Production
+launchd service (`com.davebuckley.calendar`) runs an older build — redeploy
+per CLAUDE.md after pushing. One untracked file `scripts/prefix-calendar-emojis.mjs`
+belongs to a separate automation — never commit or delete it. An uncommitted
+TODO.md line is Dave's own note — leave it.
+
+Quality baseline: 218 Jest tests green; `npx tsc --noEmit` has exactly 18
+pre-existing error lines (all in old `src/__tests__` fixtures) — add zero new;
+`npm run build` green. Commit trailer: `Co-Authored-By: Claude Fable 5
+<noreply@anthropic.com>`. Don't push unless asked.
+
+Key files:
+- Worker: `workers/orchestrator/` — `orchestrator.ts` (runOnce), `claude-runner.ts`
+  (spawns claude -p; change `--output-format json` → `stream-json --verbose`, tee
+  to trace file, keep the report-extraction logic), `planner-client.ts` (HTTP to the
+  app), `config.ts` (allowlist lives here — keep no-Bash), `status.ts`
+  (PID/heartbeat lock — reuse for both execution paths).
+- Queue store: extend `src/lib/user-data-storage.ts` + `src/types/index.ts`
+  following the `taskMetadata` pattern (added Phase 1); API route pattern in
+  `src/app/api/user-data/*`.
+- UI: `src/components/dashboard/DelegationWidget.tsx`, delegate action + dialog in
+  `src/components/AsanaSidebar.tsx`, client fns in `src/lib/api.ts`, status route
+  `src/app/api/orchestrator/status/route.ts`.
+- Paths: add new data-file constants to `src/lib/data-paths.ts`
+  (`~/.claude/data/calendar/`).
+- launchd: `scripts/launchd/com.davebuckley.calendar-orchestrator.plist` +
+  `scripts/orchestrator-run.sh` + `scripts/install-orchestrator.sh` (pacer keeps
+  this but the interval/logic changes; service was never installed/loaded).
+- Detached spawn ("Run now") happens in a Next.js route — child must be spawned
+  detached/unref'd with output to the trace file, NOT awaited in the request.
