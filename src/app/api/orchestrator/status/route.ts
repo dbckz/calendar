@@ -7,6 +7,7 @@ const EMPTY_STATUS: OrchestratorStatus = {
   lastRunAt: null,
   running: null,
   history: [],
+  pausedUntil: null,
 };
 
 // GET - Read the orchestrator worker's status file. Returns an empty default
@@ -20,6 +21,7 @@ export async function GET() {
       running: parsed.running ?? null,
       currentTask: parsed.currentTask,
       history: Array.isArray(parsed.history) ? parsed.history : [],
+      pausedUntil: parsed.pausedUntil ?? null,
     };
     return NextResponse.json(status);
   } catch {

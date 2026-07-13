@@ -1,104 +1,221 @@
-// Dry-run tests for runOnce with a fully mocked planner client + status layer.
-// No real HTTP, no claude CLI, no Asana side effects.
-import { runOnce } from '../orchestrator';
+// Dry-run tests for the app-queue delegation flow with a fully mocked planner
+// client + status layer. No real HTTP, no claude CLI, no Asana side effects.
+import { drainOnce, runSingle, resolveResetTime, effectiveHourlyCap } from '../orchestrator';
 import * as planner from '../planner-client';
 import * as claudeRunner from '../claude-runner';
 import * as status from '../status';
+import { UsageLimitError } from '../claude-runner';
+import type { DelegationQueueEntry } from '../types';
 
 jest.mock('../planner-client');
-jest.mock('../claude-runner');
+jest.mock('../claude-runner', () => {
+  class UsageLimitError extends Error {
+    resetsAt: string | null;
+    constructor(message: string, resetsAt: string | null) {
+      super(message);
+      this.name = 'UsageLimitError';
+      this.resetsAt = resetsAt;
+    }
+  }
+  return { runClaudeTask: jest.fn(), UsageLimitError };
+});
 jest.mock('../status');
 
 const mockedPlanner = planner as jest.Mocked<typeof planner>;
 const mockedClaude = claudeRunner as jest.Mocked<typeof claudeRunner>;
 const mockedStatus = status as jest.Mocked<typeof status>;
 
+const ENTRY: DelegationQueueEntry = {
+  asanaTaskGid: '100',
+  integrationId: 'i1',
+  title: 'Do the thing',
+  brief: 'Draft a memo',
+  mode: 'background',
+  state: 'queued',
+  priority: 0,
+  enqueuedAt: '2026-07-13T00:00:00.000Z',
+  updatedAt: '2026-07-13T00:00:00.000Z',
+};
+
+const GOOD_RUN = {
+  report: { status: 'successful' as const, summary: 'Wrote the memo.', outputs: ['memo.md'], next: 'Review it.' },
+  sessionId: 'sess-1',
+  resultText: '# Memo\nDone.',
+  traceFile: '100-123.jsonl',
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
-  // Default: lock acquired successfully.
+  mockedStatus.readStatus.mockResolvedValue({ lastRunAt: null, running: null, history: [], pausedUntil: null });
   mockedStatus.acquireLock.mockResolvedValue({ lastRunAt: null, running: null, history: [] });
   mockedStatus.releaseLock.mockResolvedValue();
   mockedStatus.setCurrentTask.mockResolvedValue();
   mockedStatus.heartbeat.mockResolvedValue();
   mockedStatus.appendHistory.mockResolvedValue();
+  mockedStatus.setPausedUntil.mockResolvedValue();
+
+  mockedPlanner.fetchAgentPacing.mockResolvedValue({ maxRunsPerHour: 2, maxRunsPerDay: 12 });
+  mockedPlanner.fetchTaskById.mockResolvedValue({ id: '100', title: 'Do the thing', integrationId: 'i1', tags: [] });
+  mockedPlanner.fetchTaskStories.mockResolvedValue([]);
+  mockedPlanner.fetchAsanaTags.mockResolvedValue([
+    { gid: 'prog', name: 'agent_in_progress' },
+    { gid: 'done', name: 'agent_complete' },
+    { gid: 'fail', name: 'agent_failed' },
+  ]);
+  mockedPlanner.updateTaskTags.mockResolvedValue({ success: true });
+  mockedPlanner.addTaskComment.mockResolvedValue({ success: true });
+  mockedPlanner.reportResult.mockResolvedValue();
+  mockedPlanner.markEntryRunning.mockResolvedValue();
 });
 
-describe('runOnce', () => {
-  it('skips cleanly when the lock is already held by a live run', async () => {
-    mockedStatus.acquireLock.mockResolvedValue(null);
+describe('drainOnce', () => {
+  it('skips when a usage-limit pause is still in effect', async () => {
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    mockedStatus.readStatus.mockResolvedValue({ lastRunAt: null, running: null, history: [], pausedUntil: future });
 
-    const result = await runOnce();
+    const result = await drainOnce();
 
     expect(result.skipped).toBe(true);
-    expect(result.picked).toBeNull();
-    expect(mockedPlanner.fetchAsanaTasks).not.toHaveBeenCalled();
+    expect(result.message).toMatch(/paused until/i);
+    expect(mockedPlanner.claimNextEntry).not.toHaveBeenCalled();
   });
 
-  it('reports no eligible tasks when nothing matches the filters', async () => {
-    mockedPlanner.fetchAsanaTasks.mockResolvedValue([
-      // Wrong integration
-      { id: '1', title: 'a', integrationName: 'OTHER', integrationId: 'i1', tags: [{ gid: 't', name: 'agent_ready' }], description: 'agent_work_containers:\n- do it' },
-      // Completed
-      { id: '2', title: 'b', integrationName: 'DBC', integrationId: 'i1', completed: true, tags: [{ gid: 't', name: 'agent_ready' }], description: 'agent_work_containers:\n- do it' },
-      // Missing ready tag
-      { id: '3', title: 'c', integrationName: 'DBC', integrationId: 'i1', tags: [], description: 'agent_work_containers:\n- do it' },
-      // No containers
-      { id: '4', title: 'd', integrationName: 'DBC', integrationId: 'i1', tags: [{ gid: 't', name: 'agent_ready' }], description: 'no marker here' },
-    ]);
+  it('skips when the hourly run budget is reached', async () => {
+    mockedStatus.readStatus.mockResolvedValue({
+      lastRunAt: null,
+      running: null,
+      pausedUntil: null,
+      history: [
+        { ranAt: new Date().toISOString(), taskGid: 'a', title: 'a', finalStatus: 'successful', summary: '' },
+        { ranAt: new Date().toISOString(), taskGid: 'b', title: 'b', finalStatus: 'successful', summary: '' },
+      ],
+    });
 
-    const result = await runOnce();
+    const result = await drainOnce();
+
+    expect(result.skipped).toBe(true);
+    expect(result.message).toMatch(/hourly run budget/i);
+    expect(mockedPlanner.claimNextEntry).not.toHaveBeenCalled();
+  });
+
+  it('reports nothing to do when the queue is empty', async () => {
+    mockedPlanner.claimNextEntry.mockResolvedValue(null);
+
+    const result = await drainOnce();
 
     expect(result.picked).toBeNull();
-    expect(result.message).toMatch(/No eligible tasks/i);
+    expect(result.message).toMatch(/no queued/i);
     expect(mockedClaude.runClaudeTask).not.toHaveBeenCalled();
     expect(mockedStatus.releaseLock).toHaveBeenCalledTimes(1);
   });
 
-  it('claims, executes, comments, and completes an eligible task', async () => {
-    mockedPlanner.fetchAsanaTasks.mockResolvedValue([
-      {
-        id: '100',
-        title: 'Do the thing',
-        integrationName: 'DBC',
-        integrationId: 'i1',
-        completed: false,
-        tags: [{ gid: 'ready', name: 'agent_ready' }],
-        description: 'agent_work_containers:\n- Draft a memo',
-      },
-    ]);
-    mockedPlanner.fetchAsanaTags.mockResolvedValue([
-      { gid: 'ready', name: 'agent_ready' },
-      { gid: 'prog', name: 'agent_in_progress' },
-      { gid: 'done', name: 'agent_complete' },
-      { gid: 'fail', name: 'agent_failed' },
-    ]);
-    mockedPlanner.fetchTaskStories.mockResolvedValue([]);
-    mockedPlanner.updateTaskTags.mockResolvedValue({ success: true });
-    mockedPlanner.addTaskComment.mockResolvedValue({ success: true });
-    mockedClaude.runClaudeTask.mockResolvedValue({
-      status: 'successful',
-      summary: 'Wrote the memo.',
-      outputs: ['memo.md'],
-      next: 'Review it.',
-    });
+  it('claims, runs, comments, reports done, and appends history', async () => {
+    mockedPlanner.claimNextEntry.mockResolvedValue({ ...ENTRY, state: 'running' });
+    mockedClaude.runClaudeTask.mockResolvedValue(GOOD_RUN);
 
-    const result = await runOnce();
+    const result = await drainOnce();
 
-    expect(result.picked).toEqual({ id: '100', title: 'Do the thing', url: 'https://app.asana.com/0/0/100' });
     expect(result.finalStatus).toBe('successful');
-    // Claimed (ready -> in_progress) then finalised (-> complete): two tag updates.
+    expect(result.picked).toEqual({ id: '100', title: 'Do the thing', url: 'https://app.asana.com/0/0/100' });
+    // in_progress then terminal complete: two tag updates.
     expect(mockedPlanner.updateTaskTags).toHaveBeenCalledTimes(2);
     expect(mockedPlanner.addTaskComment).toHaveBeenCalledTimes(1);
-    expect(mockedStatus.appendHistory).toHaveBeenCalledWith(
-      expect.objectContaining({ taskGid: '100', finalStatus: 'successful' }),
-    );
+    expect(mockedPlanner.reportResult).toHaveBeenCalledWith(expect.any(String), '100', 'i1', 'done', expect.objectContaining({ sessionId: 'sess-1' }));
+    expect(mockedStatus.appendHistory).toHaveBeenCalledWith(expect.objectContaining({ taskGid: '100', finalStatus: 'successful' }));
     expect(mockedStatus.releaseLock).toHaveBeenCalledTimes(1);
   });
 
-  it('always releases the lock even if fetching tasks throws', async () => {
-    mockedPlanner.fetchAsanaTasks.mockRejectedValue(new Error('calendar app not running'));
+  it('records a backoff and re-queues on a usage-limit error', async () => {
+    mockedPlanner.claimNextEntry.mockResolvedValue({ ...ENTRY, state: 'running' });
+    mockedClaude.runClaudeTask.mockRejectedValue(new UsageLimitError('limit', '3:45pm'));
 
-    await expect(runOnce()).rejects.toThrow(/calendar app not running/);
+    const result = await drainOnce();
+
+    expect(result.skipped).toBe(true);
+    expect(mockedStatus.setPausedUntil).toHaveBeenCalledTimes(1);
+    expect(mockedPlanner.reportResult).toHaveBeenCalledWith(expect.any(String), '100', 'i1', 'queued');
     expect(mockedStatus.releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks the entry failed when the run throws a normal error', async () => {
+    mockedPlanner.claimNextEntry.mockResolvedValue({ ...ENTRY, state: 'running' });
+    mockedClaude.runClaudeTask.mockRejectedValue(new Error('boom'));
+
+    const result = await drainOnce();
+
+    expect(result.finalStatus).toBe('failed');
+    expect(mockedPlanner.reportResult).toHaveBeenCalledWith(expect.any(String), '100', 'i1', 'failed', expect.objectContaining({ status: 'failed' }));
+  });
+});
+
+describe('runSingle', () => {
+  it('skips when the lock is already held', async () => {
+    mockedStatus.acquireLock.mockResolvedValue(null);
+
+    const result = await runSingle('100');
+
+    expect(result.skipped).toBe(true);
+    expect(mockedPlanner.fetchQueueEntry).not.toHaveBeenCalled();
+  });
+
+  it('runs an explicit queued task and reports done', async () => {
+    mockedPlanner.fetchQueueEntry.mockResolvedValue(ENTRY);
+    mockedClaude.runClaudeTask.mockResolvedValue(GOOD_RUN);
+
+    const result = await runSingle('100');
+
+    expect(result.finalStatus).toBe('successful');
+    expect(mockedPlanner.markEntryRunning).toHaveBeenCalledTimes(1);
+    expect(mockedPlanner.reportResult).toHaveBeenCalledWith(expect.any(String), '100', 'i1', 'done', expect.anything());
+    expect(mockedStatus.releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a message when the task has no queue entry', async () => {
+    mockedPlanner.fetchQueueEntry.mockResolvedValue(null);
+
+    const result = await runSingle('404');
+
+    expect(result.picked).toBeNull();
+    expect(result.message).toMatch(/no queue entry/i);
+  });
+});
+
+describe('resolveResetTime', () => {
+  const now = new Date('2026-07-13T10:00:00.000Z');
+
+  it('parses a 12-hour reset time later today', () => {
+    // 3:45pm local relative to the test runner; assert it lands in the future.
+    const iso = resolveResetTime('3:45pm', now);
+    expect(Date.parse(iso)).toBeGreaterThan(now.getTime());
+  });
+
+  it('falls back to a one-hour backoff when unparseable', () => {
+    const iso = resolveResetTime('gibberish', now);
+    expect(iso).toBe(new Date(now.getTime() + 60 * 60 * 1000).toISOString());
+  });
+
+  it('falls back when no reset time is given', () => {
+    const iso = resolveResetTime(null, now);
+    expect(iso).toBe(new Date(now.getTime() + 60 * 60 * 1000).toISOString());
+  });
+});
+
+describe('effectiveHourlyCap', () => {
+  const pacing = { maxRunsPerHour: 2, sleepMaxRunsPerHour: 6, maxRunsPerDay: 40, activeHours: { start: '07:00', end: '01:00' } };
+  // Local-time constructor (the pacer reads now.getHours()).
+  const at = (h: number) => new Date(2026, 6, 13, h, 0, 0);
+
+  it('uses the daytime cap inside the active window', () => {
+    expect(effectiveHourlyCap(pacing, at(10))).toBe(2);   // 10:00 — active
+    expect(effectiveHourlyCap(pacing, at(0))).toBe(2);    // 00:30-ish — still active (wraps past midnight)
+  });
+
+  it('uses the higher sleep cap outside the active window', () => {
+    expect(effectiveHourlyCap(pacing, at(3))).toBe(6);    // 03:00 — asleep
+    expect(effectiveHourlyCap(pacing, at(6))).toBe(6);    // 06:00 — asleep
+  });
+
+  it('falls back to the flat rate when no active window is set', () => {
+    expect(effectiveHourlyCap({ maxRunsPerHour: 2, maxRunsPerDay: 12 }, at(3))).toBe(2);
   });
 });

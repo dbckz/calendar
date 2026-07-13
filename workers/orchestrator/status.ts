@@ -29,10 +29,11 @@ export interface OrchestratorStatus {
   running: RunningState | null;
   currentTask?: CurrentTask;
   history: HistoryEntry[];
+  pausedUntil?: string | null;
 }
 
 function defaultStatus(): OrchestratorStatus {
-  return { lastRunAt: null, running: null, history: [] };
+  return { lastRunAt: null, running: null, history: [], pausedUntil: null };
 }
 
 export async function readStatus(): Promise<OrchestratorStatus> {
@@ -44,6 +45,7 @@ export async function readStatus(): Promise<OrchestratorStatus> {
       running: parsed.running ?? null,
       currentTask: parsed.currentTask,
       history: Array.isArray(parsed.history) ? parsed.history : [],
+      pausedUntil: parsed.pausedUntil ?? null,
     };
   } catch {
     return defaultStatus();
@@ -133,5 +135,13 @@ export async function releaseLock(): Promise<void> {
   const status = await readStatus();
   status.running = null;
   delete status.currentTask;
+  await writeStatus(status);
+}
+
+// Record (or clear) a usage-limit backoff window. The pacer skips ticks until
+// `pausedUntil` has passed.
+export async function setPausedUntil(iso: string | null): Promise<void> {
+  const status = await readStatus();
+  status.pausedUntil = iso;
   await writeStatus(status);
 }

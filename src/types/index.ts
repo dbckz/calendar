@@ -113,6 +113,41 @@ export interface OrchestratorStatus {
   running: { pid: number; startedAt: string; heartbeatAt: string } | null;
   currentTask?: { gid: string; title: string };
   history: OrchestratorHistoryEntry[];
+  // Usage-limit backoff: when the CLI reports it hit a limit, the pacer parses
+  // the reset time and records it here so subsequent ticks skip until then.
+  pausedUntil?: string | null;
+}
+
+// App-owned delegation queue (keyed by Asana task GID inside user-data.json).
+// The app owns discovery (delegate = enqueue); the launchd pacer owns pacing
+// (drain the queue at a sustainable rate). Asana agent_* tags are kept as
+// decoration for visibility, but this queue is the protocol.
+export type DelegationMode = 'now' | 'background';
+export type DelegationState = 'queued' | 'running' | 'done' | 'failed';
+
+export interface DelegationRunResult {
+  status: 'successful' | 'failed';
+  summary: string;
+  outputs: string[];
+  next: string;
+  reportMarkdown: string;   // full assistant result text
+  sessionId: string | null; // for `claude --resume`
+  traceFile: string | null; // basename of the per-run JSONL trace under AGENT_RUNS_DIR
+  finishedAt: string;
+}
+
+export interface DelegationQueueEntry {
+  asanaTaskGid: string;
+  integrationId: string;
+  title: string;
+  brief: string;             // plain-English instruction (no magic syntax)
+  mode: DelegationMode;
+  state: DelegationState;
+  priority: number;          // lower = sooner; default 0
+  enqueuedAt: string;
+  startedAt?: string;
+  result?: DelegationRunResult;
+  updatedAt: string;
 }
 
 export interface AsanaFilterState {

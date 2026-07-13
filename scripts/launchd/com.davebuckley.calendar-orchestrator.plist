@@ -17,8 +17,11 @@
         <string>__APP_DIR__/scripts/orchestrator-run.sh</string>
     </array>
 
-    <!-- Fire a single pass every 10 minutes. Runs are idempotent and the
-         worker's own stale-lock handling guards against overlap. -->
+    <!-- Pacer tick every 10 minutes: budget-gate, then drain at most one
+         queued delegation entry. The frequent tick is the resolution ceiling
+         (up to 6 runs/hour); the agentPacing hourly caps do the real limiting,
+         so most daytime ticks skip. Runs are idempotent and the worker's own
+         stale-lock handling guards against overlap. -->
     <key>StartInterval</key>
     <integer>600</integer>
 

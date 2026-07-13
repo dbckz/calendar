@@ -1,186 +1,48 @@
-import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from './config';
 import {
-  fetchAsanaTasks,
   fetchAsanaTags,
-  createAsanaTag,
+  fetchTaskById,
   fetchTaskStories,
+  createAsanaTag,
   addTaskComment,
   updateTaskTags,
+  claimNextEntry,
+  fetchQueueEntry,
+  markEntryRunning,
+  reportResult,
+  fetchAgentPacing,
 } from './planner-client';
-import { parseAgentWorkContainers, isSkillContainer, skillNameFromContainer } from './containers';
-import { getTag, hasTag, resolveWorkspaceTag, taskUrl } from './asana-task-utils';
-import { runClaudeTask } from './claude-runner';
-import { buildSkillContainerPrompt, buildPlainContainerPrompt } from './prompts';
+import { getTag, resolveWorkspaceTag, taskUrl } from './asana-task-utils';
+import { runClaudeTask, UsageLimitError } from './claude-runner';
+import { buildBriefPrompt } from './prompts';
 import { formatComment } from './reporting';
 import {
   acquireLock,
   appendHistory,
   heartbeat,
+  readStatus,
   releaseLock,
   setCurrentTask,
+  setPausedUntil,
 } from './status';
-import type { AsanaStory, AsanaTag, ContainerReport, EligibleTask, PlannerTask } from './types';
+import type {
+  AgentPacing,
+  AsanaStory,
+  AsanaTag,
+  ContainerReport,
+  DelegationQueueEntry,
+  DelegationRunResult,
+  PlannerTask,
+} from './types';
 
-async function writeJson(filePath: string, value: unknown): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-}
-
-interface RunResult {
+export interface RunResult {
   ranAt: string;
   picked: { id: string; title: string; url: string } | null;
   finalStatus?: string;
-  reports?: ContainerReport[];
+  result?: DelegationRunResult;
   message?: string;
   skipped?: boolean;
-}
-
-export async function runOnce(): Promise<RunResult> {
-  // Claim the run lock. A stale lock (dead pid / heartbeat > 30 min) is stolen.
-  const lock = await acquireLock();
-  if (!lock) {
-    const result: RunResult = {
-      ranAt: new Date().toISOString(),
-      picked: null,
-      skipped: true,
-      message: 'Another orchestrator run is already in progress; skipping.',
-    };
-    console.log(JSON.stringify(result, null, 2));
-    return result;
-  }
-
-  try {
-    return await executeRun();
-  } finally {
-    await releaseLock();
-  }
-}
-
-async function executeRun(): Promise<RunResult> {
-  const tasks = await fetchAsanaTasks(config.plannerBaseUrl);
-  const eligible: EligibleTask[] = tasks
-    .filter(task => task.integrationName === config.targetIntegrationName)
-    .filter(task => !task.completed)
-    .filter(task => hasTag(task, config.readyTagName))
-    .map(task => ({ ...task, integrationId: task.integrationId as string, containers: parseAgentWorkContainers(task.description) }))
-    .filter(task => task.containers.length > 0)
-    .sort(compareTasks);
-
-  if (eligible.length === 0) {
-    const result: RunResult = { ranAt: new Date().toISOString(), picked: null, message: 'No eligible tasks found.' };
-    await writeJson(config.runLogPath, result);
-    return result;
-  }
-
-  const task = eligible[0];
-  await setCurrentTask({ gid: task.id, title: task.title });
-
-  const workspaceTags = await fetchAsanaTags(config.plannerBaseUrl, task.integrationId);
-  const readyTag = getTag(task, config.readyTagName);
-  const existingCompleteTag = getTag(task, config.completeTagName);
-  const existingFailedTag = getTag(task, config.failedTagName);
-  const inProgressTag = await ensureWorkspaceTag(task.integrationId, workspaceTags, config.inProgressTagName, 'light-blue');
-  const completeTag = await ensureWorkspaceTag(task.integrationId, workspaceTags, config.completeTagName, 'light-green');
-  const failedTag = await ensureWorkspaceTag(task.integrationId, workspaceTags, config.failedTagName, 'dark-red');
-
-  if (!readyTag) {
-    throw new Error(`Selected task is missing ready tag ${config.readyTagName}`);
-  }
-
-  await updateTaskTags(config.plannerBaseUrl, task.id, task.integrationId, {
-    removeTags: [readyTag.gid, existingCompleteTag?.gid, existingFailedTag?.gid].filter((gid): gid is string => Boolean(gid)),
-    addTags: [inProgressTag.gid],
-  });
-
-  const stories: AsanaStory[] = await fetchTaskStories(config.plannerBaseUrl, task.id, task.integrationId).catch(() => []);
-  const reports: ContainerReport[] = [];
-  let finalStatus = 'successful';
-
-  try {
-    for (const container of task.containers) {
-      await heartbeat();
-      const report = await executeContainer({ task, stories, container });
-      reports.push(report);
-      const comment = formatComment(container, report);
-      await addTaskComment(config.plannerBaseUrl, task.id, task.integrationId, comment.text, comment.htmlText);
-      if (report.status !== 'successful') {
-        finalStatus = 'failed';
-        break;
-      }
-    }
-  } catch (error) {
-    finalStatus = 'failed';
-    const report: ContainerReport = {
-      status: 'failed',
-      summary: error instanceof Error ? error.message : String(error),
-      outputs: [],
-      next: 'Inspect the orchestrator failure and retry after fixing the blocker.',
-    };
-    reports.push(report);
-    const comment = formatComment('orchestrator', report);
-    await addTaskComment(config.plannerBaseUrl, task.id, task.integrationId, comment.text, comment.htmlText);
-  } finally {
-    await updateTaskTags(config.plannerBaseUrl, task.id, task.integrationId, {
-      removeTags: [inProgressTag.gid, completeTag.gid, failedTag.gid],
-      addTags: [finalStatus === 'successful' ? completeTag.gid : failedTag.gid],
-    });
-    await setCurrentTask(null);
-  }
-
-  const result: RunResult = {
-    ranAt: new Date().toISOString(),
-    picked: { id: task.id, title: task.title, url: taskUrl(task.id) },
-    finalStatus,
-    reports,
-  };
-  await writeJson(config.runLogPath, result);
-
-  await appendHistory({
-    ranAt: result.ranAt,
-    taskGid: task.id,
-    title: task.title,
-    finalStatus,
-    summary: reports[reports.length - 1]?.summary || '',
-  });
-
-  return result;
-}
-
-interface ExecuteContainerInput {
-  task: PlannerTask;
-  stories: AsanaStory[];
-  container: string;
-}
-
-async function executeContainer({ task, stories, container }: ExecuteContainerInput): Promise<ContainerReport> {
-  const runnerOpts = {
-    timeoutSeconds: config.claudeTimeoutSeconds,
-    allowedTools: config.claudeAllowedTools,
-  };
-
-  if (isSkillContainer(container)) {
-    const skillName = skillNameFromContainer(container);
-    if (!skillName) {
-      return {
-        status: 'failed',
-        summary: `Empty skill container: ${container}`,
-        outputs: [],
-        next: 'Name a skill after the ~ or change the container text.',
-      };
-    }
-
-    return normalizeReport(await runClaudeTask({
-      ...runnerOpts,
-      prompt: buildSkillContainerPrompt({ task, stories, container, skillName }),
-    }));
-  }
-
-  return normalizeReport(await runClaudeTask({
-    ...runnerOpts,
-    prompt: buildPlainContainerPrompt({ task, stories, container }),
-  }));
 }
 
 function normalizeReport(report: Partial<ContainerReport> | null | undefined): ContainerReport {
@@ -193,17 +55,224 @@ function normalizeReport(report: Partial<ContainerReport> | null | undefined): C
   };
 }
 
-function compareTasks(a: EligibleTask, b: EligibleTask): number {
-  const aDue = a.dueOn || '9999-12-31';
-  const bDue = b.dueOn || '9999-12-31';
-  if (aDue !== bDue) return aDue.localeCompare(bDue);
-  return a.title.localeCompare(b.title);
-}
-
 async function ensureWorkspaceTag(integrationId: string, tags: AsanaTag[], name: string, color: string): Promise<AsanaTag> {
   const existing = resolveWorkspaceTag(tags, name);
   if (existing) {
     return existing;
   }
   return createAsanaTag(config.plannerBaseUrl, integrationId, name, color);
+}
+
+// Execute one delegation entry end-to-end. Assumes the run lock is already held
+// and the entry is marked `running`. Runs the headless agent, tees a live trace,
+// posts the Asana comment (permanent record), flips the decoration tags, and
+// reports the full result back to the app queue.
+export async function runTask(entry: DelegationQueueEntry): Promise<RunResult> {
+  const { asanaTaskGid: gid, integrationId } = entry;
+  const ranAt = new Date().toISOString();
+  await setCurrentTask({ gid, title: entry.title });
+
+  const task: PlannerTask = (await fetchTaskById(config.plannerBaseUrl, gid)) || {
+    id: gid,
+    title: entry.title,
+    integrationId,
+  };
+  const stories: AsanaStory[] = await fetchTaskStories(config.plannerBaseUrl, gid, integrationId).catch(() => []);
+
+  // Decoration tags: ready/complete/failed -> in_progress.
+  const workspaceTags = await fetchAsanaTags(config.plannerBaseUrl, integrationId).catch(() => [] as AsanaTag[]);
+  const inProgressTag = await ensureWorkspaceTag(integrationId, workspaceTags, config.inProgressTagName, 'light-blue');
+  const completeTag = await ensureWorkspaceTag(integrationId, workspaceTags, config.completeTagName, 'light-green');
+  const failedTag = await ensureWorkspaceTag(integrationId, workspaceTags, config.failedTagName, 'dark-red');
+  const readyTag = getTag(task, config.readyTagName);
+  const existingComplete = getTag(task, config.completeTagName);
+  const existingFailed = getTag(task, config.failedTagName);
+  await updateTaskTags(config.plannerBaseUrl, gid, integrationId, {
+    removeTags: [readyTag?.gid, existingComplete?.gid, existingFailed?.gid].filter((g): g is string => Boolean(g)),
+    addTags: [inProgressTag.gid],
+  }).catch(() => { /* tags are decoration; never fail the run on a tag error */ });
+
+  await heartbeat();
+
+  const traceFile = path.join(config.agentRunsDir, `${gid}-${Date.now()}.jsonl`);
+  let report: ContainerReport;
+  let sessionId: string | null = null;
+  let resultText = '';
+  let traceBasename: string | null = null;
+  let finalStatus: 'successful' | 'failed' = 'successful';
+
+  try {
+    const run = await runClaudeTask({
+      prompt: buildBriefPrompt({ task, stories, brief: entry.brief }),
+      timeoutSeconds: config.claudeTimeoutSeconds,
+      allowedTools: config.claudeAllowedTools,
+      traceFile,
+    });
+    report = normalizeReport(run.report);
+    sessionId = run.sessionId;
+    resultText = run.resultText;
+    traceBasename = run.traceFile;
+    finalStatus = report.status;
+  } catch (error) {
+    if (error instanceof UsageLimitError) {
+      // Re-throw so the pacer can record the backoff and re-queue the entry.
+      await setCurrentTask(null);
+      throw error;
+    }
+    finalStatus = 'failed';
+    report = {
+      status: 'failed',
+      summary: error instanceof Error ? error.message : String(error),
+      outputs: [],
+      next: 'Inspect the agent failure and retry after fixing the blocker.',
+    };
+    traceBasename = path.basename(traceFile);
+  }
+
+  // Permanent record: Asana comment.
+  const comment = formatComment(entry.brief || 'delegated brief', report);
+  await addTaskComment(config.plannerBaseUrl, gid, integrationId, comment.text, comment.htmlText).catch(() => { /* best effort */ });
+
+  // Terminal decoration tag.
+  await updateTaskTags(config.plannerBaseUrl, gid, integrationId, {
+    removeTags: [inProgressTag.gid, completeTag.gid, failedTag.gid],
+    addTags: [finalStatus === 'successful' ? completeTag.gid : failedTag.gid],
+  }).catch(() => { /* decoration */ });
+
+  const runResult: DelegationRunResult = {
+    status: finalStatus,
+    summary: report.summary,
+    outputs: report.outputs,
+    next: report.next,
+    reportMarkdown: resultText || report.summary,
+    sessionId,
+    traceFile: traceBasename,
+    finishedAt: new Date().toISOString(),
+  };
+  await reportResult(config.plannerBaseUrl, gid, integrationId, finalStatus === 'successful' ? 'done' : 'failed', runResult);
+
+  await appendHistory({ ranAt, taskGid: gid, title: entry.title, finalStatus, summary: report.summary });
+  await setCurrentTask(null);
+
+  return {
+    ranAt,
+    picked: { id: gid, title: entry.title, url: taskUrl(gid) },
+    finalStatus,
+    result: runResult,
+  };
+}
+
+// "Run now": execute one explicit task GID immediately (invoked by the detached
+// child spawned from the run-now API route).
+export async function runSingle(gid: string): Promise<RunResult> {
+  const lock = await acquireLock();
+  if (!lock) {
+    return { ranAt: new Date().toISOString(), picked: null, skipped: true, message: 'Another run is already in progress; skipping.' };
+  }
+  try {
+    const entry = await fetchQueueEntry(config.plannerBaseUrl, gid);
+    if (!entry) {
+      return { ranAt: new Date().toISOString(), picked: null, message: `No queue entry for task ${gid}.` };
+    }
+    await markEntryRunning(config.plannerBaseUrl, entry).catch(() => { /* claim is best-effort */ });
+    return await runTask({ ...entry, state: 'running' });
+  } finally {
+    await releaseLock();
+  }
+}
+
+function isWithinWindow(window: { start: string; end: string } | undefined, now: Date): boolean {
+  if (!window) return false;
+  const [sh, sm] = window.start.split(':').map(Number);
+  const [eh, em] = window.end.split(':').map(Number);
+  const mins = now.getHours() * 60 + now.getMinutes();
+  const start = sh * 60 + (sm || 0);
+  const end = eh * 60 + (em || 0);
+  // Windows that wrap past midnight (start > end) are treated as overnight.
+  return start <= end ? mins >= start && mins < end : mins >= start || mins < end;
+}
+
+// The hourly cap in effect right now: the daytime `maxRunsPerHour` inside the
+// active window, or the higher `sleepMaxRunsPerHour` outside it (biasing work
+// toward the hours you're asleep). No activeHours set => the single flat rate.
+export function effectiveHourlyCap(pacing: AgentPacing, now: Date): number {
+  if (!pacing.activeHours) return pacing.maxRunsPerHour;
+  return isWithinWindow(pacing.activeHours, now)
+    ? pacing.maxRunsPerHour
+    : (pacing.sleepMaxRunsPerHour ?? pacing.maxRunsPerHour);
+}
+
+// Pacer tick: budget-gate, then claim and run at most one queued entry.
+export async function drainOnce(): Promise<RunResult> {
+  const now = new Date();
+  const status = await readStatus();
+
+  if (status.pausedUntil && Date.parse(status.pausedUntil) > now.getTime()) {
+    return { ranAt: now.toISOString(), picked: null, skipped: true, message: `Paced: paused until ${status.pausedUntil}.` };
+  }
+  // Clear an expired pause.
+  if (status.pausedUntil) {
+    await setPausedUntil(null);
+  }
+
+  const pacing: AgentPacing = (await fetchAgentPacing(config.plannerBaseUrl).catch(() => null)) || {
+    maxRunsPerHour: config.defaultMaxRunsPerHour,
+    maxRunsPerDay: config.defaultMaxRunsPerDay,
+  };
+
+  const runsInWindow = (ms: number) =>
+    status.history.filter(h => h.taskGid && now.getTime() - Date.parse(h.ranAt) < ms).length;
+  const hourlyCap = effectiveHourlyCap(pacing, now);
+  if (runsInWindow(60 * 60 * 1000) >= hourlyCap) {
+    return { ranAt: now.toISOString(), picked: null, skipped: true, message: `Paced: hourly run budget reached (${hourlyCap}/h).` };
+  }
+  if (runsInWindow(24 * 60 * 60 * 1000) >= pacing.maxRunsPerDay) {
+    return { ranAt: now.toISOString(), picked: null, skipped: true, message: 'Paced: daily run budget reached.' };
+  }
+
+  const lock = await acquireLock();
+  if (!lock) {
+    return { ranAt: now.toISOString(), picked: null, skipped: true, message: 'Another run is already in progress; skipping.' };
+  }
+
+  try {
+    const entry = await claimNextEntry(config.plannerBaseUrl);
+    if (!entry) {
+      return { ranAt: now.toISOString(), picked: null, message: 'No queued delegation entries.' };
+    }
+    try {
+      return await runTask(entry);
+    } catch (error) {
+      if (error instanceof UsageLimitError) {
+        const resetIso = resolveResetTime(error.resetsAt, now);
+        await setPausedUntil(resetIso);
+        // Re-queue so the entry is retried after the backoff.
+        await reportResult(config.plannerBaseUrl, entry.asanaTaskGid, entry.integrationId, 'queued').catch(() => {});
+        return { ranAt: now.toISOString(), picked: null, skipped: true, message: `Usage limit hit; paused until ${resetIso}.` };
+      }
+      throw error;
+    }
+  } finally {
+    await releaseLock();
+  }
+}
+
+// Turn a parsed "resets 3:45pm" fragment into a concrete ISO instant. Falls back
+// to a 1-hour backoff when the time can't be parsed.
+export function resolveResetTime(resetsAt: string | null, now: Date): string {
+  const fallback = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+  if (!resetsAt) return fallback;
+  const match = resetsAt.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+  if (!match) return fallback;
+  let hour = Number(match[1]);
+  const minute = match[2] ? Number(match[2]) : 0;
+  const meridiem = match[3]?.toLowerCase();
+  if (meridiem === 'pm' && hour < 12) hour += 12;
+  if (meridiem === 'am' && hour === 12) hour = 0;
+  const target = new Date(now);
+  target.setHours(hour, minute, 0, 0);
+  if (target.getTime() <= now.getTime()) {
+    target.setDate(target.getDate() + 1); // reset is later today or tomorrow
+  }
+  return target.toISOString();
 }

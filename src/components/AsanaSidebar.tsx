@@ -1,13 +1,15 @@
 'use client';
 
 import { useState, memo, useMemo, useCallback, useRef, useEffect, forwardRef } from 'react';
-import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDateFilter, AsanaSortField, AsanaFilterLogic, AsanaGroupBy, ScheduledAsanaTask, AsanaStory, TaskMetadata } from '@/types';
-import { Calendar, GripVertical, Filter, X, ChevronDown, ChevronUp, ChevronRight, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle, Plus, Trash2, MessageSquare, Loader2, Layers, Search, Bot, AlertTriangle } from 'lucide-react';
+import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDateFilter, AsanaSortField, AsanaFilterLogic, AsanaGroupBy, ScheduledAsanaTask, AsanaStory, TaskMetadata, DelegationQueueEntry, DelegationState } from '@/types';
+import { Calendar, GripVertical, Filter, X, ChevronDown, ChevronUp, ChevronRight, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle, Plus, Trash2, MessageSquare, Loader2, Layers, Search, Bot, CheckCircle2, XCircle, Copy } from 'lucide-react';
 import { format, parseISO, isToday, isPast } from 'date-fns';
 import { getAsanaTaskUrl } from '@/lib/asana';
 import { api } from '@/lib/api';
 import { CreateAsanaTaskModal, AsanaTypeFieldInfo as ImportedAsanaTypeFieldInfo } from './CreateAsanaTaskModal';
 import { TaskMetadataEditor, TaskMetadataBadges } from './TaskMetadataEditor';
+import { DelegateModal } from './DelegateModal';
+import { TraceTimeline } from './TraceTimeline';
 
 // Helper component to render text with clickable links
 function LinkifiedText({ text, className }: { text: string; className?: string }) {
@@ -101,6 +103,9 @@ interface AsanaSidebarProps {
     integrationId: string,
     updates: Partial<Omit<TaskMetadata, 'asanaTaskGid' | 'integrationId' | 'updatedAt'>>
   ) => Promise<void>;
+  // Delegation queue (keyed by Asana task GID) + a refresher called after enqueue/run.
+  delegation?: Record<string, DelegationQueueEntry>;
+  onDelegated?: () => void;
 }
 
 const DATE_FILTER_OPTIONS: { value: AsanaDateFilter; label: string }[] = [
@@ -149,8 +154,50 @@ export function AsanaSidebar({
   onClearOpenTaskDialog,
   taskMetadata,
   onSaveTaskMetadata,
+  delegation,
+  onDelegated,
 }: AsanaSidebarProps) {
   const [isDragOver, setIsDragOver] = useState(false);
+  // Bulk-select for "Queue all" delegation.
+  const [bulkMode, setBulkMode] = useState(false);
+  const [selectedForBulk, setSelectedForBulk] = useState<Set<string>>(new Set());
+  const [isBulkQueuing, setIsBulkQueuing] = useState(false);
+
+  const toggleBulkSelect = useCallback((taskId: string) => {
+    setSelectedForBulk(prev => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  }, []);
+
+  const exitBulkMode = useCallback(() => {
+    setBulkMode(false);
+    setSelectedForBulk(new Set());
+  }, []);
+
+  const handleBulkQueue = useCallback(async () => {
+    const selected = tasks.filter(t => selectedForBulk.has(t.id) && t.integrationId);
+    if (selected.length === 0) return;
+    setIsBulkQueuing(true);
+    try {
+      // Enqueue each with an empty brief (edit per-task later); background mode.
+      await Promise.all(selected.map(t =>
+        api.upsertDelegationEntry(t.id, t.integrationId!, {
+          title: t.title,
+          mode: 'background',
+          state: 'queued',
+        })
+      ));
+      onDelegated?.();
+      exitBulkMode();
+    } catch (err) {
+      console.error('Failed to bulk-queue tasks:', err);
+    } finally {
+      setIsBulkQueuing(false);
+    }
+  }, [tasks, selectedForBulk, onDelegated, exitBulkMode]);
   const [showFilters, setShowFilters] = useState(false);
   const [showSort, setShowSort] = useState(false);
   const [showGroupBy, setShowGroupBy] = useState(false);
@@ -872,6 +919,32 @@ export function AsanaSidebar({
         </div>
       </div>
 
+      {/* Bulk delegation toolbar */}
+      {onDelegated && searchedTasks.length > 0 && (
+        <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-100 text-xs">
+          {bulkMode ? (
+            <>
+              <span className="text-gray-600">{selectedForBulk.size} selected</span>
+              <div className="flex items-center gap-2">
+                <button onClick={exitBulkMode} className="text-gray-500 hover:text-gray-700">Cancel</button>
+                <button
+                  onClick={handleBulkQueue}
+                  disabled={selectedForBulk.size === 0 || isBulkQueuing}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isBulkQueuing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bot className="w-3 h-3" />}
+                  Queue {selectedForBulk.size || ''}
+                </button>
+              </div>
+            </>
+          ) : (
+            <button onClick={() => setBulkMode(true)} className="ml-auto flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800">
+              <Bot className="w-3 h-3" /> Queue several…
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto">
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
@@ -953,6 +1026,9 @@ export function AsanaSidebar({
                           onComplete={onToggleComplete}
                           onDelete={onDeleteTask}
                           metadata={taskMetadata?.[task.id]}
+                          bulkMode={bulkMode}
+                          isSelected={selectedForBulk.has(task.id)}
+                          onToggleSelect={toggleBulkSelect}
                           ref={(el) => {
                             if (el) taskRefs.current.set(task.id, el);
                             else taskRefs.current.delete(task.id);
@@ -980,6 +1056,9 @@ export function AsanaSidebar({
                 onComplete={onToggleComplete}
                 onDelete={onDeleteTask}
                 metadata={taskMetadata?.[task.id]}
+                bulkMode={bulkMode}
+                isSelected={selectedForBulk.has(task.id)}
+                onToggleSelect={toggleBulkSelect}
                 ref={(el) => {
                   if (el) taskRefs.current.set(task.id, el);
                   else taskRefs.current.delete(task.id);
@@ -1008,6 +1087,8 @@ export function AsanaSidebar({
           typeFieldInfoByIntegration={typeFieldInfoByIntegration}
           metadata={taskMetadata?.[selectedTask.id]}
           onSaveMetadata={onSaveTaskMetadata}
+          delegationEntry={delegation?.[selectedTask.id]}
+          onDelegated={onDelegated}
         />
       )}
 
@@ -1044,6 +1125,8 @@ interface TaskDetailDialogProps {
     integrationId: string,
     updates: Partial<Omit<TaskMetadata, 'asanaTaskGid' | 'integrationId' | 'updatedAt'>>
   ) => Promise<void>;
+  delegationEntry?: DelegationQueueEntry;
+  onDelegated?: () => void;
 }
 
 function getDueDateStyles(dueOn: string): string {
@@ -1066,6 +1149,8 @@ function TaskDetailDialog({
   typeFieldInfoByIntegration,
   metadata,
   onSaveMetadata,
+  delegationEntry,
+  onDelegated,
 }: TaskDetailDialogProps) {
   const [comment, setComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1074,10 +1159,9 @@ function TaskDetailDialog({
   const [isLoadingStories, setIsLoadingStories] = useState(false);
   const [storiesError, setStoriesError] = useState<string | null>(null);
 
-  // Agent delegation state
-  const [isDelegating, setIsDelegating] = useState(false);
-  const [delegateError, setDelegateError] = useState<string | null>(null);
-  const [confirmNoContainers, setConfirmNoContainers] = useState(false);
+  // Agent delegation: the compose modal owns enqueue/run; this dialog just
+  // renders queue state + the last result.
+  const [showDelegateModal, setShowDelegateModal] = useState(false);
 
   // Edit mode state
   const [isEditing, setIsEditing] = useState(false);
@@ -1242,41 +1326,6 @@ function TaskDetailDialog({
     // Exit edit mode immediately
     setIsEditing(false);
     wasEditingRef.current = false;
-  };
-
-  // Agent tag state derived from the task's current tags.
-  const agentTags = (task.tags || []).filter(t => t.name.toLowerCase().startsWith('agent_'));
-  const hasAgentTag = (name: string) => agentTags.some(t => t.name.toLowerCase() === name);
-  const isQueuedOrRunning = hasAgentTag('agent_ready') || hasAgentTag('agent_in_progress');
-  const descriptionHasContainers = /agent_work_containers:/i.test(task.description || '');
-
-  const handleDelegate = async () => {
-    if (!onUpdateTask || !task.integrationId) return;
-    // Guard: if the description has no container list, require an explicit confirm.
-    if (!descriptionHasContainers && !confirmNoContainers) {
-      setConfirmNoContainers(true);
-      return;
-    }
-    setIsDelegating(true);
-    setDelegateError(null);
-    try {
-      const tags = await api.getAsanaTags(task.integrationId);
-      let readyTag = tags.find(t => t.name.toLowerCase() === 'agent_ready');
-      if (!readyTag) {
-        readyTag = await api.createAsanaTag(task.integrationId, 'agent_ready', 'light-blue');
-      }
-      // Clear any prior terminal tags so the task re-enters the queue cleanly.
-      const removeTags = agentTags
-        .filter(t => ['agent_complete', 'agent_failed'].includes(t.name.toLowerCase()))
-        .map(t => t.gid);
-      onUpdateTask(task.id, task.integrationId, { addTags: [readyTag.gid], removeTags });
-      setConfirmNoContainers(false);
-    } catch (err) {
-      console.error('Failed to delegate task:', err);
-      setDelegateError('Failed to delegate. The task must belong to an Asana workspace integration.');
-    } finally {
-      setIsDelegating(false);
-    }
   };
 
   const handleProjectToggle = (projectGid: string) => {
@@ -1526,60 +1575,10 @@ function TaskDetailDialog({
                     <Bot className="w-3 h-3" /> Agent delegation
                   </label>
 
-                  {/* Current agent tag state */}
-                  {agentTags.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mb-2">
-                      {agentTags.map(t => {
-                        const name = t.name.toLowerCase();
-                        const color =
-                          name === 'agent_complete' ? 'bg-emerald-100 text-emerald-700'
-                          : name === 'agent_failed' ? 'bg-red-100 text-red-700'
-                          : name === 'agent_in_progress' ? 'bg-amber-100 text-amber-700'
-                          : 'bg-blue-100 text-blue-700';
-                        return (
-                          <span key={t.gid} className={`px-2 py-0.5 rounded text-xs font-medium ${color}`}>
-                            {t.name}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Warning when the description has no container list */}
-                  {!descriptionHasContainers && (
-                    <div className="flex items-start gap-2 mb-2 p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
-                      <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-                      <span>
-                        No <code className="font-mono">agent_work_containers:</code> list found in the notes, so
-                        the orchestrator will skip this task. Add a bullet list under that header, e.g.
-                        <br />
-                        <code className="font-mono block mt-1 whitespace-pre">agent_work_containers:{'\n'}- Draft a short memo{'\n'}- ~flight-finder</code>
-                      </span>
-                    </div>
-                  )}
-
-                  {delegateError && (
-                    <p className="text-xs text-red-500 mb-2">{delegateError}</p>
-                  )}
-
-                  {isQueuedOrRunning ? (
-                    <p className="text-xs text-gray-500 italic">
-                      This task is already {hasAgentTag('agent_in_progress') ? 'being worked on by the agent' : 'queued for the agent'}.
-                    </p>
-                  ) : (
-                    <button
-                      onClick={handleDelegate}
-                      disabled={isDelegating}
-                      className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      {isDelegating ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Bot className="w-4 h-4" />
-                      )}
-                      {confirmNoContainers && !descriptionHasContainers ? 'Delegate anyway' : 'Delegate to agent'}
-                    </button>
-                  )}
+                  <DelegationSection
+                    entry={delegationEntry}
+                    onDelegate={() => setShowDelegateModal(true)}
+                  />
                 </div>
               )}
 
@@ -1735,6 +1734,97 @@ function TaskDetailDialog({
           </div>
         </div>
       )}
+
+      {/* Delegate compose modal */}
+      {showDelegateModal && task.integrationId && (
+        <DelegateModal
+          asanaTaskGid={task.id}
+          integrationId={task.integrationId}
+          taskTitle={task.title}
+          initialBrief={delegationEntry?.brief || ''}
+          onClose={() => setShowDelegateModal(false)}
+          onDelegated={onDelegated}
+        />
+      )}
+    </div>
+  );
+}
+
+const BADGE_STYLES: Record<DelegationState, string> = {
+  done: 'bg-emerald-100 text-emerald-700',
+  failed: 'bg-red-100 text-red-700',
+  running: 'bg-amber-100 text-amber-700',
+  queued: 'bg-blue-100 text-blue-700',
+};
+
+// Renders the current delegation queue state + last result for a task, and a
+// button to (re)open the compose modal.
+function DelegationSection({ entry, onDelegate }: { entry?: DelegationQueueEntry; onDelegate: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const state = entry?.state;
+  const result = entry?.result;
+
+  const badge = state
+    ? {
+        cls: BADGE_STYLES[state],
+        label: state === 'queued' && entry?.mode === 'now' ? 'queued (run now)' : state,
+      }
+    : null;
+
+  const resumeCmd = result?.sessionId ? `claude --resume ${result.sessionId}` : null;
+
+  return (
+    <div className="space-y-2">
+      {badge && (
+        <div className="flex items-center gap-2">
+          <span className={`px-2 py-0.5 rounded text-xs font-medium ${badge.cls}`}>{badge.label}</span>
+          {state === 'running' && <Loader2 className="w-3.5 h-3.5 text-amber-600 animate-spin" />}
+        </div>
+      )}
+
+      {result && (
+        <div className="border border-gray-200 rounded-lg p-2.5 space-y-2 bg-gray-50">
+          <div className="flex items-center gap-1.5 text-xs font-medium">
+            {result.status === 'successful'
+              ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+              : <XCircle className="w-3.5 h-3.5 text-red-500" />}
+            <span className="text-gray-700">Result</span>
+          </div>
+          <div className="text-xs text-gray-700 whitespace-pre-wrap max-h-56 overflow-y-auto">
+            <LinkifiedText text={result.reportMarkdown || result.summary} />
+          </div>
+          {result.outputs.length > 0 && (
+            <ul className="text-xs text-gray-600 list-disc pl-4">
+              {result.outputs.map((o, i) => <li key={i}><LinkifiedText text={o} /></li>)}
+            </ul>
+          )}
+          {result.traceFile && (
+            <details className="text-xs">
+              <summary className="cursor-pointer text-gray-500 hover:text-gray-700">Trace</summary>
+              <div className="mt-1.5">
+                <TraceTimeline file={result.traceFile} live={state === 'running'} />
+              </div>
+            </details>
+          )}
+          {resumeCmd && (
+            <button
+              onClick={() => { navigator.clipboard?.writeText(resumeCmd); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
+              className="flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800"
+              title="Run from the agent workspace directory to resume this session"
+            >
+              <Copy className="w-3 h-3" /> {copied ? 'Copied' : resumeCmd}
+            </button>
+          )}
+        </div>
+      )}
+
+      <button
+        onClick={onDelegate}
+        className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
+      >
+        <Bot className="w-4 h-4" />
+        {entry ? 'Delegate again…' : 'Delegate to agent…'}
+      </button>
     </div>
   );
 }
@@ -1749,11 +1839,14 @@ interface TaskItemProps {
   onComplete?: (taskId: string, integrationId: string, completed: boolean) => void;
   onDelete?: (taskId: string, integrationId: string) => void;
   metadata?: TaskMetadata;
+  bulkMode?: boolean;
+  isSelected?: boolean;
+  onToggleSelect?: (taskId: string) => void;
 }
 
 const MemoizedTaskItem = memo(
   forwardRef<HTMLLIElement, TaskItemProps>(function TaskItem(
-    { task, onDragStart, scheduledDuration, formatDuration, onClick, isHighlighted, onComplete, onDelete, metadata },
+    { task, onDragStart, scheduledDuration, formatDuration, onClick, isHighlighted, onComplete, onDelete, metadata, bulkMode, isSelected, onToggleSelect },
     ref
   ) {
     const formatDueDate = (dueOn: string | undefined) => {
@@ -1787,16 +1880,28 @@ const MemoizedTaskItem = memo(
     return (
       <li
         ref={ref}
-        draggable
+        draggable={!bulkMode}
         onDragStart={(e) => onDragStart(e, task)}
-        onClick={onClick}
+        onClick={bulkMode ? () => onToggleSelect?.(task.id) : onClick}
         className={`group flex items-start gap-2 p-2 rounded-lg cursor-pointer transition-all ${
           isHighlighted
             ? 'bg-orange-100 ring-2 ring-orange-400'
-            : 'hover:bg-gray-50'
+            : isSelected
+              ? 'bg-indigo-50 ring-1 ring-indigo-300'
+              : 'hover:bg-gray-50'
         }`}
       >
-        <GripVertical className="w-4 h-4 text-gray-300 group-hover:text-gray-400 mt-0.5 flex-shrink-0 cursor-grab active:cursor-grabbing" />
+        {bulkMode ? (
+          <input
+            type="checkbox"
+            checked={!!isSelected}
+            onChange={() => onToggleSelect?.(task.id)}
+            onClick={(e) => e.stopPropagation()}
+            className="mt-1 flex-shrink-0 accent-indigo-600"
+          />
+        ) : (
+          <GripVertical className="w-4 h-4 text-gray-300 group-hover:text-gray-400 mt-0.5 flex-shrink-0 cursor-grab active:cursor-grabbing" />
+        )}
         <div className="flex-1 min-w-0">
           {task.parentTask && (
             <p className="text-xs text-gray-400 truncate mb-0.5" title={`Subtask of: ${task.parentTask.name}`}>

@@ -17,3 +17,9 @@ export const WORKFLOW_CONFIG_FILE = path.join(DATA_DIR, 'workflow-config.json');
 // reads it via /api/orchestrator/status). The worker duplicates this path
 // locally in workers/orchestrator/config.ts to avoid importing app code.
 export const ORCHESTRATOR_STATUS_FILE = path.join(DATA_DIR, 'orchestrator-status.json');
+
+// Per-run agent trace files (`<taskGid>-<ts>.jsonl`) written by the runner from
+// the `stream-json` event stream, plus detached "Run now" child logs. The app
+// reads these via /api/orchestrator/trace. The worker duplicates this path
+// locally in workers/orchestrator/config.ts to avoid importing app code.
+export const AGENT_RUNS_DIR = path.join(DATA_DIR, 'agent-runs');

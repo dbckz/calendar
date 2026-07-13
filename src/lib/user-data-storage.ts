@@ -2,7 +2,7 @@
 // Uses file-based storage in ~/.claude/data/calendar/ for persistence across builds
 
 import { promises as fs } from 'fs';
-import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState, TemplateGroup, TaskMetadata } from '@/types';
+import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState, TemplateGroup, TaskMetadata, DelegationQueueEntry } from '@/types';
 import { DATA_DIR, USER_DATA_FILE } from './data-paths';
 
 const DEFAULT_ASANA_FILTERS: AsanaFilterState = {
@@ -37,6 +37,7 @@ interface UserData {
   asanaFilterPreferencesMap?: Record<string, AsanaFilterState>; // Key is integration ID or "default"
   googleEventAttributions?: GoogleEventAttribution[];
   taskMetadata?: Record<string, TaskMetadata>; // Key is Asana task GID
+  delegationQueue?: Record<string, DelegationQueueEntry>; // Key is Asana task GID
 }
 
 const DEFAULT_USER_DATA: UserData = {
@@ -48,6 +49,7 @@ const DEFAULT_USER_DATA: UserData = {
   asanaFilterPreferencesMap: {},
   googleEventAttributions: [],
   taskMetadata: {},
+  delegationQueue: {},
 };
 
 async function ensureDataDir(): Promise<void> {
@@ -81,9 +83,12 @@ export async function getUserData(): Promise<UserData> {
       asanaFilterPreferencesMap: filterMap,
       googleEventAttributions: parsed.googleEventAttributions || [],
       taskMetadata: parsed.taskMetadata || {},
+      delegationQueue: parsed.delegationQueue || {},
     };
   } catch {
-    return { ...DEFAULT_USER_DATA };
+    // Deep clone so callers that mutate nested collections (e.g. upserting into
+    // delegationQueue/taskMetadata) never pollute the shared DEFAULT_USER_DATA.
+    return JSON.parse(JSON.stringify(DEFAULT_USER_DATA)) as UserData;
   }
 }
 
@@ -514,5 +519,93 @@ export async function upsertTaskMetadata(
   data.taskMetadata[asanaTaskGid] = merged;
   await saveUserData(data);
   return merged;
+}
+
+// Delegation queue (app-owned, keyed by Asana task GID). Mirrors the taskMetadata
+// map idiom. All writes funnel through the single Next.js process (the pacer and
+// the detached "Run now" child mutate via HTTP), so no file locking is needed.
+export async function getAllDelegationEntries(): Promise<Record<string, DelegationQueueEntry>> {
+  const data = await getUserData();
+  return data.delegationQueue || {};
+}
+
+export async function getDelegationEntry(asanaTaskGid: string): Promise<DelegationQueueEntry | null> {
+  const data = await getUserData();
+  return data.delegationQueue?.[asanaTaskGid] || null;
+}
+
+export async function upsertDelegationEntry(
+  asanaTaskGid: string,
+  integrationId: string,
+  updates: Partial<Omit<DelegationQueueEntry, 'asanaTaskGid' | 'integrationId' | 'updatedAt'>>
+): Promise<DelegationQueueEntry> {
+  const data = await getUserData();
+  if (!data.delegationQueue) {
+    data.delegationQueue = {};
+  }
+
+  const now = new Date().toISOString();
+  // Defaults applied only on first insert; existing values win over them.
+  const base: DelegationQueueEntry = data.delegationQueue[asanaTaskGid] ?? {
+    asanaTaskGid,
+    integrationId,
+    title: '',
+    brief: '',
+    mode: 'background',
+    state: 'queued',
+    priority: 0,
+    enqueuedAt: now,
+    updatedAt: now,
+  };
+  const merged: DelegationQueueEntry = {
+    ...base,
+    ...updates,
+    asanaTaskGid,
+    integrationId,
+    updatedAt: now,
+  };
+
+  data.delegationQueue[asanaTaskGid] = merged;
+  await saveUserData(data);
+  return merged;
+}
+
+// Atomically (within the single app process) pick the next queued entry by
+// (priority asc, enqueuedAt asc), mark it running, and return it. Returns null
+// when the queue has nothing to drain.
+export async function claimNextDelegationEntry(): Promise<DelegationQueueEntry | null> {
+  const data = await getUserData();
+  const queue = data.delegationQueue || {};
+  const queued = Object.values(queue)
+    .filter(entry => entry.state === 'queued')
+    .sort((a, b) => {
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      return a.enqueuedAt.localeCompare(b.enqueuedAt);
+    });
+
+  const next = queued[0];
+  if (!next) return null;
+
+  const now = new Date().toISOString();
+  const claimed: DelegationQueueEntry = {
+    ...next,
+    state: 'running',
+    startedAt: now,
+    updatedAt: now,
+  };
+  queue[next.asanaTaskGid] = claimed;
+  data.delegationQueue = queue;
+  await saveUserData(data);
+  return claimed;
+}
+
+export async function deleteDelegationEntry(asanaTaskGid: string): Promise<boolean> {
+  const data = await getUserData();
+  if (!data.delegationQueue || !data.delegationQueue[asanaTaskGid]) {
+    return false;
+  }
+  delete data.delegationQueue[asanaTaskGid];
+  await saveUserData(data);
+  return true;
 }
 

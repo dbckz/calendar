@@ -64,6 +64,12 @@ export const config = {
   claudeAllowedTools: process.env.CLAUDE_ALLOWED_TOOLS || DEFAULT_ALLOWED_TOOLS,
   // Scratch workspace so the agent's Write output lands here, not in the repo.
   agentWorkspace: path.join(DATA_DIR, 'agent-workspace'),
+  // Per-run stream-json trace files (mirrors src/lib/data-paths.ts AGENT_RUNS_DIR).
+  agentRunsDir: path.join(DATA_DIR, 'agent-runs'),
+  // Fallback pacing budget when the app's workflow-config is unreachable. The
+  // pacer prefers the live workflow-config.agentPacing values.
+  defaultMaxRunsPerHour: Number(process.env.AGENT_MAX_RUNS_PER_HOUR || 2),
+  defaultMaxRunsPerDay: Number(process.env.AGENT_MAX_RUNS_PER_DAY || 12),
 };
 
 export type OrchestratorConfig = typeof config;

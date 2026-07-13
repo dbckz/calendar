@@ -1,35 +1,57 @@
-// Never invokes the real claude CLI: child_process.execFile and fs mkdir are
-// mocked so the runner's spawn path can be exercised deterministically.
-jest.mock('node:child_process', () => ({ execFile: jest.fn() }));
+// Never invokes the real claude CLI: child_process.spawn and fs are mocked so
+// the runner's streaming path can be exercised deterministically.
+jest.mock('node:child_process', () => ({ spawn: jest.fn() }));
+jest.mock('node:fs', () => ({ createWriteStream: jest.fn() }));
 jest.mock('node:fs/promises', () => ({ mkdir: jest.fn().mockResolvedValue(undefined) }));
 
-import { execFile } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { spawn } from 'node:child_process';
 import {
   extractStructuredReportFromText,
   extractStructuredReportFromEnvelope,
+  detectUsageLimit,
   runClaudeTask,
+  UsageLimitError,
 } from '../claude-runner';
 
-const mockExecFile = execFile as unknown as jest.Mock;
+const mockSpawn = spawn as unknown as jest.Mock;
 
-// promisify(execFile) calls execFile(file, args, options, callback); make the
-// mock resolve to { stdout, stderr } (or reject) via that trailing callback.
-function mockCliResult(stdout: string, stderr = '') {
-  mockExecFile.mockImplementation((_file, _args, _opts, cb) => cb(null, { stdout, stderr }));
+const REPORT = { status: 'successful', summary: 'ok', outputs: ['a'], next: 'done' };
+
+// Build a fake child process that emits the given stdout/stderr chunks, then
+// closes with the given code (or emits an `error` event when provided).
+function fakeChild(opts: { stdout?: string[]; stderr?: string[]; code?: number; error?: NodeJS.ErrnoException }) {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    kill: jest.Mock;
+  };
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = jest.fn();
+
+  Promise.resolve().then(() => {
+    if (opts.error) {
+      child.emit('error', opts.error);
+      return;
+    }
+    for (const chunk of opts.stdout ?? []) child.stdout.emit('data', Buffer.from(chunk));
+    for (const chunk of opts.stderr ?? []) child.stderr.emit('data', Buffer.from(chunk));
+    child.emit('close', opts.code ?? 0, null);
+  });
+
+  return child;
 }
-function mockCliError(error: Partial<NodeJS.ErrnoException> & { killed?: boolean }) {
-  mockExecFile.mockImplementation((_file, _args, _opts, cb) => cb(error));
+
+function resultEvent(result: string, extra: Record<string, unknown> = {}): string {
+  return `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, session_id: 'sess-1', result, ...extra })}\n`;
 }
+
+const INIT_EVENT = `${JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-1' })}\n`;
 
 beforeEach(() => {
   jest.clearAllMocks();
 });
-
-const REPORT = { status: 'successful', summary: 'ok', outputs: ['a'], next: 'done' };
-
-function envelope(result: string, extra: Record<string, unknown> = {}): string {
-  return JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result, ...extra });
-}
 
 describe('extractStructuredReportFromText', () => {
   it('parses direct JSON', () => {
@@ -75,47 +97,65 @@ describe('extractStructuredReportFromEnvelope', () => {
   });
 });
 
+describe('detectUsageLimit', () => {
+  it('detects a session-limit message and parses the reset time', () => {
+    expect(detectUsageLimit("You've hit your session limit · resets 3:45pm")).toEqual({ hit: true, resetsAt: '3:45pm' });
+  });
+
+  it('detects a usage-limit message without a reset time', () => {
+    expect(detectUsageLimit('usage limit reached, try later')).toEqual({ hit: true, resetsAt: null });
+  });
+
+  it('returns not-hit for ordinary output', () => {
+    expect(detectUsageLimit('all good, wrote the memo')).toEqual({ hit: false, resetsAt: null });
+  });
+});
+
 describe('runClaudeTask', () => {
   const baseInput = { prompt: 'do it', timeoutSeconds: 60, allowedTools: 'Read,Write' };
 
-  it('parses the CLI JSON envelope and returns the report', async () => {
-    mockCliResult(envelope(JSON.stringify(REPORT)));
-    const report = await runClaudeTask(baseInput);
-    expect(report).toEqual(REPORT);
+  it('parses the streamed result event and returns report + sessionId', async () => {
+    mockSpawn.mockImplementation(() => fakeChild({ stdout: [INIT_EVENT, resultEvent(JSON.stringify(REPORT))] }));
+    const run = await runClaudeTask(baseInput);
+    expect(run.report).toEqual(REPORT);
+    expect(run.sessionId).toBe('sess-1');
+    expect(run.resultText).toBe(JSON.stringify(REPORT));
   });
 
-  it('passes -p, --output-format json and the allowlist to the binary', async () => {
-    mockCliResult(envelope(JSON.stringify(REPORT)));
+  it('reassembles a report split across stdout chunks', async () => {
+    const full = resultEvent(JSON.stringify(REPORT));
+    mockSpawn.mockImplementation(() => fakeChild({ stdout: [INIT_EVENT + full.slice(0, 20), full.slice(20)] }));
+    const run = await runClaudeTask(baseInput);
+    expect(run.report).toEqual(REPORT);
+  });
+
+  it('passes -p, stream-json --verbose and the allowlist to the binary', async () => {
+    mockSpawn.mockImplementation(() => fakeChild({ stdout: [resultEvent(JSON.stringify(REPORT))] }));
     await runClaudeTask({ ...baseInput, claudeBin: '/fake/claude', cwd: '/fake/ws' });
 
-    const [file, args, opts] = mockExecFile.mock.calls[0];
+    const [file, args, opts] = mockSpawn.mock.calls[0];
     expect(file).toBe('/fake/claude');
-    expect(args).toEqual(['-p', 'do it', '--output-format', 'json', '--allowedTools', 'Read,Write']);
-    expect(opts).toMatchObject({ cwd: '/fake/ws', timeout: 60_000 });
+    expect(args).toEqual(['-p', 'do it', '--output-format', 'stream-json', '--verbose', '--allowedTools', 'Read,Write']);
+    expect(opts).toMatchObject({ cwd: '/fake/ws' });
   });
 
   it('throws a clear error when the binary is missing (ENOENT)', async () => {
-    mockCliError({ code: 'ENOENT' });
+    mockSpawn.mockImplementation(() => fakeChild({ error: Object.assign(new Error('nope'), { code: 'ENOENT' }) }));
     await expect(runClaudeTask({ ...baseInput, claudeBin: '/nope/claude' })).rejects.toThrow(/not found at "\/nope\/claude"/);
   });
 
-  it('throws a timeout error when the process is killed', async () => {
-    mockCliError({ killed: true });
-    await expect(runClaudeTask(baseInput)).rejects.toThrow(/timed out after 60s/);
+  it('throws a UsageLimitError when the CLI reports a limit', async () => {
+    mockSpawn.mockImplementation(() => fakeChild({ stdout: [resultEvent("You've hit your session limit · resets 3:45pm", { is_error: true })] }));
+    await expect(runClaudeTask(baseInput)).rejects.toBeInstanceOf(UsageLimitError);
   });
 
-  it('throws on empty stdout', async () => {
-    mockCliResult('');
-    await expect(runClaudeTask(baseInput)).rejects.toThrow(/empty stdout/);
+  it('throws when no result event is emitted', async () => {
+    mockSpawn.mockImplementation(() => fakeChild({ stdout: [INIT_EVENT], code: 0 }));
+    await expect(runClaudeTask(baseInput)).rejects.toThrow(/no result event/);
   });
 
-  it('throws on a non-JSON envelope', async () => {
-    mockCliResult('not json at all');
-    await expect(runClaudeTask(baseInput)).rejects.toThrow(/non-JSON output/);
-  });
-
-  it('throws when the envelope carries no usable report, flagging is_error', async () => {
-    mockCliResult(envelope('I could not do that.', { is_error: true }));
+  it('throws when the result carries no usable report, flagging is_error', async () => {
+    mockSpawn.mockImplementation(() => fakeChild({ stdout: [resultEvent('I could not do that.', { is_error: true })] }));
     await expect(runClaudeTask(baseInput)).rejects.toThrow(/no usable report \(is_error\)/);
   });
 });

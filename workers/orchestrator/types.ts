@@ -48,3 +48,42 @@ export interface ContainerReport {
   outputs: string[];
   next: string;
 }
+
+// Mirrors src/types DelegationQueueEntry (the worker never imports app code).
+export type DelegationMode = 'now' | 'background';
+export type DelegationState = 'queued' | 'running' | 'done' | 'failed';
+
+export interface DelegationRunResult {
+  status: ReportStatus;
+  summary: string;
+  outputs: string[];
+  next: string;
+  reportMarkdown: string;
+  sessionId: string | null;
+  traceFile: string | null;
+  finishedAt: string;
+}
+
+export interface DelegationQueueEntry {
+  asanaTaskGid: string;
+  integrationId: string;
+  title: string;
+  brief: string;
+  mode: DelegationMode;
+  state: DelegationState;
+  priority: number;
+  enqueuedAt: string;
+  startedAt?: string;
+  result?: DelegationRunResult;
+  updatedAt: string;
+}
+
+// Pacing budget read from the app's workflow-config (agentPacing section).
+// Rate is tiered: maxRunsPerHour applies during activeHours, sleepMaxRunsPerHour
+// (if set) applies outside it, with maxRunsPerDay as an overall backstop.
+export interface AgentPacing {
+  maxRunsPerHour: number;
+  sleepMaxRunsPerHour?: number;
+  maxRunsPerDay: number;
+  activeHours?: { start: string; end: string };
+}

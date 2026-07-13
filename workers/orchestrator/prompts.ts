@@ -8,51 +8,42 @@ function compactStories(stories: AsanaStory[]): string {
     .join('\n');
 }
 
-function baseTaskBlock(task: PlannerTask, stories: AsanaStory[], container: string): string {
+function baseTaskBlock(task: PlannerTask, stories: AsanaStory[], brief: string): string {
   return [
     `Task title: ${task.title}`,
     `Task id: ${task.id}`,
     `Integration: ${task.integrationName || 'unknown'}`,
     `Due on: ${task.dueOn || 'none'}`,
     `Description:\n${task.description || '(none)'}`,
-    `Container:\n${container}`,
+    `Your brief:\n${brief}`,
     stories.length ? `Recent stories/comments:\n${compactStories(stories)}` : 'Recent stories/comments: (none)',
   ].join('\n\n');
 }
 
-interface PromptInput {
+interface BriefPromptInput {
   task: PlannerTask;
   stories: AsanaStory[];
-  container: string;
+  brief: string;
 }
 
-interface SkillPromptInput extends PromptInput {
-  skillName: string;
-}
+// The brief is a plain-English instruction composed at delegate time. A brief
+// that starts with a `~name` token is treated as "use your <name> skill" (the
+// user's Claude Code skills are available to the runner via the Skill tool).
+export function buildBriefPrompt({ task, stories, brief }: BriefPromptInput): string {
+  const trimmed = brief.trim();
+  const skillMatch = trimmed.match(/^~([A-Za-z0-9_-]+)\b/);
+  const lead = skillMatch
+    ? [`Use your ${skillMatch[1]} skill for this task, following it exactly.`, 'Then carry out the brief below and do the actual work now.']
+    : ['Carry out the following brief as a bounded task.', 'Do the work now using available tools as needed.'];
 
-// A `~name` container maps to one of the user's Claude Code skills, which are
-// available to the headless `claude -p` runner via the Skill tool.
-export function buildSkillContainerPrompt({ task, stories, container, skillName }: SkillPromptInput): string {
   return [
-    `Use your ${skillName} skill for this task.`,
-    'Follow the skill exactly and do the actual work now.',
+    ...lead,
     'Return ONLY valid JSON with this schema:',
     '{"status":"successful|failed","summary":"string","outputs":["string"],"next":"string"}',
     'outputs should be a short list of concrete review items such as URLs, artefacts produced, or key caveats.',
+    'Do not include markdown fences or extra commentary.',
     'If information is missing, set status to failed and explain the blocker in summary/next.',
     '',
-    baseTaskBlock(task, stories, container),
-  ].join('\n');
-}
-
-export function buildPlainContainerPrompt({ task, stories, container }: PromptInput): string {
-  return [
-    'Execute the following Asana work container as a bounded task.',
-    'Do the work now using available tools as needed.',
-    'Return ONLY valid JSON with this schema:',
-    '{"status":"successful|failed","summary":"string","outputs":["string"],"next":"string"}',
-    'Do not include markdown fences or extra commentary.',
-    '',
-    baseTaskBlock(task, stories, container),
+    baseTaskBlock(task, stories, trimmed),
   ].join('\n');
 }

@@ -1,6 +1,6 @@
 // API utilities with retry logic and proper typing
 
-import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
+import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { CapacityRow } from '@/lib/capacity';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 
@@ -326,6 +326,49 @@ export const api = {
 
   async getOrchestratorStatus(): Promise<OrchestratorStatus> {
     return fetchWithRetry<OrchestratorStatus>('/api/orchestrator/status');
+  },
+
+  // Delegation queue (app-owned, keyed by Asana task GID)
+  async getDelegationQueue(): Promise<{ entries: Record<string, DelegationQueueEntry> }> {
+    return fetchWithRetry<{ entries: Record<string, DelegationQueueEntry> }>('/api/orchestrator/queue');
+  },
+
+  async upsertDelegationEntry(
+    asanaTaskGid: string,
+    integrationId: string,
+    updates: Partial<Omit<DelegationQueueEntry, 'asanaTaskGid' | 'integrationId' | 'updatedAt'>>
+  ): Promise<{ entry: DelegationQueueEntry }> {
+    return fetchWithRetry<{ entry: DelegationQueueEntry }>('/api/orchestrator/queue', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ asanaTaskGid, integrationId, ...updates }),
+    });
+  },
+
+  async deleteDelegationEntry(asanaTaskGid: string): Promise<{ success: boolean }> {
+    return fetchWithRetry<{ success: boolean }>(
+      `/api/orchestrator/queue?asanaTaskGid=${encodeURIComponent(asanaTaskGid)}`,
+      { method: 'DELETE' }
+    );
+  },
+
+  async runNowDelegation(
+    asanaTaskGid: string,
+    integrationId: string,
+    brief: string,
+    title: string
+  ): Promise<{ started: boolean }> {
+    return fetchWithRetry<{ started: boolean }>('/api/orchestrator/run-now', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ asanaTaskGid, integrationId, brief, title }),
+    });
+  },
+
+  async getDelegationTrace(file: string): Promise<{ events: unknown[] }> {
+    return fetchWithRetry<{ events: unknown[] }>(
+      `/api/orchestrator/trace?file=${encodeURIComponent(file)}`
+    );
   },
 
   async getSettings(): Promise<SettingsResponse> {

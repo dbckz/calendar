@@ -1,10 +1,11 @@
-// CLI entry point. Invoked by launchd / the `orchestrator:run` npm script via
-// `tsx workers/orchestrator/run.ts`. Kept thin so orchestrator.ts stays
-// import-safe for the Jest tests.
-import { runOnce } from './orchestrator';
+// Pacer entry point. Invoked by launchd / the `orchestrator:run` npm script via
+// `tsx workers/orchestrator/run.ts`. Each tick budget-gates then drains at most
+// one queued delegation entry. Kept thin so orchestrator.ts stays import-safe
+// for the Jest tests.
+import { drainOnce } from './orchestrator';
 import { appendHistory, releaseLock } from './status';
 
-runOnce()
+drainOnce()
   .then(result => {
     console.log(JSON.stringify(result, null, 2));
   })

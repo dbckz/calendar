@@ -1,4 +1,4 @@
-import type { AsanaStory, AsanaTag, PlannerTask } from './types';
+import type { AgentPacing, AsanaStory, AsanaTag, DelegationQueueEntry, DelegationRunResult, DelegationState, PlannerTask } from './types';
 
 function checkResponse(response: Response, body: string, label: string): void {
   if (!response.ok) {
@@ -11,6 +11,61 @@ export async function fetchAsanaTasks(baseUrl: string): Promise<PlannerTask[]> {
   const body = await response.text();
   checkResponse(response, body, 'fetch Asana tasks');
   return JSON.parse(body);
+}
+
+export async function fetchTaskById(baseUrl: string, taskId: string): Promise<PlannerTask | null> {
+  const tasks = await fetchAsanaTasks(baseUrl);
+  return tasks.find(task => task.id === taskId) || null;
+}
+
+// --- Delegation queue (app-owned) ---
+
+export async function claimNextEntry(baseUrl: string): Promise<DelegationQueueEntry | null> {
+  const response = await fetch(`${baseUrl}/api/orchestrator/claim`, { method: 'POST' });
+  const body = await response.text();
+  checkResponse(response, body, 'claim next delegation entry');
+  return JSON.parse(body).entry ?? null;
+}
+
+export async function fetchQueueEntry(baseUrl: string, taskGid: string): Promise<DelegationQueueEntry | null> {
+  const response = await fetch(`${baseUrl}/api/orchestrator/queue`);
+  const body = await response.text();
+  checkResponse(response, body, 'fetch delegation queue');
+  const entries: Record<string, DelegationQueueEntry> = JSON.parse(body).entries ?? {};
+  return entries[taskGid] ?? null;
+}
+
+export async function markEntryRunning(baseUrl: string, entry: DelegationQueueEntry): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/orchestrator/queue`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ asanaTaskGid: entry.asanaTaskGid, integrationId: entry.integrationId, state: 'running' }),
+  });
+  const body = await response.text();
+  checkResponse(response, body, 'mark delegation entry running');
+}
+
+export async function reportResult(
+  baseUrl: string,
+  taskGid: string,
+  integrationId: string,
+  state: DelegationState,
+  result?: DelegationRunResult,
+): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/orchestrator/result`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ asanaTaskGid: taskGid, integrationId, state, result }),
+  });
+  const body = await response.text();
+  checkResponse(response, body, 'report delegation result');
+}
+
+export async function fetchAgentPacing(baseUrl: string): Promise<AgentPacing | null> {
+  const response = await fetch(`${baseUrl}/api/workflow-config`);
+  const body = await response.text();
+  checkResponse(response, body, 'fetch workflow config');
+  return JSON.parse(body)?.config?.agentPacing ?? null;
 }
 
 export async function fetchAsanaTags(baseUrl: string, integrationId: string): Promise<AsanaTag[]> {

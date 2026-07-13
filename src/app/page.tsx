@@ -15,6 +15,7 @@ import { DashboardContent } from '@/components/dashboard/DashboardContent';
 import { useTasks } from '@/hooks/useTasks';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { useTaskMetadata } from '@/hooks/useTaskMetadata';
+import { useDelegationQueue } from '@/hooks/useDelegationQueue';
 import { useToast } from '@/hooks/useToast';
 import { CalendarEvent, DragItem, TaskType, SettingsResponse, AsanaFilterState } from '@/types';
 import { api } from '@/lib/api';
@@ -99,6 +100,7 @@ export default function Home() {
 
   const toast = useToast();
   const { metadataByGid, saveMetadata } = useTaskMetadata();
+  const { delegationByGid, refresh: refreshDelegation } = useDelegationQueue();
   const { addTask, updateTask, removeTask, getTasksForDate } = useTasks();
   const {
     googleEvents,
@@ -863,6 +865,8 @@ export default function Home() {
             onClearOpenTaskDialog={handleClearOpenTaskDialog}
             taskMetadata={metadataByGid}
             onSaveTaskMetadata={saveMetadata}
+            delegation={delegationByGid}
+            onDelegated={refreshDelegation}
           />
         </aside>
 
@@ -961,6 +965,8 @@ export default function Home() {
             onClearOpenTaskDialog={handleClearOpenTaskDialog}
             taskMetadata={metadataByGid}
             onSaveTaskMetadata={saveMetadata}
+            delegation={delegationByGid}
+            onDelegated={refreshDelegation}
           />
         </aside>
       </div>

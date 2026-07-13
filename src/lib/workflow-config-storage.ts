@@ -23,9 +23,29 @@ export interface SchedulingConfig {
   };
 }
 
+// Budget policy for the delegation pacer (drains the queue at a sustainable
+// rate so a big queue never torches usage limits). Rate is tiered by time of
+// day: a modest cap during `activeHours` (when you're using Claude yourself)
+// and a higher cap outside it (while you sleep), biasing work toward the night.
+export interface AgentPacingConfig {
+  // Hourly cap during activeHours (when you're likely using Claude yourself).
+  maxRunsPerHour: number;
+  // Hourly cap outside activeHours (overnight). Defaults to maxRunsPerHour when
+  // omitted (i.e. no day/night difference).
+  sleepMaxRunsPerHour?: number;
+  // Overall daily backstop across both tiers.
+  maxRunsPerDay: number;
+  // Your active window, "HH:MM"-"HH:MM"; may wrap past midnight
+  // (e.g. 07:00-01:00). Outside this window the sleep rate applies.
+  activeHours?: { start: string; end: string };
+}
+
 export interface WorkflowConfig {
   taskQuotas: Record<string, TaskQuota>;
   scheduling: SchedulingConfig;
+  // Always populated by get/saveWorkflowConfig; optional in the type so older
+  // fixtures/config files without it still satisfy WorkflowConfig.
+  agentPacing?: AgentPacingConfig;
   // Maps each quota category to the task types that count toward it.
   // Values are matched (case-insensitively) against an Asana task's "Type"
   // custom field value and against an ad-hoc task's taskType. A block also
@@ -70,6 +90,12 @@ const DEFAULT_CONFIG: WorkflowConfig = {
       start: '09:00',
       end: '17:00',
     },
+  },
+  agentPacing: {
+    maxRunsPerHour: 2,        // daytime (active hours) — light, you're using Claude
+    sleepMaxRunsPerHour: 6,   // overnight — drain harder while you sleep
+    maxRunsPerDay: 40,        // overall backstop across both tiers
+    activeHours: { start: '07:00', end: '01:00' },
   },
   // By default, each category matches an Asana Type / ad-hoc taskType with the
   // same name (handled by the direct category-name match in capacity logic),
@@ -147,6 +173,7 @@ export async function getWorkflowConfig(): Promise<WorkflowConfig> {
     return {
       taskQuotas: parsed.taskQuotas || DEFAULT_CONFIG.taskQuotas,
       scheduling: parsed.scheduling || DEFAULT_CONFIG.scheduling,
+      agentPacing: parsed.agentPacing || DEFAULT_CONFIG.agentPacing,
       typeMapping,
       lastUpdated: parsed.lastUpdated || new Date().toISOString(),
     };
@@ -164,6 +191,7 @@ export async function saveWorkflowConfig(
   const configToWrite: WorkflowConfig = {
     ...config,
     typeMapping: config.typeMapping ?? {},
+    agentPacing: config.agentPacing ?? DEFAULT_CONFIG.agentPacing,
     lastUpdated: new Date().toISOString(),
   };
 

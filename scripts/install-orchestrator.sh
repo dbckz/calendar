@@ -32,7 +32,7 @@ launchctl load "$PLIST_PATH"
 echo "Installed and loaded $PLIST_NAME"
 echo "  plist:  $PLIST_PATH"
 echo "  logs:   $LOG_DIR/orchestrator.log"
-echo "  runs:   every 600s (StartInterval)"
+echo "  runs:   every 600s (StartInterval); agentPacing caps limit actual runs"
 echo
 echo "Trigger a one-off run now with:"
 echo "  launchctl start $PLIST_NAME"
