@@ -88,14 +88,14 @@ export function DelegationWidget({ onTaskClick }: DelegationWidgetProps) {
   const isEmpty = running.length === 0 && queued.length === 0 && recent.length === 0;
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5">
-      <div className="flex items-center gap-2 mb-4">
-        <Bot className="w-5 h-5 text-indigo-600" />
-        <h2 className="text-lg font-semibold text-gray-900">Delegation</h2>
+    <div className="bg-white rounded-xl border border-gray-200 p-4 h-full flex flex-col min-h-0">
+      <div className="flex items-center gap-2 mb-2 flex-shrink-0">
+        <Bot className="w-4 h-4 text-indigo-600" />
+        <h2 className="text-base font-semibold text-gray-900">Delegation</h2>
       </div>
 
       {pausedUntil && (
-        <div className="flex items-center gap-1.5 mb-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+        <div className="flex items-center gap-1.5 mb-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 flex-shrink-0">
           <PauseCircle className="w-3.5 h-3.5" /> Paced — paused for {timeUntil(pausedUntil)} (usage limit)
         </div>
       )}
@@ -103,7 +103,7 @@ export function DelegationWidget({ onTaskClick }: DelegationWidgetProps) {
       {isEmpty ? (
         <p className="text-sm text-gray-400 italic">No delegated tasks in flight.</p>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-4 overflow-y-auto flex-1 min-h-0">
           {running.length > 0 && (
             <div>
               <div className="flex items-center gap-1.5 mb-1">

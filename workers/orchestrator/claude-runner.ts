@@ -154,6 +154,8 @@ interface RunClaudeTaskInput {
   prompt: string;
   timeoutSeconds: number;
   allowedTools: string;
+  permissionMode?: string;   // e.g. 'bypassPermissions' | 'auto'
+  disallowedTools?: string;  // comma list always denied (e.g. 'Bash')
   // Absolute path to tee the raw stream-json JSONL into. Omit to skip teeing.
   traceFile?: string;
   claudeBin?: string;
@@ -167,6 +169,8 @@ export async function runClaudeTask({
   prompt,
   timeoutSeconds,
   allowedTools,
+  permissionMode = config.claudePermissionMode,
+  disallowedTools = config.claudeDisallowedTools,
   traceFile,
   claudeBin = config.claudeBin,
   cwd = config.agentWorkspace,
@@ -185,6 +189,8 @@ export async function runClaudeTask({
     '--output-format', 'stream-json',
     '--verbose',
     '--allowedTools', allowedTools,
+    ...(permissionMode ? ['--permission-mode', permissionMode] : []),
+    ...(disallowedTools ? ['--disallowedTools', disallowedTools] : []),
   ];
 
   // A mutable holder so TS keeps the declared types across the closure mutation

@@ -6,7 +6,8 @@ import { Calendar, Repeat, LayoutDashboard } from 'lucide-react';
 import { Header } from '@/components/Header';
 import { Timeline } from '@/components/Timeline';
 import { IntegrationStatus } from '@/components/IntegrationStatus';
-import { AsanaSidebar } from '@/components/AsanaSidebar';
+import { AsanaSidebar, TaskDetailDialog } from '@/components/AsanaSidebar';
+import { DelegateModal } from '@/components/DelegateModal';
 import { AddTaskModal } from '@/components/AddTaskModal';
 import { AllDayEventsBar } from '@/components/AllDayEventsBar';
 import { Reminders } from '@/components/Reminders';
@@ -20,6 +21,14 @@ import { useToast } from '@/hooks/useToast';
 import { CalendarEvent, DragItem, TaskType, SettingsResponse, AsanaFilterState } from '@/types';
 import { api } from '@/lib/api';
 import { containsHtml, htmlToReadableText } from '@/lib/html-utils';
+
+function formatMinutes(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours === 0) return `${mins}m`;
+  if (mins === 0) return `${hours}h`;
+  return `${hours}h ${mins}m`;
+}
 
 const COLOR_SCHEMES = [
   {
@@ -99,7 +108,7 @@ export default function Home() {
   const colorScheme = COLOR_SCHEMES[colorSchemeIndex];
 
   const toast = useToast();
-  const { metadataByGid, saveMetadata } = useTaskMetadata();
+  const { metadataByGid, saveMetadata, reload: reloadMetadata } = useTaskMetadata();
   const { delegationByGid, refresh: refreshDelegation } = useDelegationQueue();
   const { addTask, updateTask, removeTask, getTasksForDate } = useTasks();
   const {
@@ -803,6 +812,23 @@ export default function Home() {
     setOpenTaskDialogId(taskId);
   }, []);
 
+  // Open a task from the Command Center WITHOUT leaving it (a page-level dialog
+  // renders over the dashboard). Distinct from handleOpenAsanaTask, which is for
+  // calendar-originated opens.
+  const handleOpenTaskInPlace = useCallback((taskId: string) => {
+    setOpenTaskDialogId(taskId);
+  }, []);
+
+  const dashboardDialogTask = useMemo(
+    () => (activeTab === 'dashboard' && openTaskDialogId
+      ? allAsanaTasks.find(t => t.id === openTaskDialogId) ?? null
+      : null),
+    [activeTab, openTaskDialogId, allAsanaTasks],
+  );
+
+  // One-click delegate from the AI-runnable section (compose-brief modal).
+  const [delegateTask, setDelegateTask] = useState<CalendarEvent | null>(null);
+
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
       <Header
@@ -821,16 +847,46 @@ export default function Home() {
       />
 
       {activeTab === 'dashboard' ? (
-        <div className="flex-1 overflow-y-auto bg-gray-50">
+        <div className="flex-1 overflow-hidden min-h-0 bg-gray-50">
           <DashboardContent
             todayEvents={todayTimedEvents}
             asanaTasks={allAsanaTasks}
             metadataByGid={metadataByGid}
             timeWorkedByIntegration={timeWorkedByIntegration}
             asanaIntegrations={asanaIntegrations}
-            onOpenTask={handleOpenAsanaTask}
+            onOpenTask={handleOpenTaskInPlace}
+            onDelegateTask={setDelegateTask}
+            onReloadMetadata={reloadMetadata}
             onPlanApplied={fetchAllEvents}
           />
+          {delegateTask && delegateTask.integrationId && (
+            <DelegateModal
+              asanaTaskGid={delegateTask.id}
+              integrationId={delegateTask.integrationId}
+              taskTitle={delegateTask.title}
+              initialBrief={delegationByGid[delegateTask.id]?.brief || ''}
+              onClose={() => setDelegateTask(null)}
+              onDelegated={refreshDelegation}
+            />
+          )}
+          {/* Open a task over the Command Center without switching to calendar */}
+          {dashboardDialogTask && (
+            <TaskDetailDialog
+              task={dashboardDialogTask}
+              formatDuration={formatMinutes}
+              onClose={handleClearOpenTaskDialog}
+              onToggleComplete={handleSidebarAsanaComplete}
+              onAddComment={handleSidebarAsanaComment}
+              onUpdateTask={handleSidebarAsanaUpdate}
+              onDeleteTask={handleSidebarAsanaDelete}
+              projects={asanaProjects}
+              typeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
+              metadata={metadataByGid[dashboardDialogTask.id]}
+              onSaveMetadata={saveMetadata}
+              delegationEntry={delegationByGid[dashboardDialogTask.id]}
+              onDelegated={refreshDelegation}
+            />
+          )}
         </div>
       ) : activeTab === 'rituals' ? (
         <div className="flex-1 overflow-y-auto">

@@ -129,13 +129,20 @@ describe('runClaudeTask', () => {
     expect(run.report).toEqual(REPORT);
   });
 
-  it('passes -p, stream-json --verbose and the allowlist to the binary', async () => {
+  it('passes -p, stream-json --verbose, the allowlist, permission mode and disallowed tools', async () => {
     mockSpawn.mockImplementation(() => fakeChild({ stdout: [resultEvent(JSON.stringify(REPORT))] }));
-    await runClaudeTask({ ...baseInput, claudeBin: '/fake/claude', cwd: '/fake/ws' });
+    await runClaudeTask({ ...baseInput, claudeBin: '/fake/claude', cwd: '/fake/ws', permissionMode: 'bypassPermissions', disallowedTools: 'Bash' });
 
     const [file, args, opts] = mockSpawn.mock.calls[0];
     expect(file).toBe('/fake/claude');
-    expect(args).toEqual(['-p', 'do it', '--output-format', 'stream-json', '--verbose', '--allowedTools', 'Read,Write']);
+    expect(args).toEqual([
+      '-p', 'do it',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--allowedTools', 'Read,Write',
+      '--permission-mode', 'bypassPermissions',
+      '--disallowedTools', 'Bash',
+    ]);
     expect(opts).toMatchObject({ cwd: '/fake/ws' });
   });
 

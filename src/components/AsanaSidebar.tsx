@@ -1136,7 +1136,7 @@ function getDueDateStyles(dueOn: string): string {
   return 'text-gray-900';
 }
 
-function TaskDetailDialog({
+export function TaskDetailDialog({
   task,
   scheduledDuration,
   formatDuration,
@@ -1771,7 +1771,12 @@ function DelegationSection({ entry, onDelegate }: { entry?: DelegationQueueEntry
       }
     : null;
 
-  const resumeCmd = result?.sessionId ? `claude --resume ${result.sessionId}` : null;
+  // Headless sessions are keyed by working directory, so the resume must run
+  // from the agent workspace the run used — otherwise Claude reports
+  // "No conversation found with session ID".
+  const resumeCmd = result?.sessionId
+    ? `cd ~/.claude/data/calendar/agent-workspace && claude --resume ${result.sessionId}`
+    : null;
 
   return (
     <div className="space-y-2">
@@ -1809,10 +1814,11 @@ function DelegationSection({ entry, onDelegate }: { entry?: DelegationQueueEntry
           {resumeCmd && (
             <button
               onClick={() => { navigator.clipboard?.writeText(resumeCmd); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
-              className="flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800"
-              title="Run from the agent workspace directory to resume this session"
+              className="flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800 max-w-full"
+              title={`Copies: ${resumeCmd}`}
             >
-              <Copy className="w-3 h-3" /> {copied ? 'Copied' : resumeCmd}
+              <Copy className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate">{copied ? 'Copied!' : 'Copy resume command'}</span>
             </button>
           )}
         </div>

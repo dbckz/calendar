@@ -2,7 +2,7 @@
 // Uses file-based storage in ~/.claude/data/calendar/ for persistence across builds
 
 import { promises as fs } from 'fs';
-import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState, TemplateGroup, TaskMetadata, DelegationQueueEntry } from '@/types';
+import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState, TemplateGroup, TaskMetadata, DelegationQueueEntry, AiClassificationEntry } from '@/types';
 import { DATA_DIR, USER_DATA_FILE } from './data-paths';
 
 const DEFAULT_ASANA_FILTERS: AsanaFilterState = {
@@ -38,6 +38,7 @@ interface UserData {
   googleEventAttributions?: GoogleEventAttribution[];
   taskMetadata?: Record<string, TaskMetadata>; // Key is Asana task GID
   delegationQueue?: Record<string, DelegationQueueEntry>; // Key is Asana task GID
+  aiClassification?: Record<string, AiClassificationEntry>; // Key is Asana task GID
 }
 
 const DEFAULT_USER_DATA: UserData = {
@@ -50,6 +51,7 @@ const DEFAULT_USER_DATA: UserData = {
   googleEventAttributions: [],
   taskMetadata: {},
   delegationQueue: {},
+  aiClassification: {},
 };
 
 async function ensureDataDir(): Promise<void> {
@@ -84,6 +86,7 @@ export async function getUserData(): Promise<UserData> {
       googleEventAttributions: parsed.googleEventAttributions || [],
       taskMetadata: parsed.taskMetadata || {},
       delegationQueue: parsed.delegationQueue || {},
+      aiClassification: parsed.aiClassification || {},
     };
   } catch {
     // Deep clone so callers that mutate nested collections (e.g. upserting into
@@ -607,5 +610,18 @@ export async function deleteDelegationEntry(asanaTaskGid: string): Promise<boole
   delete data.delegationQueue[asanaTaskGid];
   await saveUserData(data);
   return true;
+}
+
+// AI-suitability classification cache (keyed by Asana task GID).
+export async function getAllAiClassification(): Promise<Record<string, AiClassificationEntry>> {
+  const data = await getUserData();
+  return data.aiClassification || {};
+}
+
+// Merge a batch of freshly-assessed verdicts into the cache in one write.
+export async function saveAiClassification(entries: Record<string, AiClassificationEntry>): Promise<void> {
+  const data = await getUserData();
+  data.aiClassification = { ...(data.aiClassification || {}), ...entries };
+  await saveUserData(data);
 }
 

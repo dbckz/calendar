@@ -1,22 +1,17 @@
 import path from 'node:path';
 import { config } from './config';
 import {
-  fetchAsanaTags,
   fetchTaskById,
   fetchTaskStories,
-  createAsanaTag,
-  addTaskComment,
-  updateTaskTags,
   claimNextEntry,
   fetchQueueEntry,
   markEntryRunning,
   reportResult,
   fetchAgentPacing,
 } from './planner-client';
-import { getTag, resolveWorkspaceTag, taskUrl } from './asana-task-utils';
+import { taskUrl } from './asana-task-utils';
 import { runClaudeTask, UsageLimitError } from './claude-runner';
 import { buildBriefPrompt } from './prompts';
-import { formatComment } from './reporting';
 import {
   acquireLock,
   appendHistory,
@@ -29,7 +24,6 @@ import {
 import type {
   AgentPacing,
   AsanaStory,
-  AsanaTag,
   ContainerReport,
   DelegationQueueEntry,
   DelegationRunResult,
@@ -55,42 +49,22 @@ function normalizeReport(report: Partial<ContainerReport> | null | undefined): C
   };
 }
 
-async function ensureWorkspaceTag(integrationId: string, tags: AsanaTag[], name: string, color: string): Promise<AsanaTag> {
-  const existing = resolveWorkspaceTag(tags, name);
-  if (existing) {
-    return existing;
-  }
-  return createAsanaTag(config.plannerBaseUrl, integrationId, name, color);
-}
-
 // Execute one delegation entry end-to-end. Assumes the run lock is already held
 // and the entry is marked `running`. Runs the headless agent, tees a live trace,
-// posts the Asana comment (permanent record), flips the decoration tags, and
-// reports the full result back to the app queue.
+// and reports the full result back to the app queue. Deliberately writes NOTHING
+// back to Asana — the result, output and brief are kept in this tool only.
 export async function runTask(entry: DelegationQueueEntry): Promise<RunResult> {
   const { asanaTaskGid: gid, integrationId } = entry;
   const ranAt = new Date().toISOString();
   await setCurrentTask({ gid, title: entry.title });
 
+  // Read-only: fetch task context to build the prompt. No Asana writes.
   const task: PlannerTask = (await fetchTaskById(config.plannerBaseUrl, gid)) || {
     id: gid,
     title: entry.title,
     integrationId,
   };
   const stories: AsanaStory[] = await fetchTaskStories(config.plannerBaseUrl, gid, integrationId).catch(() => []);
-
-  // Decoration tags: ready/complete/failed -> in_progress.
-  const workspaceTags = await fetchAsanaTags(config.plannerBaseUrl, integrationId).catch(() => [] as AsanaTag[]);
-  const inProgressTag = await ensureWorkspaceTag(integrationId, workspaceTags, config.inProgressTagName, 'light-blue');
-  const completeTag = await ensureWorkspaceTag(integrationId, workspaceTags, config.completeTagName, 'light-green');
-  const failedTag = await ensureWorkspaceTag(integrationId, workspaceTags, config.failedTagName, 'dark-red');
-  const readyTag = getTag(task, config.readyTagName);
-  const existingComplete = getTag(task, config.completeTagName);
-  const existingFailed = getTag(task, config.failedTagName);
-  await updateTaskTags(config.plannerBaseUrl, gid, integrationId, {
-    removeTags: [readyTag?.gid, existingComplete?.gid, existingFailed?.gid].filter((g): g is string => Boolean(g)),
-    addTags: [inProgressTag.gid],
-  }).catch(() => { /* tags are decoration; never fail the run on a tag error */ });
 
   await heartbeat();
 
@@ -128,16 +102,6 @@ export async function runTask(entry: DelegationQueueEntry): Promise<RunResult> {
     };
     traceBasename = path.basename(traceFile);
   }
-
-  // Permanent record: Asana comment.
-  const comment = formatComment(entry.brief || 'delegated brief', report);
-  await addTaskComment(config.plannerBaseUrl, gid, integrationId, comment.text, comment.htmlText).catch(() => { /* best effort */ });
-
-  // Terminal decoration tag.
-  await updateTaskTags(config.plannerBaseUrl, gid, integrationId, {
-    removeTags: [inProgressTag.gid, completeTag.gid, failedTag.gid],
-    addTags: [finalStatus === 'successful' ? completeTag.gid : failedTag.gid],
-  }).catch(() => { /* decoration */ });
 
   const runResult: DelegationRunResult = {
     status: finalStatus,

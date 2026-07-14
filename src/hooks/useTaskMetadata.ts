@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 interface UseTaskMetadataReturn {
   metadataByGid: Record<string, TaskMetadata>;
   isLoading: boolean;
+  reload: () => Promise<void>;
   saveMetadata: (
     asanaTaskGid: string,
     integrationId: string,
@@ -26,16 +27,20 @@ export function useTaskMetadata(): UseTaskMetadataReturn {
     };
   }, []);
 
-  useEffect(() => {
-    api.getTaskMetadata()
-      .then(({ metadata }) => {
-        if (isMountedRef.current) setMetadataByGid(metadata || {});
-      })
-      .catch(err => console.error('Failed to load task metadata:', err))
-      .finally(() => {
-        if (isMountedRef.current) setIsLoading(false);
-      });
+  const reload = useCallback(async () => {
+    try {
+      const { metadata } = await api.getTaskMetadata();
+      if (isMountedRef.current) setMetadataByGid(metadata || {});
+    } catch (err) {
+      console.error('Failed to load task metadata:', err);
+    } finally {
+      if (isMountedRef.current) setIsLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
 
   const saveMetadata = useCallback(async (
     asanaTaskGid: string,
@@ -72,5 +77,5 @@ export function useTaskMetadata(): UseTaskMetadataReturn {
     }
   }, [metadataByGid]);
 
-  return { metadataByGid, isLoading, saveMetadata };
+  return { metadataByGid, isLoading, reload, saveMetadata };
 }

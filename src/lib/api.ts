@@ -371,6 +371,22 @@ export const api = {
     );
   },
 
+  // Re-assess which tasks are AI-runnable. Cached tasks are skipped server-side;
+  // only changed/new ones hit the model. No retry — the call is expensive.
+  async classifyAiTasks(
+    tasks: Array<{ gid: string; integrationId: string; title: string; description?: string; integrationName?: string }>
+  ): Promise<{ total: number; assessed: number; cached: number; changed: number; promptVersion: string }> {
+    return fetchWithRetry(
+      '/api/tasks/classify-ai',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tasks }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
   async getSettings(): Promise<SettingsResponse> {
     return fetchWithRetry<SettingsResponse>('/api/settings');
   },

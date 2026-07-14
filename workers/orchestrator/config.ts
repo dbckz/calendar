@@ -12,22 +12,25 @@ const repoRoot = process.env.CALENDAR_APP_DIR || process.cwd();
 // code (avoids pulling in server modules that touch integrations.json).
 const DATA_DIR = path.join(homedir(), '.claude', 'data', 'calendar');
 
-// Tool allowlist for the headless `claude -p` agent runner. The user has
-// deliberately chosen an explicit allowlist WITHOUT Bash (and without
-// --dangerously-skip-permissions): tasks that need shell access fail cleanly
-// rather than run unsandboxed. Override via CLAUDE_ALLOWED_TOOLS if needed.
+// Tool allowlist for the headless `claude -p` agent runner. MCP entries MUST use
+// the `mcp__<server>__*` glob form — Claude Code silently skips a bare
+// `mcp__<server>` (no tool segment), so those connectors would never be
+// approved. Bash is deliberately excluded here AND disallowed outright (see
+// claudeDisallowedTools) so shell access is never available, even under the
+// bypass permission mode below. Override via CLAUDE_ALLOWED_TOOLS if needed.
 const DEFAULT_ALLOWED_TOOLS = [
   'Skill',
   'Read',
   'Write',
   'WebSearch',
   'WebFetch',
-  'mcp__claude_ai_Google_Calendar',
-  'mcp__claude_ai_Gmail',
-  'mcp__claude_ai_Asana',
-  'mcp__claude_ai_Slack',
-  'mcp__claude_ai_HubSpot',
-  'mcp__claude_ai_Google_Drive',
+  'mcp__claude_ai_Google_Calendar__*',
+  'mcp__claude_ai_Gmail__*',
+  'mcp__claude_ai_Asana__*',
+  'mcp__claude_ai_Slack__*',
+  'mcp__claude_ai_HubSpot__*',
+  'mcp__claude_ai_Google_Drive__*',
+  'mcp__claude_ai_Notion__*',
 ].join(',');
 
 function resolvePlannerBaseUrl(): string {
@@ -62,6 +65,15 @@ export const config = {
   claudeBin: process.env.CLAUDE_BIN || path.join(homedir(), '.local', 'bin', 'claude'),
   claudeTimeoutSeconds: Number(process.env.CLAUDE_TIMEOUT_SECONDS || 900),
   claudeAllowedTools: process.env.CLAUDE_ALLOWED_TOOLS || DEFAULT_ALLOWED_TOOLS,
+  // `auto` mode: decisions are made by background safety checks that approve
+  // legitimate writes (including scoped MCP/connector writes) without prompting,
+  // while blocking risky actions — the sweet spot for unattended runs. Combined
+  // with the scoped `--allowedTools` list (correct mcp__server__* globs) and no
+  // shell (Bash disallowed). NOT `bypassPermissions` (which disables the safety
+  // checks entirely). Override with CLAUDE_PERMISSION_MODE (e.g. `acceptEdits`
+  // for files-only, or `bypassPermissions` as a last resort).
+  claudePermissionMode: process.env.CLAUDE_PERMISSION_MODE || 'auto',
+  claudeDisallowedTools: process.env.CLAUDE_DISALLOWED_TOOLS || 'Bash',
   // Scratch workspace so the agent's Write output lands here, not in the repo.
   agentWorkspace: path.join(DATA_DIR, 'agent-workspace'),
   // Per-run stream-json trace files (mirrors src/lib/data-paths.ts AGENT_RUNS_DIR).

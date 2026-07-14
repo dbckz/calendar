@@ -1,15 +1,17 @@
 'use client';
 
-import { useState } from 'react';
-import { CalendarClock } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { CalendarClock, Bot, Loader2 } from 'lucide-react';
 
 import { CalendarEvent, TaskMetadata } from '@/types';
+import { api } from '@/lib/api';
 import { useDashboard } from '@/hooks/useDashboard';
 import { TodayColumn } from './TodayColumn';
 import { TopTasks } from './TopTasks';
 import { CapacityWidget } from './CapacityWidget';
 import { ClientTimeWidget } from './ClientTimeWidget';
 import { DelegationWidget } from './DelegationWidget';
+import { AiRunnableTasks } from './AiRunnableTasks';
 import { PlanWeekModal } from './PlanWeekModal';
 
 interface Integration {
@@ -24,9 +26,13 @@ interface DashboardContentProps {
   timeWorkedByIntegration: Record<string, number>;
   asanaIntegrations: Integration[];
   onOpenTask?: (taskId: string) => void;
+  onDelegateTask?: (task: CalendarEvent) => void; // open the compose-brief modal directly
+  onReloadMetadata?: () => Promise<void> | void; // refresh aiDelegable flags after re-assessment
   onPlanApplied?: () => void; // refresh calendar/asana data after applying a plan
 }
 
+// Fixed, viewport-height three-column layout — nothing scrolls the page itself;
+// each box scrolls or paginates internally.
 export function DashboardContent({
   todayEvents,
   asanaTasks,
@@ -34,40 +40,108 @@ export function DashboardContent({
   timeWorkedByIntegration,
   asanaIntegrations,
   onOpenTask,
+  onDelegateTask,
+  onReloadMetadata,
   onPlanApplied,
 }: DashboardContentProps) {
   const { data, isLoading, refetch } = useDashboard();
   const [showPlanModal, setShowPlanModal] = useState(false);
 
+  const [isReassessing, setIsReassessing] = useState(false);
+  const [reassessNote, setReassessNote] = useState<string | null>(null);
+
+  const handleReassess = useCallback(async () => {
+    setIsReassessing(true);
+    setReassessNote(null);
+    try {
+      const payload = asanaTasks
+        .filter(t => !t.completed && t.integrationId)
+        .map(t => ({
+          gid: t.id,
+          integrationId: t.integrationId as string,
+          title: t.title,
+          description: t.description,
+          integrationName: t.integrationName,
+        }));
+      const r = await api.classifyAiTasks(payload);
+      await onReloadMetadata?.();
+      setReassessNote(
+        `Assessed ${r.assessed}, ${r.cached} unchanged${r.changed ? `, ${r.changed} updated` : ''}.`
+      );
+    } catch (err) {
+      setReassessNote(err instanceof Error ? err.message : 'Re-assessment failed.');
+    } finally {
+      setIsReassessing(false);
+    }
+  }, [asanaTasks, onReloadMetadata]);
+
   return (
-    <div className="max-w-7xl mx-auto p-4 md:p-6">
+    <div className="h-full flex flex-col p-4 md:p-6 min-h-0">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4 md:mb-6">
+      <div className="flex items-center justify-between mb-4 flex-shrink-0 gap-3">
         <h1 className="text-xl font-semibold text-gray-900">Command Center</h1>
-        <button
-          onClick={() => setShowPlanModal(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
-        >
-          <CalendarClock className="w-4 h-4" />
-          Plan my week
-        </button>
+        <div className="flex items-center gap-3">
+          {reassessNote && <span className="text-xs text-gray-500 hidden md:inline">{reassessNote}</span>}
+          <button
+            onClick={handleReassess}
+            disabled={isReassessing}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="Re-assess which incomplete tasks an agent could run (cached — only changed tasks are re-checked)"
+          >
+            {isReassessing
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Assessing AI-runnable…</>
+              : <><Bot className="w-4 h-4" /> Assess AI-runnable</>}
+          </button>
+          <button
+            onClick={() => setShowPlanModal(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
+          >
+            <CalendarClock className="w-4 h-4" />
+            Plan my week
+          </button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
-        {/* Today column - full height on the left */}
-        <div className="lg:col-span-1 lg:row-span-2">
+      {/* Fixed 3-column grid filling the remaining height. min-w-0 on every grid
+          item lets columns shrink to their track instead of being forced wider by
+          long unbroken content (e.g. a bare URL), which would clash with the next
+          column. */}
+      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
+        {/* Left: Today (single box, internal scroll) */}
+        <div className="min-h-0 min-w-0 h-full">
           <TodayColumn events={todayEvents} />
         </div>
 
-        {/* Widgets - right side, stack on narrow screens */}
-        <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
-          <TopTasks tasks={asanaTasks} metadataByGid={metadataByGid} onTaskClick={onOpenTask} />
-          <CapacityWidget rows={data?.capacity ?? []} isLoading={isLoading} />
-          <ClientTimeWidget
-            timeWorkedByIntegration={timeWorkedByIntegration}
-            integrations={asanaIntegrations}
-          />
-          <DelegationWidget tasks={asanaTasks} onTaskClick={onOpenTask} />
+        {/* Middle: Top Tasks + AI-runnable, each half height, paginated */}
+        <div className="min-h-0 min-w-0 grid grid-rows-2 gap-4 md:gap-6">
+          <div className="min-h-0 min-w-0">
+            <TopTasks tasks={asanaTasks} metadataByGid={metadataByGid} onTaskClick={onOpenTask} />
+          </div>
+          <div className="min-h-0 min-w-0">
+            <AiRunnableTasks
+              tasks={asanaTasks}
+              metadataByGid={metadataByGid}
+              onTaskClick={onOpenTask}
+              onDelegate={onDelegateTask}
+            />
+          </div>
+        </div>
+
+        {/* Right: Weekly Capacity + Time Worked size to their content (no scroll);
+            Delegation takes the remaining height and scrolls internally. */}
+        <div className="min-h-0 min-w-0 flex flex-col gap-4 md:gap-6">
+          <div className="flex-shrink-0 min-w-0">
+            <CapacityWidget rows={data?.capacity ?? []} isLoading={isLoading} />
+          </div>
+          <div className="flex-shrink-0 min-w-0">
+            <ClientTimeWidget
+              timeWorkedByIntegration={timeWorkedByIntegration}
+              integrations={asanaIntegrations}
+            />
+          </div>
+          <div className="flex-1 min-h-0 min-w-0">
+            <DelegationWidget tasks={asanaTasks} onTaskClick={onOpenTask} />
+          </div>
         </div>
       </div>
 

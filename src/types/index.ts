@@ -446,3 +446,14 @@ export interface TaskMetadata {
   dependsOn?: string[]; // GIDs of tasks this depends on
   updatedAt: string;
 }
+
+// Cached AI-suitability verdict for a task (keyed by Asana GID). Lets the
+// "Re-assess AI-runnable" action skip tasks whose content and the classifier
+// prompt are both unchanged since the last run.
+export interface AiClassificationEntry {
+  contentHash: string;   // fingerprint of title+description at assessment time
+  promptVersion: string; // version of the classifier prompt used
+  aiSuitable: boolean;
+  reason: string;
+  assessedAt: string;
+}

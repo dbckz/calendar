@@ -15,9 +15,9 @@ function barColor(ratio: number): string {
 
 export function CapacityWidget({ rows, isLoading }: CapacityWidgetProps) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5">
-      <h2 className="text-lg font-semibold text-gray-900 mb-1">Weekly Capacity</h2>
-      <p className="text-xs text-gray-400 mb-4">Only app-scheduled blocks count toward these totals.</p>
+    <div className="bg-white rounded-xl border border-gray-200 p-4">
+      <h2 className="text-base font-semibold text-gray-900">Weekly Capacity</h2>
+      <p className="text-[11px] text-gray-400 mb-2.5">Only app-scheduled blocks count toward these totals.</p>
 
       {isLoading ? (
         <div className="flex items-center justify-center py-6">
@@ -26,14 +26,14 @@ export function CapacityWidget({ rows, isLoading }: CapacityWidgetProps) {
       ) : rows.length === 0 ? (
         <p className="text-sm text-gray-400 italic">No quotas configured.</p>
       ) : (
-        <ul className="space-y-3">
+        <ul className="space-y-1.5">
           {rows.map(row => {
             const target = row.weeklyCount || 0;
             const ratio = target > 0 ? row.scheduledCount / target : 0;
             const pct = Math.min(100, Math.round(ratio * 100));
             return (
               <li key={row.category}>
-                <div className="flex items-center justify-between text-sm mb-1">
+                <div className="flex items-center justify-between text-[13px] mb-0.5">
                   <span className="font-medium text-gray-800">{row.category}</span>
                   <span className="text-gray-500">
                     {row.scheduledCount}
@@ -43,7 +43,7 @@ export function CapacityWidget({ rows, isLoading }: CapacityWidgetProps) {
                     )}
                   </span>
                 </div>
-                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                   <div
                     className={`h-full rounded-full ${barColor(ratio)}`}
                     style={{ width: `${target > 0 ? pct : row.scheduledCount > 0 ? 100 : 0}%` }}

@@ -57,13 +57,6 @@ beforeEach(() => {
   mockedPlanner.fetchAgentPacing.mockResolvedValue({ maxRunsPerHour: 2, maxRunsPerDay: 12 });
   mockedPlanner.fetchTaskById.mockResolvedValue({ id: '100', title: 'Do the thing', integrationId: 'i1', tags: [] });
   mockedPlanner.fetchTaskStories.mockResolvedValue([]);
-  mockedPlanner.fetchAsanaTags.mockResolvedValue([
-    { gid: 'prog', name: 'agent_in_progress' },
-    { gid: 'done', name: 'agent_complete' },
-    { gid: 'fail', name: 'agent_failed' },
-  ]);
-  mockedPlanner.updateTaskTags.mockResolvedValue({ success: true });
-  mockedPlanner.addTaskComment.mockResolvedValue({ success: true });
   mockedPlanner.reportResult.mockResolvedValue();
   mockedPlanner.markEntryRunning.mockResolvedValue();
 });
@@ -109,7 +102,7 @@ describe('drainOnce', () => {
     expect(mockedStatus.releaseLock).toHaveBeenCalledTimes(1);
   });
 
-  it('claims, runs, comments, reports done, and appends history', async () => {
+  it('claims, runs, reports done locally, and appends history — with NO Asana writes', async () => {
     mockedPlanner.claimNextEntry.mockResolvedValue({ ...ENTRY, state: 'running' });
     mockedClaude.runClaudeTask.mockResolvedValue(GOOD_RUN);
 
@@ -117,9 +110,9 @@ describe('drainOnce', () => {
 
     expect(result.finalStatus).toBe('successful');
     expect(result.picked).toEqual({ id: '100', title: 'Do the thing', url: 'https://app.asana.com/0/0/100' });
-    // in_progress then terminal complete: two tag updates.
-    expect(mockedPlanner.updateTaskTags).toHaveBeenCalledTimes(2);
-    expect(mockedPlanner.addTaskComment).toHaveBeenCalledTimes(1);
+    // Results stay local — nothing is written back to Asana.
+    expect(mockedPlanner.updateTaskTags).not.toHaveBeenCalled();
+    expect(mockedPlanner.addTaskComment).not.toHaveBeenCalled();
     expect(mockedPlanner.reportResult).toHaveBeenCalledWith(expect.any(String), '100', 'i1', 'done', expect.objectContaining({ sessionId: 'sess-1' }));
     expect(mockedStatus.appendHistory).toHaveBeenCalledWith(expect.objectContaining({ taskGid: '100', finalStatus: 'successful' }));
     expect(mockedStatus.releaseLock).toHaveBeenCalledTimes(1);
