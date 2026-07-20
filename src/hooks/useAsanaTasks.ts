@@ -300,9 +300,11 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     return Array.from(types).sort();
   }, [rawAsanaTasks]);
 
-  // Extract Type custom field info per integration (fieldGid and displayValue -> enumOptionGid mapping)
-  // Custom fields are workspace-specific, so we track them per integration
-  // Uses rawAsanaTasks to include "NOT A TASK" enum option
+  // Extract Type custom field info per integration (fieldGid and label -> enumOptionGid mapping)
+  // Custom fields are workspace-specific, so we track them per integration.
+  // Populates from each field's full enum_options list so that ALL options are
+  // available — including options no current task uses (e.g. "Engagement / Outreach",
+  // "TO REVIEW"). Falls back to the task's own selected value if enumOptions is absent.
   const typeFieldInfoByIntegration = useMemo(() => {
     const infoMap = new Map<string, { fieldGid: string; enumOptions: Map<string, string> }>();
 
@@ -319,7 +321,11 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
         }
 
         const info = infoMap.get(task.integrationId)!;
-        if (typeField.displayValue && typeField.enumValueGid) {
+        if (typeField.enumOptions && typeField.enumOptions.length > 0) {
+          for (const opt of typeField.enumOptions) {
+            info.enumOptions.set(opt.name, opt.gid);
+          }
+        } else if (typeField.displayValue && typeField.enumValueGid) {
           info.enumOptions.set(typeField.displayValue, typeField.enumValueGid);
         }
       }
