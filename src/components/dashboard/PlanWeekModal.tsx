@@ -184,7 +184,8 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
         const picked = new Set<string>();
         let count = 0;
         for (const cand of c.candidates) {
-          if (cand.isPriority && count < c.remainingQuota) {
+          // No-quota categories have no cap (remainingQuota === null).
+          if (cand.isPriority && (c.remainingQuota === null || count < c.remainingQuota)) {
             picked.add(cand.id);
             count++;
           }
@@ -367,11 +368,12 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
 
   // --- Step 3 actions ---
 
-  const toggleSelection = (category: string, id: string, remainingQuota: number) => {
+  // remainingQuota === null means no cap (no-quota catch-all category).
+  const toggleSelection = (category: string, id: string, remainingQuota: number | null) => {
     setSelections(prev => {
       const set = new Set(prev[category] ?? []);
       if (set.has(id)) set.delete(id);
-      else if (set.size < remainingQuota) set.add(id);
+      else if (remainingQuota === null || set.size < remainingQuota) set.add(id);
       return { ...prev, [category]: set };
     });
   };
@@ -938,7 +940,10 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
         {taskCats.map(cat => {
           const color = categoryColor(cat.category);
           const picked = selections[cat.category] ?? new Set<string>();
-          const autoN = Math.min(cat.remainingQuota, cat.candidates.length);
+          // No-quota categories have no cap; autoSelect never applies to them.
+          const autoN = cat.remainingQuota === null
+            ? cat.candidates.length
+            : Math.min(cat.remainingQuota, cat.candidates.length);
           return (
             <div key={cat.category} className="rounded-lg border border-gray-200 p-3">
               <div className="flex items-center justify-between mb-2">
@@ -951,6 +956,10 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
                 {cat.autoSelect ? (
                   <span className="text-[11px] text-gray-400">
                     Auto-picking {autoN} task{autoN === 1 ? '' : 's'}
+                  </span>
+                ) : cat.remainingQuota === null ? (
+                  <span className="text-[11px] text-gray-400">
+                    Pick any · {picked.size} selected
                   </span>
                 ) : (
                   <span className="text-[11px] text-gray-400">
@@ -974,7 +983,8 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
                   <ul className="space-y-1.5">
                     {cat.candidates.map(c => {
                       const checked = picked.has(c.id);
-                      const atCap = picked.size >= cat.remainingQuota;
+                      const atCap =
+                        cat.remainingQuota !== null && picked.size >= cat.remainingQuota;
                       return (
                         <li key={c.id} className="flex items-center gap-2">
                           <input
@@ -999,7 +1009,7 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
                       );
                     })}
                   </ul>
-                  {picked.size < cat.remainingQuota && (
+                  {cat.remainingQuota !== null && picked.size < cat.remainingQuota && (
                     <p className="mt-2 text-[11px] text-gray-400">
                       {cat.remainingQuota - picked.size} unpicked slot
                       {cat.remainingQuota - picked.size === 1 ? '' : 's'} will be kept as reserved

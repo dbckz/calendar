@@ -81,7 +81,10 @@ export interface WeekCandidate {
 
 export interface WeekCandidateCategory {
   category: string;
-  remainingQuota: number;
+  // No-quota catch-all categories (e.g. "General Todos") have no weekly cap:
+  // noQuota is true and remainingQuota is null — pick any number of candidates.
+  noQuota: boolean;
+  remainingQuota: number | null;
   autoSelect: boolean;
   candidates: WeekCandidate[];
 }

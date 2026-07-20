@@ -37,17 +37,23 @@ export async function POST(request: NextRequest) {
       tasksByCategory.set(category, list);
     }
 
+    // Include quota categories (weeklyCount > 0) plus no-quota catch-all
+    // categories (e.g. "General Todos"). The latter have no weekly cap, so we
+    // flag them with noQuota:true and remainingQuota:null — the UI lets the user
+    // pick any number of their candidates rather than "up to N".
     const categories = ctx.quotas
-      .filter(q => (q.weeklyCount ?? 0) > 0)
+      .filter(q => (q.weeklyCount ?? 0) > 0 || (tasksByCategory.get(q.category)?.length ?? 0) > 0)
       .map(q => {
         const weeklyCount = q.weeklyCount ?? 0;
+        const noQuota = weeklyCount <= 0;
         const existing = ctx.existingScheduledCounts[q.category] ?? 0;
         const list = (tasksByCategory.get(q.category) ?? []).slice();
         list.sort((a, b) => compareKeys(taskSortKey(a), taskSortKey(b)));
         return {
           category: q.category,
-          remainingQuota: Math.max(0, weeklyCount - existing),
-          autoSelect: ctx.config.taskQuotas[q.category]?.autoSelect === true,
+          noQuota,
+          remainingQuota: noQuota ? null : Math.max(0, weeklyCount - existing),
+          autoSelect: noQuota ? false : ctx.config.taskQuotas[q.category]?.autoSelect === true,
           candidates: list.map(t => ({
             id: t.gid ?? t.adhocId ?? '',
             gid: t.gid,

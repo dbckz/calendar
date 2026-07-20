@@ -43,8 +43,16 @@ export function parseTargetLength(input: string | undefined): number {
   return Math.round(minutes);
 }
 
+// Normalize a type/category label for comparison. Insignificant whitespace
+// differences shouldn't matter: an Asana Type "Writing / Deep Work" must match
+// the config category "Writing/Deep Work". So we lowercase, trim, drop spaces
+// around slashes, and collapse whitespace runs to a single space.
 function normalize(s: string): string {
-  return s.trim().toLowerCase();
+  return s
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\/\s*/g, '/')
+    .replace(/\s+/g, ' ');
 }
 
 // Return the first category a block's type signals map to, or null.

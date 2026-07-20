@@ -59,6 +59,20 @@ describe('classifyBlockCategory', () => {
     // 'focus' only maps to Writing/Deep Work
     expect(classifyBlockCategory(['focus'], quotas)).toBe('Writing/Deep Work');
   });
+
+  it('ignores insignificant whitespace differences (spaces around slash, runs)', () => {
+    // Asana Type "Writing / Deep Work" (spaces around slash) must match the
+    // config category "Writing/Deep Work".
+    expect(classifyBlockCategory(['Writing / Deep Work'], quotas)).toBe('Writing/Deep Work');
+    expect(classifyBlockCategory(['Writing  /  Deep   Work'], quotas)).toBe('Writing/Deep Work');
+    // Case-insensitivity still holds.
+    expect(classifyBlockCategory(['writing / deep work'], quotas)).toBe('Writing/Deep Work');
+  });
+
+  it('does not create false matches across categories', () => {
+    expect(classifyBlockCategory(['Deep Work'], quotas)).toBeNull();
+    expect(classifyBlockCategory(['Blog'], quotas)).toBeNull();
+  });
 });
 
 describe('computeCapacity', () => {
