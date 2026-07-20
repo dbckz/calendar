@@ -2,7 +2,7 @@
 // Uses file-based storage in ~/.claude/data/calendar/ for persistence across builds
 
 import { promises as fs } from 'fs';
-import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState, TemplateGroup, TaskMetadata, DelegationQueueEntry, AiClassificationEntry, StaleClassificationEntry } from '@/types';
+import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState, TemplateGroup, TaskMetadata, DelegationQueueEntry, AiClassificationEntry, StaleClassificationEntry, MeetingPrepDecision } from '@/types';
 import { DATA_DIR, USER_DATA_FILE } from './data-paths';
 
 const DEFAULT_ASANA_FILTERS: AsanaFilterState = {
@@ -41,6 +41,7 @@ interface UserData {
   aiClassification?: Record<string, AiClassificationEntry>; // Key is Asana task GID
   staleClassification?: Record<string, StaleClassificationEntry>; // Key is Asana task GID
   staleKeep?: Record<string, string>; // GID -> ISO timestamp: "keep active" until (snooze)
+  meetingPrepDecisions?: Record<string, MeetingPrepDecision>; // Key is normalized meeting title
 }
 
 const DEFAULT_USER_DATA: UserData = {
@@ -56,6 +57,7 @@ const DEFAULT_USER_DATA: UserData = {
   aiClassification: {},
   staleClassification: {},
   staleKeep: {},
+  meetingPrepDecisions: {},
 };
 
 async function ensureDataDir(): Promise<void> {
@@ -93,6 +95,7 @@ export async function getUserData(): Promise<UserData> {
       aiClassification: parsed.aiClassification || {},
       staleClassification: parsed.staleClassification || {},
       staleKeep: parsed.staleKeep || {},
+      meetingPrepDecisions: parsed.meetingPrepDecisions || {},
     };
   } catch {
     // Deep clone so callers that mutate nested collections (e.g. upserting into
@@ -650,5 +653,19 @@ export async function saveStaleClassification(entries: Record<string, StaleClass
 export async function setStaleKeep(asanaTaskGid: string, until: string): Promise<void> {
   const data = await getUserData();
   data.staleKeep = { ...(data.staleKeep || {}), [asanaTaskGid]: until };
+  await saveUserData(data);
+}
+
+// Remembered "does this meeting need a prep block?" decisions, keyed by a
+// normalized meeting title. User decisions are permanent (AI never overwrites);
+// AI decisions are re-used when the content hash + prompt version still match.
+export async function getMeetingPrepDecisions(): Promise<Record<string, MeetingPrepDecision>> {
+  const data = await getUserData();
+  return data.meetingPrepDecisions || {};
+}
+
+export async function setMeetingPrepDecision(key: string, decision: MeetingPrepDecision): Promise<void> {
+  const data = await getUserData();
+  data.meetingPrepDecisions = { ...(data.meetingPrepDecisions || {}), [key]: decision };
   await saveUserData(data);
 }
