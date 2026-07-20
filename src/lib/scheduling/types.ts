@@ -27,6 +27,9 @@ export interface CandidateTask {
   bestTime?: BestTime;
   energyLevel?: EnergyLevel;
   effortMinutes?: number;
+  // Marks a task the user pinned as a priority in the wizard. Sorts first
+  // within its category, ahead of deadline/due-date ranking.
+  isPriority?: boolean;
 }
 
 // A single proposed calendar block. `task` is omitted for a "reserved" block
@@ -44,6 +47,11 @@ export interface ProposedBlock {
   start: string; // HH:mm (local)
   durationMinutes: number;
   reason: string;
+  // Block classification. Absent on engine task/reserved blocks (derive from
+  // `task` presence for back-compat); set to 'prep' by the prep placer.
+  kind?: 'task' | 'reserved' | 'prep';
+  // Present only on prep blocks: the meeting this block prepares for.
+  meeting?: { eventId: string; title: string; meetingStart: string /* ISO */ };
 }
 
 export interface ProposeBlocksInput {
@@ -56,6 +64,10 @@ export interface ProposeBlocksInput {
   // Per-date count of blocks already scheduled (for maxTasksPerDay). Keyed by
   // yyyy-MM-dd.
   existingBlocksByDate: Record<string, number>;
+  // Per-date, per-category count of blocks already on the calendar this week.
+  // Seeds the spread heuristic so mid-week re-runs don't re-pile a day. Keyed
+  // by yyyy-MM-dd then category name.
+  existingCategoryCountsByDate?: Record<string, Record<string, number>>;
   weekStart: Date; // local midnight of the week's Monday
   now: Date;
 }

@@ -119,10 +119,13 @@ describe('proposeBlocks - buffer collisions', () => {
   });
 
   it('keeps buffer between two proposals in the same run', () => {
+    // Restrict to a single working day so the spread heuristic can't fan the
+    // second block onto another day — this isolates same-day buffer behavior.
     const proposals = proposeBlocks(
       makeInput({
         config: makeConfig({
           quotas: { Deep: { weeklyCount: 2, targetLength: '1h', preferredTimes: ['09:00-14:00'] } },
+          scheduling: { workingDays: ['Monday'] },
         }),
         candidateTasks: [task({ gid: 'a' }), task({ gid: 'b' })],
       })
@@ -266,6 +269,118 @@ describe('proposeBlocks - ranking', () => {
     // Category B (has a hard-deadline task) is scheduled into the earliest slot.
     const first = proposals.find(p => p.start === '09:00');
     expect(first?.category).toBe('B');
+  });
+});
+
+describe('proposeBlocks - soft day spread', () => {
+  const distinctDates = (proposals: { date: string }[]) =>
+    new Set(proposals.map(p => p.date));
+
+  it('spreads same-category blocks across distinct days', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 3, targetLength: '1h', preferredTimes: [] } },
+        }),
+        candidateTasks: [task({ gid: 'a' }), task({ gid: 'b' }), task({ gid: 'c' })],
+      })
+    );
+    expect(proposals).toHaveLength(3);
+    expect(distinctDates(proposals).size).toBe(3);
+  });
+
+  it('doubles up on a day only when forced by too few working days', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 3, targetLength: '1h', preferredTimes: [] } },
+          scheduling: { workingDays: ['Monday', 'Tuesday'] },
+        }),
+        candidateTasks: [task({ gid: 'a' }), task({ gid: 'b' }), task({ gid: 'c' })],
+      })
+    );
+    expect(proposals).toHaveLength(3);
+    // Two days, three blocks -> one day gets two, the other one.
+    expect(distinctDates(proposals).size).toBe(2);
+  });
+
+  it('keeps each block in its preferred window while spreading across days', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 2, targetLength: '1h', preferredTimes: ['09:00-11:00'] } },
+        }),
+        candidateTasks: [task({ gid: 'a' }), task({ gid: 'b' })],
+      })
+    );
+    expect(proposals).toHaveLength(2);
+    // Both land at 09:00 (their preferred time), but on distinct days rather
+    // than doubling up on Monday.
+    expect(proposals.every(p => p.start === '09:00')).toBe(true);
+    expect(distinctDates(proposals).size).toBe(2);
+  });
+
+  it('seeds spread from existingCategoryCountsByDate', () => {
+    const mondayStr = dateStr(WEEK_START);
+    const tuesdayStr = dateStr(new Date(2026, 6, 14));
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 1, targetLength: '1h', preferredTimes: [] } },
+        }),
+        candidateTasks: [task({ gid: 'a' })],
+        existingCategoryCountsByDate: { [mondayStr]: { Deep: 1 } },
+      })
+    );
+    expect(proposals).toHaveLength(1);
+    // Monday already has a Deep block, so the new one avoids it.
+    expect(proposals[0].date).toBe(tuesdayStr);
+  });
+
+  it('skips a day that is full per maxTasksPerDay even at spread level 0', () => {
+    const mondayStr = dateStr(WEEK_START);
+    const tuesdayStr = dateStr(new Date(2026, 6, 14));
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 1, targetLength: '1h', preferredTimes: [] } },
+          scheduling: { maxTasksPerDay: 1, workingDays: ['Monday', 'Tuesday'] },
+        }),
+        candidateTasks: [task({ gid: 'a' })],
+        existingBlocksByDate: { [mondayStr]: 1 }, // Monday full
+      })
+    );
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].date).toBe(tuesdayStr);
+  });
+
+  it('works without existingCategoryCountsByDate (back-compat)', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 1, targetLength: '1h', preferredTimes: ['09:00-11:00'] } },
+        }),
+        candidateTasks: [task({ gid: 'a' })],
+      })
+    );
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].date).toBe(dateStr(WEEK_START));
+    expect(proposals[0].start).toBe('09:00');
+  });
+});
+
+describe('proposeBlocks - priority ranking', () => {
+  it('schedules an isPriority task ahead of a harder-deadline non-priority task', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({ quotas: { Deep: { weeklyCount: 1, targetLength: '1h', preferredTimes: [] } } }),
+        candidateTasks: [
+          task({ gid: 'hard', deadlineType: 'hard' }),
+          task({ gid: 'prio', deadlineType: 'soft', isPriority: true }),
+        ],
+      })
+    );
+    expect(proposals[0].task?.gid).toBe('prio');
   });
 });
 

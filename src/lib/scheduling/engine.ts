@@ -56,7 +56,7 @@ interface TimeOfDay {
   m: number;
 }
 
-interface Window {
+export interface Window {
   date: Date; // local midnight of the day
   dateStr: string; // yyyy-MM-dd
   startMs: number;
@@ -65,12 +65,12 @@ interface Window {
   bestTimeMatch: boolean;
 }
 
-interface BusyMs {
+export interface BusyMs {
   start: number;
   end: number;
 }
 
-function parseTimeOfDay(value: string): TimeOfDay | null {
+export function parseTimeOfDay(value: string): TimeOfDay | null {
   const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
   if (!match) return null;
   const h = Number(match[1]);
@@ -89,14 +89,14 @@ function parsePreferredWindow(value: string): [TimeOfDay, TimeOfDay] | null {
   return [start, end];
 }
 
-function localDateStr(date: Date): string {
+export function localDateStr(date: Date): string {
   const y = date.getFullYear();
   const mo = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${mo}-${d}`;
 }
 
-function timeStr(ms: number): string {
+export function timeStr(ms: number): string {
   const date = new Date(ms);
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
@@ -132,6 +132,7 @@ const BEST_TIME_RANK: Record<string, number> = { morning: 0, afternoon: 1, eveni
 
 function taskSortKey(task: CandidateTask): Array<number | string> {
   return [
+    task.isPriority ? 0 : 1,
     task.deadlineType ? DEADLINE_RANK[task.deadlineType] : 3,
     task.dueDate ?? '9999-12-31',
     task.energyLevel ? ENERGY_RANK[task.energyLevel] : 1,
@@ -164,18 +165,19 @@ function slotIsFree(start: number, end: number, buffer: number, busy: BusyMs[]):
 
 // Build the ordered list of working days in the week (>= today), each with its
 // working-hours window bounds.
-function buildWorkingDays(
-  input: ProposeBlocksInput,
+export function buildWorkingDays(
+  weekStart: Date,
+  now: Date,
   workingHours: { start: TimeOfDay; end: TimeOfDay },
   workingDayNames: Set<string>
 ): Array<{ date: Date; dateStr: string; whStartMs: number; whEndMs: number }> {
   const days: Array<{ date: Date; dateStr: string; whStartMs: number; whEndMs: number }> = [];
-  const todayStr = localDateStr(input.now);
+  const todayStr = localDateStr(now);
   for (let i = 0; i < 7; i++) {
     const day = new Date(
-      input.weekStart.getFullYear(),
-      input.weekStart.getMonth(),
-      input.weekStart.getDate() + i
+      weekStart.getFullYear(),
+      weekStart.getMonth(),
+      weekStart.getDate() + i
     );
     const dateStr = localDateStr(day);
     if (dateStr < todayStr) continue; // past days in the week
@@ -235,19 +237,21 @@ function buildWindowsForTask(
 
 // Find the earliest valid slot for a block of `duration` minutes across the
 // given windows, respecting buffer, now-cutoff and maxTasksPerDay.
-function findSlot(
+export function findSlot(
   windows: Window[],
   duration: number,
   buffer: number,
   busy: BusyMs[],
   nowMs: number,
   maxPerDay: number,
-  countByDate: Record<string, number>
+  countByDate: Record<string, number>,
+  allowedDates?: Set<string>
 ): { startMs: number; endMs: number; dateStr: string; preferred: boolean } | null {
   const durationMs = duration * MS_PER_MINUTE;
   const stepMs = SLOT_STEP_MINUTES * MS_PER_MINUTE;
 
   for (const win of windows) {
+    if (allowedDates && !allowedDates.has(win.dateStr)) continue;
     if ((countByDate[win.dateStr] ?? 0) >= maxPerDay) continue;
     // Start at the window start (or now if later), aligned up to the step grid.
     let start = ceilToStep(Math.max(win.startMs, nowMs));
@@ -275,7 +279,8 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
   const maxPerDay = scheduling.maxTasksPerDay > 0 ? scheduling.maxTasksPerDay : Infinity;
 
   const workingDays = buildWorkingDays(
-    input,
+    input.weekStart,
+    input.now,
     { start: workingHoursStart, end: workingHoursEnd },
     workingDayNames
   );
@@ -348,6 +353,14 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
     let remaining = remainingByCategory.get(category)!;
     const categoryTasks = tasksByCategory.get(category) ?? [];
 
+    // Per-date count of this category's blocks, seeded from what's already on the
+    // calendar. Drives the leveled (spread) search below so same-category blocks
+    // fan out across distinct days before doubling up on any one day.
+    const catCount: Record<string, number> = {};
+    for (const wd of workingDays) {
+      catCount[wd.dateStr] = input.existingCategoryCountsByDate?.[wd.dateStr]?.[category] ?? 0;
+    }
+
     while (remaining > 0) {
       const task = categoryTasks.find(t => {
         const id = t.gid ?? t.adhocId;
@@ -355,7 +368,17 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
       });
 
       const windows = buildWindowsForTask(task?.bestTime, preferredWindows, workingDays);
-      const slot = findSlot(windows, duration, buffer, busy, nowMs, maxPerDay, countByDate);
+      // Leveled search: level 0 allows only days with zero blocks of this
+      // category, level 1 up to one, etc. Window ordering (preferred/bestTime,
+      // then working hours) is preserved within each level, so spread outranks
+      // earliness but preferred times still win across distinct days.
+      let slot: ReturnType<typeof findSlot> = null;
+      for (let level = 0; level <= 7 && !slot; level++) {
+        const allowed = new Set(
+          workingDays.filter(wd => catCount[wd.dateStr] <= level).map(wd => wd.dateStr)
+        );
+        slot = findSlot(windows, duration, buffer, busy, nowMs, maxPerDay, countByDate, allowed);
+      }
       if (!slot) break; // no more room this week for this category
 
       const start = timeStr(slot.startMs);
@@ -392,6 +415,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
       // Occupy the slot for the rest of the run.
       busy.push({ start: slot.startMs, end: slot.endMs });
       countByDate[slot.dateStr] = (countByDate[slot.dateStr] ?? 0) + 1;
+      catCount[slot.dateStr] = (catCount[slot.dateStr] ?? 0) + 1;
       remaining -= 1;
     }
   }
