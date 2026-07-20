@@ -137,6 +137,7 @@ describe('runClaudeTask', () => {
     expect(file).toBe('/fake/claude');
     expect(args).toEqual([
       '-p', 'do it',
+      '--model', 'opus',
       '--output-format', 'stream-json',
       '--verbose',
       '--allowedTools', 'Read,Write',

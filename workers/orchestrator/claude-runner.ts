@@ -159,6 +159,7 @@ interface RunClaudeTaskInput {
   // Absolute path to tee the raw stream-json JSONL into. Omit to skip teeing.
   traceFile?: string;
   claudeBin?: string;
+  model?: string;
   cwd?: string;
 }
 
@@ -173,6 +174,7 @@ export async function runClaudeTask({
   disallowedTools = config.claudeDisallowedTools,
   traceFile,
   claudeBin = config.claudeBin,
+  model = config.claudeModel,
   cwd = config.agentWorkspace,
 }: RunClaudeTaskInput): Promise<RunClaudeTaskResult> {
   // Land any Write output in a dedicated scratch workspace, never the repo.
@@ -186,6 +188,8 @@ export async function runClaudeTask({
 
   const args = [
     '-p', prompt,
+    // Pin agent runs to Opus for the strongest reasoning; override via CLAUDE_MODEL.
+    '--model', model,
     '--output-format', 'stream-json',
     '--verbose',
     '--allowedTools', allowedTools,

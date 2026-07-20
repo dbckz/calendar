@@ -63,6 +63,8 @@ export const config = {
   failedTagName: process.env.ASANA_FAILED_TAG || 'agent_failed',
   // Headless Claude Code agent runner (see claude-runner.ts).
   claudeBin: process.env.CLAUDE_BIN || path.join(homedir(), '.local', 'bin', 'claude'),
+  // Pin agent runs to Opus for the strongest reasoning; override via CLAUDE_MODEL.
+  claudeModel: process.env.CLAUDE_MODEL || 'opus',
   claudeTimeoutSeconds: Number(process.env.CLAUDE_TIMEOUT_SECONDS || 900),
   claudeAllowedTools: process.env.CLAUDE_ALLOWED_TOOLS || DEFAULT_ALLOWED_TOOLS,
   // `auto` mode: decisions are made by background safety checks that approve

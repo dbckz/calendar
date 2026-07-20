@@ -56,6 +56,12 @@ function claudeBin(): string {
   return process.env.CLAUDE_BIN || path.join(homedir(), '.local', 'bin', 'claude');
 }
 
+// Pin the classifier to Opus for the strongest reasoning on these triage calls;
+// override via CLAUDE_MODEL if a cheaper/faster model is ever preferred.
+function claudeModel(): string {
+  return process.env.CLAUDE_MODEL || 'opus';
+}
+
 function buildPrompt(tasks: ClassifierTask[]): string {
   const lines = tasks.map(t => {
     const desc = (t.description || '').replace(/\s+/g, ' ').trim().slice(0, 300);
@@ -86,7 +92,7 @@ interface ClaudeEnvelope { result?: unknown; is_error?: boolean }
 // classifier (AI-suitability, staleness, …).
 export async function runClaudeJsonArray(prompt: string, timeoutSeconds = 180): Promise<Record<string, unknown>[]> {
   const bin = claudeBin();
-  const args = ['-p', prompt, '--output-format', 'json', '--allowedTools', ''];
+  const args = ['-p', prompt, '--model', claudeModel(), '--output-format', 'json', '--allowedTools', ''];
   const env = {
     ...process.env,
     PATH: `/opt/homebrew/bin:/usr/local/bin:${path.join(homedir(), '.local', 'bin')}:${process.env.PATH || '/usr/bin:/bin'}`,
