@@ -24,6 +24,7 @@ import {
   type WeekCandidateCategory,
 } from '@/lib/api';
 import type { ProposedBlock } from '@/lib/scheduling/types';
+import type { AsanaProject } from '@/types';
 
 interface PlanWeekModalProps {
   isOpen: boolean;
@@ -74,6 +75,7 @@ interface MatchRow {
   text: string;
   match: PriorityMatchRow['match'];
   createIntegrationId: string; // unmatched rows: which Asana integration to create in
+  createProjectGid: string; // unmatched rows: which Asana project to create in (required)
   category: string; // unmatched, or matched-without-category: chosen quota category
   include: boolean; // unmatched rows: create + pin this one
 }
@@ -89,8 +91,9 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
   const [matchMeta, setMatchMeta] = useState<{
     asanaIntegrations: Array<{ id: string; name: string }>;
     categories: string[];
+    projects: AsanaProject[];
     aiUnavailable: boolean;
-  }>({ asanaIntegrations: [], categories: [], aiUnavailable: false });
+  }>({ asanaIntegrations: [], categories: [], projects: [], aiUnavailable: false });
   const [createdTasks, setCreatedTasks] = useState<
     Array<{ text: string; gid: string; title: string; integrationId: string }>
   >([]);
@@ -123,7 +126,7 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
     setError(null);
     setPriorityText('');
     setMatchRows(null);
-    setMatchMeta({ asanaIntegrations: [], categories: [], aiUnavailable: false });
+    setMatchMeta({ asanaIntegrations: [], categories: [], projects: [], aiUnavailable: false });
     setCreatedTasks([]);
     setPriorityIds([]);
     setCategoryOverrides({});
@@ -256,11 +259,19 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
     setError(null);
     setCreatedTasks([]);
     try {
-      const res = await api.matchPriorities(items);
+      // Projects are needed so a newly-created task can be filed under a
+      // required Asana project. Fetch alongside the match; a projects failure
+      // shouldn't block matching.
+      const [res, projectsRes] = await Promise.all([
+        api.matchPriorities(items),
+        api.getAsanaProjects().catch(() => ({ projects: [] as AsanaProject[] })),
+      ]);
+      const defaultIntegrationId = res.asanaIntegrations[0]?.id ?? '';
       const rows: MatchRow[] = res.results.map(r => ({
         text: r.text,
         match: r.match,
-        createIntegrationId: res.asanaIntegrations[0]?.id ?? '',
+        createIntegrationId: defaultIntegrationId,
+        createProjectGid: '',
         category: r.match?.category ?? res.categories[0] ?? '',
         include: true,
       }));
@@ -268,6 +279,7 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
       setMatchMeta({
         asanaIntegrations: res.asanaIntegrations,
         categories: res.categories,
+        projects: projectsRes.projects,
         aiUnavailable: !!res.aiUnavailable,
       });
     } catch (err) {
@@ -283,10 +295,26 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
     setError(null);
     try {
       const unmatchedIncluded = matchRows.filter(r => !r.match && r.include);
+      // A project is required for each new task whenever the chosen integration
+      // has projects to file under. Guard here as a backstop to the disabled Next.
+      const missingProject = unmatchedIncluded.some(
+        r =>
+          matchMeta.projects.some(p => p.integrationId === r.createIntegrationId) &&
+          !r.createProjectGid
+      );
+      if (missingProject) {
+        setError('Choose a project for each new task before continuing.');
+        setIsLoading(false);
+        return;
+      }
       let created = createdTasks;
       if (unmatchedIncluded.length > 0 && createdTasks.length === 0) {
         const res = await api.createPriorityTasks(
-          unmatchedIncluded.map(r => ({ text: r.text, integrationId: r.createIntegrationId }))
+          unmatchedIncluded.map(r => ({
+            text: r.text,
+            integrationId: r.createIntegrationId,
+            ...(r.createProjectGid ? { projectGid: r.createProjectGid } : {}),
+          }))
         );
         created = res.created;
         setCreatedTasks(created);
@@ -316,7 +344,7 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
     } finally {
       setIsLoading(false);
     }
-  }, [matchRows, createdTasks]);
+  }, [matchRows, createdTasks, matchMeta.projects]);
 
   // --- Step 2 actions ---
 
@@ -472,6 +500,21 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
     step === 'review';
   const canSkip = step === 'priorities' || step === 'prep' || step === 'tasks';
 
+  const projectsForIntegration = (integrationId: string) =>
+    matchMeta.projects.filter(p => p.integrationId === integrationId);
+
+  // Every included new task must have a project chosen (when its integration has
+  // projects to choose from). Blocks Next on the priorities step until satisfied.
+  const prioritiesReady =
+    matchRows === null ||
+    matchRows.every(
+      r =>
+        !!r.match ||
+        !r.include ||
+        projectsForIntegration(r.createIntegrationId).length === 0 ||
+        r.createProjectGid !== ''
+    );
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
@@ -571,6 +614,7 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
                   disabled={
                     isLoading ||
                     prepBusy ||
+                    (step === 'priorities' && !prioritiesReady) ||
                     (step === 'review' && (acceptedCount === 0 || isConfirming))
                   }
                   className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -681,7 +725,10 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
                           onChange={e =>
                             setMatchRows(prev =>
                               prev!.map((r, j) =>
-                                j === i ? { ...r, createIntegrationId: e.target.value } : r
+                                // Integration change invalidates the chosen project.
+                                j === i
+                                  ? { ...r, createIntegrationId: e.target.value, createProjectGid: '' }
+                                  : r
                               )
                             )
                           }
@@ -694,6 +741,36 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
                           ))}
                         </select>
                       )}
+                      {(() => {
+                        const rowProjects = projectsForIntegration(row.createIntegrationId);
+                        if (rowProjects.length === 0) return null;
+                        const needsProject = row.include && !row.createProjectGid;
+                        return (
+                          <label className="flex items-center gap-1 text-[11px] text-gray-500">
+                            Project
+                            <select
+                              value={row.createProjectGid}
+                              onChange={e =>
+                                setMatchRows(prev =>
+                                  prev!.map((r, j) =>
+                                    j === i ? { ...r, createProjectGid: e.target.value } : r
+                                  )
+                                )
+                              }
+                              className={`text-xs border rounded px-1.5 py-1 outline-none focus:ring-2 focus:ring-orange-500 ${
+                                needsProject ? 'border-red-400' : 'border-gray-300'
+                              }`}
+                            >
+                              <option value="">Select project…</option>
+                              {rowProjects.map(p => (
+                                <option key={p.gid} value={p.gid}>
+                                  {p.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        );
+                      })()}
                       <label className="flex items-center gap-1 text-[11px] text-gray-500">
                         Category
                         {renderCategorySelect(row.category, val =>
@@ -702,6 +779,13 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
                           )
                         )}
                       </label>
+                      {row.include &&
+                        projectsForIntegration(row.createIntegrationId).length > 0 &&
+                        !row.createProjectGid && (
+                          <p className="w-full text-[11px] text-red-500">
+                            Choose a project for this new task.
+                          </p>
+                        )}
                     </div>
                   )}
                 </div>

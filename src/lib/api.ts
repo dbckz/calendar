@@ -789,7 +789,7 @@ export const api = {
 
   // Wizard step 1: create Asana tasks for unmatched priorities.
   async createPriorityTasks(
-    items: Array<{ text: string; integrationId: string }>
+    items: Array<{ text: string; integrationId: string; projectGid?: string }>
   ): Promise<CreatePriorityTasksResponse> {
     return fetchWithRetry<CreatePriorityTasksResponse>('/api/scheduling/priorities/create', {
       method: 'POST',

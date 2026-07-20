@@ -7,9 +7,10 @@ import type { AsanaIntegration } from '@/types';
 interface CreateItem {
   text: string;
   integrationId: string;
+  projectGid?: string;
 }
 
-// POST { items: [{ text, integrationId }] }
+// POST { items: [{ text, integrationId, projectGid? }] }
 // Create one Asana task per unmatched priority. The wizard calls this once per
 // step-1 confirm and remembers created gids, so Back/Next never re-creates.
 export async function POST(request: NextRequest) {
@@ -57,7 +58,10 @@ export async function POST(request: NextRequest) {
           throw new Error('Asana integration not available');
         }
         const accessToken = await accessTokenFor(integration);
-        const task = await createTask(accessToken, integration.workspaceId, { name: item.text });
+        const task = await createTask(accessToken, integration.workspaceId, {
+          name: item.text,
+          ...(item.projectGid ? { projectGid: item.projectGid } : {}),
+        });
         created.push({ text: item.text, gid: task.gid, title: task.name, integrationId: item.integrationId });
       } catch (err) {
         errors.push({ text: item.text, error: err instanceof Error ? err.message : 'Failed to create task' });

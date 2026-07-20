@@ -22,7 +22,10 @@ export async function POST(request: NextRequest) {
     ]);
 
     const asanaIntegrations = integrations.map(i => ({ id: i.id, name: i.name }));
-    const categories = ctx.quotas.filter(q => (q.weeklyCount ?? 0) > 0).map(q => q.category);
+    // Every quota category is offered as a pick — including catch-alls with no
+    // weeklyCount (e.g. "General Todos"), which are valid task categories even
+    // though the scheduler doesn't fill quota toward them.
+    const categories = ctx.quotas.map(q => q.category);
 
     if (items.length === 0) {
       return NextResponse.json({ results: [], asanaIntegrations, categories });
