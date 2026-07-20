@@ -855,6 +855,7 @@ export default function Home() {
             metadataByGid={metadataByGid}
             timeWorkedByIntegration={timeWorkedByIntegration}
             asanaIntegrations={asanaIntegrations}
+            typeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
             onOpenTask={handleOpenTaskInPlace}
             onDelegateTask={setDelegateTask}
             onReloadMetadata={reloadMetadata}

@@ -470,6 +470,27 @@ export const api = {
     );
   },
 
+  // Suggest a "Type" label for each untyped task, grouped by integration (allowed
+  // labels differ per workspace). Returns one suggestion per task, each an exact
+  // allowed label. No retry — the call is expensive.
+  async classifyTaskTypes(
+    groups: Array<{
+      integrationId: string;
+      allowedTypes: string[];
+      tasks: Array<{ gid: string; title: string; description?: string; integrationName?: string }>;
+    }>
+  ): Promise<{ suggestions: Array<{ gid: string; type: string }> }> {
+    return fetchWithRetry(
+      '/api/tasks/classify-types',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groups }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
   // "Keep active": snooze a task out of the stale list for a period (default 90 days).
   async keepTaskActive(asanaTaskGid: string, days?: number): Promise<{ success: boolean; keptUntil: string }> {
     return fetchWithRetry('/api/tasks/stale-keep', {

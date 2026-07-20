@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import { CalendarClock, Bot, Loader2, Archive } from 'lucide-react';
 
 import { CalendarEvent, TaskMetadata } from '@/types';
+import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
 import { api } from '@/lib/api';
 import { useDashboard } from '@/hooks/useDashboard';
 import { TodayColumn } from './TodayColumn';
@@ -26,6 +27,9 @@ interface DashboardContentProps {
   metadataByGid: Record<string, TaskMetadata>;
   timeWorkedByIntegration: Record<string, number>;
   asanaIntegrations: Integration[];
+  // Per-integration Type field info, for the Plan-my-week "type unclassified
+  // tasks" pre-step (find untyped tasks + write chosen Types back to Asana).
+  typeFieldInfoByIntegration?: Map<string, AsanaTypeFieldInfo>;
   onOpenTask?: (taskId: string) => void;
   onDelegateTask?: (task: CalendarEvent) => void; // open the compose-brief modal directly
   onReloadMetadata?: () => Promise<void> | void; // refresh aiDelegable flags after re-assessment
@@ -47,6 +51,7 @@ export function DashboardContent({
   metadataByGid,
   timeWorkedByIntegration,
   asanaIntegrations,
+  typeFieldInfoByIntegration,
   onOpenTask,
   onDelegateTask,
   onReloadMetadata,
@@ -177,6 +182,8 @@ export function DashboardContent({
       <PlanWeekModal
         isOpen={showPlanModal}
         onClose={() => setShowPlanModal(false)}
+        asanaTasks={asanaTasks}
+        typeFieldInfoByIntegration={typeFieldInfoByIntegration}
         onApplied={() => {
           refetch();
           onPlanApplied?.();

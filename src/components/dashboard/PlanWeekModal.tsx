@@ -24,23 +24,44 @@ import {
   type WeekCandidateCategory,
 } from '@/lib/api';
 import type { ProposedBlock } from '@/lib/scheduling/types';
-import type { AsanaProject } from '@/types';
+import type { AsanaProject, CalendarEvent } from '@/types';
+import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
 
 interface PlanWeekModalProps {
   isOpen: boolean;
   onClose: () => void;
   onApplied?: () => void; // called after a successful confirm so the caller can refresh
+  // Incomplete Asana tasks + per-integration Type field info, used by the "type
+  // unclassified tasks" pre-step to find untyped tasks and write labels back.
+  asanaTasks?: CalendarEvent[];
+  typeFieldInfoByIntegration?: Map<string, AsanaTypeFieldInfo>;
 }
 
-type Step = 'priorities' | 'prep' | 'tasks' | 'review' | 'done';
+type Step = 'type' | 'priorities' | 'prep' | 'tasks' | 'review' | 'done';
 
-const STEP_ORDER: Step[] = ['priorities', 'prep', 'tasks', 'review'];
 const STEP_LABELS: Record<Exclude<Step, 'done'>, string> = {
+  type: 'Type',
   priorities: 'Priorities',
   prep: 'Prep',
   tasks: 'Tasks',
   review: 'Review',
 };
+
+// A single untyped task, resolved with its integration's writable Type labels.
+interface UntypedTask {
+  gid: string;
+  integrationId: string;
+  title: string;
+  description?: string;
+  integrationName?: string;
+  allowedTypes: string[]; // exact Asana enum labels we can write for this integration
+}
+
+// Row state for the type-review step: an untyped task plus the currently chosen
+// label ('' = leave untyped, i.e. don't write).
+interface TypeRow extends UntypedTask {
+  chosen: string;
+}
 
 // Deterministic pastel-ish colour per category, so a category always reads the
 // same across the modal.
@@ -80,10 +101,57 @@ interface MatchRow {
   include: boolean; // unmatched rows: create + pin this one
 }
 
-export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps) {
+export function PlanWeekModal({
+  isOpen,
+  onClose,
+  onApplied,
+  asanaTasks,
+  typeFieldInfoByIntegration,
+}: PlanWeekModalProps) {
   const [step, setStep] = useState<Step>('priorities');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Step 0 — type unclassified tasks. Incomplete tasks whose Asana "Type" custom
+  // field is empty, but whose integration has writable Type labels. These are
+  // invisible to the allocation categories until typed.
+  const untypedTasks = useMemo<UntypedTask[]>(() => {
+    if (!asanaTasks || !typeFieldInfoByIntegration) return [];
+    const out: UntypedTask[] = [];
+    for (const t of asanaTasks) {
+      if (t.completed || !t.integrationId) continue;
+      const info = typeFieldInfoByIntegration.get(t.integrationId);
+      if (!info || info.enumOptions.size === 0) continue;
+      const typeValue = t.customFields?.find(cf => cf.name.toLowerCase() === 'type')?.displayValue;
+      if (typeValue) continue; // already typed
+      out.push({
+        gid: t.id,
+        integrationId: t.integrationId,
+        title: t.title,
+        description: t.description,
+        integrationName: t.integrationName,
+        allowedTypes: Array.from(info.enumOptions.keys()).sort(),
+      });
+    }
+    return out;
+  }, [asanaTasks, typeFieldInfoByIntegration]);
+
+  const hasTypeStep = untypedTasks.length > 0;
+
+  // The type step is prepended only when there are untyped tasks to classify.
+  const stepOrder = useMemo<Exclude<Step, 'done'>[]>(
+    () =>
+      hasTypeStep
+        ? ['type', 'priorities', 'prep', 'tasks', 'review']
+        : ['priorities', 'prep', 'tasks', 'review'],
+    [hasTypeStep]
+  );
+
+  // Step 0 — type review
+  const [typeRows, setTypeRows] = useState<TypeRow[] | null>(null); // null = not yet classified
+  const [typeLoading, setTypeLoading] = useState(false);
+  const [typeError, setTypeError] = useState<string | null>(null);
+  const [isApplyingTypes, setIsApplyingTypes] = useState(false);
 
   // Step 1 — priorities
   const [priorityText, setPriorityText] = useState('');
@@ -121,7 +189,11 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
   // Reset everything whenever the modal opens fresh.
   useEffect(() => {
     if (!isOpen) return;
-    setStep('priorities');
+    setStep(hasTypeStep ? 'type' : 'priorities');
+    setTypeRows(null);
+    setTypeLoading(false);
+    setTypeError(null);
+    setIsApplyingTypes(false);
     setIsLoading(false);
     setError(null);
     setPriorityText('');
@@ -142,6 +214,9 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
     setWeekLabel('');
     setIsConfirming(false);
     setResults({});
+    // Only re-run on open/close; hasTypeStep is read fresh to pick the first step
+    // but must not reset an in-progress wizard when the untyped set changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   // Escape closes.
@@ -152,6 +227,80 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
     if (isOpen) document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
   }, [isOpen, onClose]);
+
+  // --- Step 0 actions (type unclassified tasks) ---
+
+  // Classify the untyped tasks. Grouped by integration (allowed labels differ per
+  // workspace), one headless call each, run concurrently server-side. Each row is
+  // pre-filled with Claude's suggestion (blank if the model omitted/invalidated
+  // it, so the user picks). A classifier failure still lets the user type by hand.
+  const runTypeClassifier = useCallback(async () => {
+    setTypeLoading(true);
+    setTypeError(null);
+    try {
+      const groups = new Map<string, { integrationId: string; allowedTypes: string[]; tasks: Array<{ gid: string; title: string; description?: string; integrationName?: string }> }>();
+      for (const t of untypedTasks) {
+        let g = groups.get(t.integrationId);
+        if (!g) {
+          g = { integrationId: t.integrationId, allowedTypes: t.allowedTypes, tasks: [] };
+          groups.set(t.integrationId, g);
+        }
+        g.tasks.push({ gid: t.gid, title: t.title, description: t.description, integrationName: t.integrationName });
+      }
+      const { suggestions } = await api.classifyTaskTypes([...groups.values()]);
+      const byGid = new Map(suggestions.map(s => [s.gid, s.type]));
+      setTypeRows(
+        untypedTasks.map(t => {
+          const suggested = byGid.get(t.gid);
+          return { ...t, chosen: suggested && t.allowedTypes.includes(suggested) ? suggested : '' };
+        })
+      );
+    } catch (err) {
+      // Degrade gracefully: no suggestions, but the user can still classify manually.
+      setTypeRows(untypedTasks.map(t => ({ ...t, chosen: '' })));
+      setTypeError(err instanceof Error ? err.message : 'Failed to suggest types');
+    } finally {
+      setTypeLoading(false);
+    }
+  }, [untypedTasks]);
+
+  // Write each kept (non-blank) label to its Asana task's Type field, then advance
+  // to the priorities step. On partial failure we surface a count and stay put so
+  // the user can retry or Skip; on success we refresh so newly-typed tasks appear
+  // in the allocation categories.
+  const applyTypes = useCallback(async () => {
+    if (!typeRows || !typeFieldInfoByIntegration) return;
+    const toWrite = typeRows.filter(r => r.chosen);
+    if (toWrite.length === 0) {
+      setStep('priorities');
+      return;
+    }
+    setIsApplyingTypes(true);
+    setError(null);
+    try {
+      const outcomes = await Promise.allSettled(
+        toWrite.map(r => {
+          const info = typeFieldInfoByIntegration.get(r.integrationId);
+          const optionGid = info?.enumOptions.get(r.chosen);
+          if (!info || !optionGid) {
+            return Promise.reject(new Error(`No Type option for "${r.chosen}"`));
+          }
+          return api.updateAsanaTask(r.gid, r.integrationId, {
+            customFields: { [info.fieldGid]: optionGid },
+          });
+        })
+      );
+      const failed = outcomes.filter(o => o.status === 'rejected').length;
+      onApplied?.(); // refresh so applied types show up in the allocation categories
+      if (failed > 0) {
+        setError(`${failed} of ${toWrite.length} type update${toWrite.length === 1 ? '' : 's'} failed — retry, or Skip to continue.`);
+        return; // stay on the type step
+      }
+      setStep('priorities');
+    } finally {
+      setIsApplyingTypes(false);
+    }
+  }, [typeRows, typeFieldInfoByIntegration, onApplied]);
 
   // --- Data fetching per step ---
 
@@ -239,7 +388,8 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
   // re-proposes each entry since it depends on prior steps' choices.
   useEffect(() => {
     if (!isOpen) return;
-    if (step === 'prep' && prepData === null) fetchPrep();
+    if (step === 'type' && typeRows === null && !typeLoading) runTypeClassifier();
+    else if (step === 'prep' && prepData === null) fetchPrep();
     else if (step === 'tasks' && taskCats === null) fetchTasks();
     else if (step === 'review') fetchReview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -438,6 +588,9 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
 
   const handleNext = useCallback(() => {
     switch (step) {
+      case 'type':
+        applyTypes();
+        break;
       case 'priorities':
         if (matchRows === null) runMatch();
         else confirmPriorities();
@@ -454,10 +607,13 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
         confirm();
         break;
     }
-  }, [step, matchRows, runMatch, confirmPriorities, confirm]);
+  }, [step, matchRows, runMatch, confirmPriorities, confirm, applyTypes]);
 
   const handleSkip = useCallback(() => {
     switch (step) {
+      case 'type':
+        setStep('priorities');
+        break;
       case 'priorities':
         setPriorityIds([]);
         setCategoryOverrides({});
@@ -494,13 +650,14 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
 
   if (!isOpen) return null;
 
-  const activeIndex = step === 'done' ? STEP_ORDER.length : STEP_ORDER.indexOf(step);
+  const activeIndex = step === 'done' ? stepOrder.length : stepOrder.indexOf(step);
   const canBack =
     (step === 'priorities' && matchRows !== null) ||
     step === 'prep' ||
     step === 'tasks' ||
     step === 'review';
-  const canSkip = step === 'priorities' || step === 'prep' || step === 'tasks';
+  const canSkip =
+    step === 'type' || step === 'priorities' || step === 'prep' || step === 'tasks';
 
   const projectsForIntegration = (integrationId: string) =>
     matchMeta.projects.filter(p => p.integrationId === integrationId);
@@ -532,8 +689,8 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
           <div className="flex items-center gap-4">
             {/* Step dots */}
             <div className="hidden sm:flex items-center gap-1.5">
-              {STEP_ORDER.map((s, i) => (
-                <div key={s} className="flex items-center gap-1.5" title={STEP_LABELS[s as Exclude<Step, 'done'>]}>
+              {stepOrder.map((s, i) => (
+                <div key={s} className="flex items-center gap-1.5" title={STEP_LABELS[s]}>
                   <span
                     className={`w-2 h-2 rounded-full transition-colors ${
                       i < activeIndex
@@ -571,6 +728,7 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
             </div>
           ) : (
             <>
+              {step === 'type' && renderTypes()}
               {step === 'priorities' && renderPriorities()}
               {step === 'prep' && renderPrep()}
               {step === 'tasks' && renderTasks()}
@@ -616,15 +774,18 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
                   disabled={
                     isLoading ||
                     prepBusy ||
+                    (step === 'type' && (typeLoading || isApplyingTypes)) ||
                     (step === 'priorities' && !prioritiesReady) ||
                     (step === 'review' && (acceptedCount === 0 || isConfirming))
                   }
                   className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
-                  {(isConfirming || (isLoading && step === 'priorities')) && (
+                  {(isConfirming || isApplyingTypes || (isLoading && step === 'priorities')) && (
                     <Loader2 className="w-4 h-4 animate-spin" />
                   )}
-                  {step === 'review' ? (
+                  {step === 'type' ? (
+                    <>Apply types &amp; continue</>
+                  ) : step === 'review' ? (
                     <>Add {acceptedCount > 0 ? acceptedCount : ''} to calendar</>
                   ) : (
                     <>
@@ -642,6 +803,93 @@ export function PlanWeekModal({ isOpen, onClose, onApplied }: PlanWeekModalProps
   );
 
   // --- Step renderers (closures over state) ---
+
+  function renderTypes() {
+    if (typeLoading || typeRows === null) {
+      return (
+        <div className="flex flex-col items-center justify-center py-16 gap-3">
+          <Loader2 className="w-6 h-6 animate-spin text-orange-500" />
+          <p className="text-sm text-gray-500">
+            Suggesting a Type for {untypedTasks.length} untyped task
+            {untypedTasks.length === 1 ? '' : 's'}…
+          </p>
+        </div>
+      );
+    }
+
+    const setChosen = (gid: string, value: string) =>
+      setTypeRows(prev => (prev ? prev.map(r => (r.gid === gid ? { ...r, chosen: value } : r)) : prev));
+
+    const keptCount = typeRows.filter(r => r.chosen).length;
+
+    // Light grouping by integration keeps a long list scannable when more than
+    // one Asana workspace is involved.
+    const byIntegration = new Map<string, TypeRow[]>();
+    for (const r of typeRows) {
+      const key = r.integrationName || 'Asana';
+      const list = byIntegration.get(key) ?? [];
+      list.push(r);
+      byIntegration.set(key, list);
+    }
+    const groups = [...byIntegration.entries()];
+    const showGroupHeaders = groups.length > 1;
+
+    return (
+      <div className="space-y-3">
+        <p className="text-sm text-gray-600">
+          {typeRows.length} task{typeRows.length === 1 ? '' : 's'} have no Type yet, so they&apos;re
+          invisible to your weekly allocation. Review the suggested Type for each — override or leave
+          untyped as needed — then apply.
+        </p>
+        {typeError && (
+          <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
+            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+            <span>Couldn&apos;t auto-suggest types ({typeError}). Set them manually below.</span>
+          </div>
+        )}
+
+        <div className="space-y-4">
+          {groups.map(([name, rows]) => (
+            <div key={name}>
+              {showGroupHeaders && (
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
+                  {name}
+                </h3>
+              )}
+              <ul className="space-y-1.5">
+                {rows.map(r => (
+                  <li key={r.gid} className="flex items-center gap-3">
+                    <span className="text-sm text-gray-700 truncate flex-1" title={r.title}>
+                      {r.title}
+                    </span>
+                    <select
+                      value={r.chosen}
+                      onChange={e => setChosen(r.gid, e.target.value)}
+                      className={`text-xs border rounded px-1.5 py-1 outline-none focus:ring-2 focus:ring-orange-500 flex-shrink-0 max-w-[45%] ${
+                        r.chosen ? 'border-gray-300 text-gray-700' : 'border-gray-200 text-gray-400'
+                      }`}
+                    >
+                      <option value="">— leave untyped —</option>
+                      {r.allowedTypes.map(t => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+
+        <p className="text-xs text-gray-400">
+          {keptCount} of {typeRows.length} will be written to Asana; the rest stay untyped. Skip to
+          continue without typing.
+        </p>
+      </div>
+    );
+  }
 
   function renderPriorities() {
     if (matchRows === null) {
