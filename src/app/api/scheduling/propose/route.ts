@@ -1,224 +1,98 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { addDays, format, startOfWeek } from 'date-fns';
 
-import { getWorkflowConfig } from '@/lib/workflow-config-storage';
-import {
-  getScheduledAsanaTasks,
-  getAdHocTasks,
-  getCustomTaskTypes,
-  getAllTaskMetadata,
-} from '@/lib/user-data-storage';
-import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations, updateIntegration } from '@/lib/integration-storage';
-import { getIncompleteTasks, refreshAsanaToken } from '@/lib/asana';
-import { ensureValidCredentials, getCalendarEvents } from '@/lib/google-calendar';
-import { classifyBlockCategory, type CapacityQuota } from '@/lib/capacity';
-import { eventsToBusyIntervals } from '@/lib/scheduling/free-busy';
+import { classifyBlockCategory } from '@/lib/capacity';
+import { gatherWeekContext } from '@/lib/scheduling/gather';
 import { proposeBlocks } from '@/lib/scheduling/engine';
-import type { BusyInterval, CandidateTask } from '@/lib/scheduling/types';
-import {
-  AsanaIntegration,
-  AsanaTask,
-  BUILT_IN_TASK_TYPE_LABELS,
-  BuiltInTaskType,
-  CustomTaskType,
-  GoogleIntegration,
-  isCustomTaskType,
-  getCustomTaskTypeId,
-} from '@/types';
+import type { BusyInterval, CandidateTask, ProposedBlock } from '@/lib/scheduling/types';
 
-// Resolve the type signals for an ad-hoc task's taskType (id + human label).
-// Mirrors the dashboard capacity route so classification stays consistent.
-function adHocTypeSignals(taskType: string, customTypes: CustomTaskType[]): string[] {
-  const signals = [taskType];
-  if (isCustomTaskType(taskType as `custom:${string}`)) {
-    const id = getCustomTaskTypeId(taskType as `custom:${string}`);
-    const custom = customTypes.find(c => c.id === id);
-    if (custom) signals.push(custom.label);
-  } else {
-    const label = BUILT_IN_TASK_TYPE_LABELS[taskType as BuiltInTaskType];
-    if (label) signals.push(label);
-  }
-  return signals;
-}
-
-// Fetch incomplete Asana tasks across enabled integrations, tagged with their
-// integration id and "Type" custom-field value.
-async function fetchAsanaCandidates(): Promise<
-  Array<{ task: AsanaTask; integrationId: string; typeValue: string | null }>
-> {
-  const out: Array<{ task: AsanaTask; integrationId: string; typeValue: string | null }> = [];
-  try {
-    const integrations = await getEnabledAsanaIntegrations();
-    await Promise.all(
-      integrations.map(async (integration: AsanaIntegration) => {
-        if (!integration.credentials || !integration.workspaceId) return;
-        let credentials = integration.credentials;
-        if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
-          credentials = await refreshAsanaToken(
-            credentials.refreshToken!,
-            integration.clientId,
-            integration.clientSecret
-          );
-          await updateIntegration(integration.id, { credentials });
-        }
-        const tasks = await getIncompleteTasks(credentials.accessToken, integration.workspaceId);
-        for (const task of tasks) {
-          const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
-          out.push({ task, integrationId: integration.id, typeValue: typeField?.displayValue ?? null });
-        }
-      })
-    );
-  } catch (error) {
-    console.error('[Scheduling Propose] Failed to fetch Asana tasks:', error);
-  }
-  return out;
-}
-
-// Fetch merged busy intervals across all enabled Google calendars for the week.
-async function fetchBusyIntervals(weekStart: Date): Promise<BusyInterval[]> {
-  const integrations = await getEnabledGoogleIntegrations();
-  const allEvents: Array<{ startTime: Date; endTime: Date; allDay?: boolean }> = [];
-
-  const DEFAULT_CALENDAR = { id: 'primary', backgroundColor: '#4285f4', summary: 'Primary', selected: true as const };
-
-  await Promise.all(
-    integrations.map(async (integration: GoogleIntegration) => {
-      if (!integration.credentials) return;
-      try {
-        const credentials = await ensureValidCredentials(integration);
-        const selected = integration.calendars?.filter(c => c.selected);
-        const calendars = selected?.length ? selected : [DEFAULT_CALENDAR];
-        for (let i = 0; i < 7; i++) {
-          const day = addDays(weekStart, i);
-          for (const cal of calendars) {
-            try {
-              const events = await getCalendarEvents(
-                credentials,
-                integration.clientId,
-                integration.clientSecret,
-                day,
-                cal.id
-              );
-              for (const e of events) {
-                allEvents.push({ startTime: e.startTime, endTime: e.endTime, allDay: e.allDay });
-              }
-            } catch (err) {
-              console.error(`[Scheduling Propose] calendar ${cal.id} fetch failed:`, err);
-            }
-          }
-        }
-      } catch (err) {
-        console.error(`[Scheduling Propose] integration ${integration.name} failed:`, err);
-      }
-    })
-  );
-
-  return eventsToBusyIntervals(allEvents);
+// Convert a proposed block's date + HH:mm + duration into a busy interval so the
+// engine treats accepted prep blocks as occupied time.
+function blockToInterval(block: ProposedBlock): BusyInterval {
+  const [y, mo, d] = block.date.split('-').map(Number);
+  const [h, m] = block.start.split(':').map(Number);
+  const start = new Date(y, mo - 1, d, h, m, 0, 0);
+  const end = new Date(start.getTime() + block.durationMinutes * 60 * 1000);
+  return { start, end };
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
-    const now = new Date();
-    const weekStartDate = body.weekStart
-      ? startOfWeek(new Date(`${body.weekStart}T00:00:00`), { weekStartsOn: 1 })
-      : startOfWeek(now, { weekStartsOn: 1 });
-    const weekStartStr = format(weekStartDate, 'yyyy-MM-dd');
-    const weekEndStr = format(addDays(weekStartDate, 6), 'yyyy-MM-dd');
 
-    const [config, scheduledAsana, adHocTasks, customTypes, metadata, asanaCandidates, busyIntervals] =
-      await Promise.all([
-        getWorkflowConfig(),
-        getScheduledAsanaTasks(),
-        getAdHocTasks(),
-        getCustomTaskTypes(),
-        getAllTaskMetadata(),
-        fetchAsanaCandidates(),
-        fetchBusyIntervals(weekStartDate),
-      ]);
+    const selections: Record<string, string[]> | undefined =
+      body?.selections && typeof body.selections === 'object' ? body.selections : undefined;
+    const priorityGids: string[] = Array.isArray(body?.priorityGids) ? body.priorityGids : [];
+    const categoryOverrides: Record<string, string> =
+      body?.categoryOverrides && typeof body.categoryOverrides === 'object' ? body.categoryOverrides : {};
+    const prepBlocks: ProposedBlock[] = Array.isArray(body?.prepBlocks) ? body.prepBlocks : [];
 
-    const quotas: CapacityQuota[] = Object.entries(config.taskQuotas).map(([category, quota]) => ({
-      category,
-      weeklyCount: quota.weeklyCount,
-      targetLength: quota.targetLength,
-      types: config.typeMapping?.[category] ?? [],
-    }));
+    const ctx = await gatherWeekContext(typeof body?.weekStart === 'string' ? body.weekStart : undefined);
 
-    // --- Existing scheduled blocks this week (counts + per-date + exclusions) ---
-    const asanaTypeByGid = new Map(asanaCandidates.map(c => [c.task.gid, c.typeValue]));
-    const inWeek = (d?: string) => !!d && d >= weekStartStr && d <= weekEndStr;
-
-    const existingScheduledCounts: Record<string, number> = {};
-    const existingBlocksByDate: Record<string, number> = {};
-    const scheduledGids = new Set<string>();
-
-    const bump = (category: string | null) => {
-      if (category) existingScheduledCounts[category] = (existingScheduledCounts[category] ?? 0) + 1;
-    };
-
-    for (const s of scheduledAsana) {
-      if (!inWeek(s.scheduledDate)) continue;
-      scheduledGids.add(s.asanaTaskId);
-      existingBlocksByDate[s.scheduledDate] = (existingBlocksByDate[s.scheduledDate] ?? 0) + 1;
-      const typeValue = asanaTypeByGid.get(s.asanaTaskId) ?? null;
-      bump(classifyBlockCategory(typeValue ? [typeValue] : [], quotas));
+    // Accepted prep blocks occupy time before task placement: join busy + counts.
+    const busyIntervals = [...ctx.busyIntervals, ...prepBlocks.map(blockToInterval)];
+    const existingBlocksByDate = { ...ctx.existingBlocksByDate };
+    for (const block of prepBlocks) {
+      existingBlocksByDate[block.date] = (existingBlocksByDate[block.date] ?? 0) + 1;
     }
 
-    const scheduledAdhocIds = new Set<string>();
-    for (const t of adHocTasks) {
-      if (t.completed || !inWeek(t.dueDate)) continue;
-      scheduledAdhocIds.add(t.id);
-      existingBlocksByDate[t.dueDate!] = (existingBlocksByDate[t.dueDate!] ?? 0) + 1;
-      bump(classifyBlockCategory(adHocTypeSignals(t.taskType, customTypes), quotas));
-    }
+    const priorityIds = new Set(priorityGids);
+    const autoSelectByCategory = new Map(
+      Object.entries(ctx.config.taskQuotas).map(([category, quota]) => [category, quota.autoSelect === true])
+    );
+    const selectionSets = selections
+      ? new Map(Object.entries(selections).map(([cat, ids]) => [cat, new Set(ids)]))
+      : null;
 
-    // --- Candidate tasks (not yet scheduled this week) ---
+    // Apply priority flags + category overrides, then (when the caller supplied
+    // selections) drop candidates the user did not pick for manual categories.
     const candidateTasks: CandidateTask[] = [];
-    for (const { task, integrationId, typeValue } of asanaCandidates) {
-      if (scheduledGids.has(task.gid)) continue;
-      const meta = metadata[task.gid];
-      candidateTasks.push({
-        gid: task.gid,
-        title: task.name,
-        integrationId,
-        dueDate: task.dueOn,
-        typeSignals: typeValue ? [typeValue] : [],
-        deadlineType: meta?.deadlineType,
-        bestTime: meta?.bestTime,
-        energyLevel: meta?.energyLevel,
-        effortMinutes: meta?.effortMinutes,
-      });
-    }
-    for (const t of adHocTasks) {
-      if (t.completed || scheduledAdhocIds.has(t.id)) continue;
-      candidateTasks.push({
-        adhocId: t.id,
-        title: t.title,
-        dueDate: t.dueDate,
-        typeSignals: adHocTypeSignals(t.taskType, customTypes),
-      });
+    for (const task of ctx.candidateTasks) {
+      const id = task.gid ?? task.adhocId ?? '';
+      const overrideCategory = categoryOverrides[id];
+      const typeSignals = overrideCategory ? [overrideCategory] : task.typeSignals;
+      const withFlags: CandidateTask = {
+        ...task,
+        typeSignals,
+        isPriority: task.gid ? priorityIds.has(task.gid) : task.isPriority,
+      };
+
+      if (selectionSets) {
+        const category = classifyBlockCategory(typeSignals, ctx.quotas);
+        if (category && !autoSelectByCategory.get(category)) {
+          const picked = selectionSets.get(category);
+          // Manual category the user didn't pick for at all → no candidates
+          // (its quota fills as Reserved time). Picked category → only its ids.
+          if (!picked || !picked.has(id)) continue;
+        }
+      }
+
+      candidateTasks.push(withFlags);
     }
 
-    const proposals = proposeBlocks({
-      config,
+    const taskBlocks = proposeBlocks({
+      config: ctx.config,
       busyIntervals,
       candidateTasks,
-      existingScheduledCounts,
+      existingScheduledCounts: ctx.existingScheduledCounts,
       existingBlocksByDate,
-      weekStart: weekStartDate,
-      now,
+      existingCategoryCountsByDate: ctx.existingCategoryCountsByDate,
+      weekStart: ctx.weekStart,
+      now: ctx.now,
     });
 
-    // --- Unmet-quota summary ---
+    // Prep blocks are shown first, ahead of the task/reserved blocks.
+    const proposals = [...prepBlocks, ...taskBlocks];
+
+    // --- Unmet-quota summary (task categories only; prep isn't a quota) ---
     const proposedByCategory: Record<string, number> = {};
-    for (const p of proposals) {
+    for (const p of taskBlocks) {
       proposedByCategory[p.category] = (proposedByCategory[p.category] ?? 0) + 1;
     }
-    const quotaSummary = quotas
+    const quotaSummary = ctx.quotas
       .filter(q => (q.weeklyCount ?? 0) > 0)
       .map(q => {
         const weeklyCount = q.weeklyCount ?? 0;
-        const existing = existingScheduledCounts[q.category] ?? 0;
+        const existing = ctx.existingScheduledCounts[q.category] ?? 0;
         const proposed = proposedByCategory[q.category] ?? 0;
         return {
           category: q.category,
@@ -230,8 +104,8 @@ export async function POST(request: NextRequest) {
       });
 
     return NextResponse.json({
-      weekStart: weekStartStr,
-      weekEnd: weekEndStr,
+      weekStart: ctx.weekStartStr,
+      weekEnd: ctx.weekEndStr,
       proposals,
       quotaSummary,
     });

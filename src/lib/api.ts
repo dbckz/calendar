@@ -26,6 +26,70 @@ export interface ConfirmWeekResult {
   error?: string;
 }
 
+// --- "Plan my week" wizard: priorities, prep and task-candidate shapes ---
+
+export interface ProposeWeekRequest {
+  weekStart?: string;
+  selections?: Record<string, string[]>; // category -> selected candidate ids
+  priorityGids?: string[];
+  categoryOverrides?: Record<string, string>; // candidate id -> category
+  prepBlocks?: ProposedBlock[];
+}
+
+export interface PriorityMatchRow {
+  text: string;
+  match: { gid: string; title: string; integrationId: string; category: string | null } | null;
+}
+
+export interface MatchPrioritiesResponse {
+  results: PriorityMatchRow[];
+  asanaIntegrations: Array<{ id: string; name: string }>;
+  categories: string[];
+  aiUnavailable?: boolean;
+}
+
+export interface CreatePriorityTasksResponse {
+  created: Array<{ text: string; gid: string; title: string; integrationId: string }>;
+  errors: Array<{ text: string; error: string }>;
+}
+
+export interface PrepMeetingRow {
+  key: string;
+  eventId: string;
+  title: string;
+  date: string;
+  start: string;
+  needsPrep: boolean;
+  decidedBy: 'user' | 'ai';
+  reason: string;
+  block?: ProposedBlock;
+}
+
+export interface PrepCandidatesResponse {
+  meetings: PrepMeetingRow[];
+  unplaced: Array<{ key: string; title: string }>;
+}
+
+export interface WeekCandidate {
+  id: string;
+  gid?: string;
+  title: string;
+  dueDate?: string;
+  deadlineType?: string;
+  isPriority: boolean;
+}
+
+export interface WeekCandidateCategory {
+  category: string;
+  remainingQuota: number;
+  autoSelect: boolean;
+  candidates: WeekCandidate[];
+}
+
+export interface WeekCandidatesResponse {
+  categories: WeekCandidateCategory[];
+}
+
 export interface ConfirmWeekResponse {
   results: ConfirmWeekResult[];
 }
@@ -700,12 +764,72 @@ export const api = {
     return fetchWithRetry<DashboardCapacityResponse>('/api/dashboard/capacity');
   },
 
-  // "Plan my week" auto-scheduling
-  async proposeWeeklyPlan(weekStart?: string): Promise<ProposeWeekResponse> {
+  // "Plan my week" auto-scheduling. Empty body reproduces the original
+  // auto-pick-everything behavior; the wizard passes selections/prep/priorities.
+  async proposeWeeklyPlan(body?: ProposeWeekRequest): Promise<ProposeWeekResponse> {
     return fetchWithRetry<ProposeWeekResponse>('/api/scheduling/propose', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(weekStart ? { weekStart } : {}),
+      body: JSON.stringify(body ?? {}),
+    });
+  },
+
+  // Wizard step 1: match typed priorities against existing Asana tasks.
+  async matchPriorities(items: string[], weekStart?: string): Promise<MatchPrioritiesResponse> {
+    return fetchWithRetry<MatchPrioritiesResponse>(
+      '/api/scheduling/priorities/match',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items, ...(weekStart ? { weekStart } : {}) }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Wizard step 1: create Asana tasks for unmatched priorities.
+  async createPriorityTasks(
+    items: Array<{ text: string; integrationId: string }>
+  ): Promise<CreatePriorityTasksResponse> {
+    return fetchWithRetry<CreatePriorityTasksResponse>('/api/scheduling/priorities/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    });
+  },
+
+  // Wizard step 2: which meetings need prep, with proposed slots.
+  async getPrepCandidates(weekStart?: string): Promise<PrepCandidatesResponse> {
+    return fetchWithRetry<PrepCandidatesResponse>(
+      '/api/scheduling/prep/candidates',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(weekStart ? { weekStart } : {}),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Wizard step 2: persist a user's prep decision for a meeting title.
+  async setPrepDecision(title: string, needsPrep: boolean): Promise<{ ok: true }> {
+    return fetchWithRetry<{ ok: true }>('/api/scheduling/prep/decision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, needsPrep }),
+    });
+  },
+
+  // Wizard step 3: ranked task candidates per quota category.
+  async getWeekCandidates(body?: {
+    weekStart?: string;
+    priorityGids?: string[];
+    categoryOverrides?: Record<string, string>;
+  }): Promise<WeekCandidatesResponse> {
+    return fetchWithRetry<WeekCandidatesResponse>('/api/scheduling/candidates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
     });
   },
 

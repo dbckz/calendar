@@ -64,8 +64,13 @@ export async function POST(request: NextRequest) {
     for (const proposal of proposals) {
       try {
         const { start, end } = toStartEnd(proposal.date, proposal.start, proposal.durationMinutes);
-        const isReserved = !proposal.task;
-        const title = isReserved ? `${proposal.category} block` : proposal.task!.title;
+        const isPrep = proposal.kind === 'prep';
+        const isReserved = !isPrep && !proposal.task;
+        const title = isPrep
+          ? `Prep: ${proposal.meeting?.title ?? proposal.category}`
+          : isReserved
+            ? `${proposal.category} block`
+            : proposal.task!.title;
 
         const event = await createCalendarEvent(
           credentials,
