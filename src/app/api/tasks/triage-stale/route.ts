@@ -68,10 +68,10 @@ export async function POST(request: NextRequest) {
       if (!fresh) toAssess.push(task);
     }
 
-    const results = await classifyStale(toAssess, new Date(now).toISOString());
+    const assessedAt = new Date(now).toISOString();
+    const results = await classifyStale(toAssess, assessedAt);
     const byGid = new Map(results.map(r => [r.gid, r]));
 
-    const assessedAt = new Date(now).toISOString();
     const newEntries: Record<string, StaleClassificationEntry> = {};
     for (const task of toAssess) {
       const verdict = byGid.get(task.gid);
