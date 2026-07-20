@@ -43,6 +43,15 @@ export interface ProposedBlock {
     title: string;
     integrationId?: string;
   };
+  // Present only on grouped blocks (a `grouped` category, e.g. Engagement /
+  // Outreach): the tasks assigned to this block, listed inside the event as an
+  // agenda. A grouped block has `tasks` (0+ items) and no single `task`.
+  tasks?: Array<{
+    gid?: string;
+    adhocId?: string;
+    title: string;
+    integrationId?: string;
+  }>;
   date: string; // yyyy-MM-dd
   start: string; // HH:mm (local)
   durationMinutes: number;

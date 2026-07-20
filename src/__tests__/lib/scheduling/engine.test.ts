@@ -270,6 +270,28 @@ describe('proposeBlocks - ranking', () => {
     const first = proposals.find(p => p.start === '09:00');
     expect(first?.category).toBe('B');
   });
+
+  it('processes Writing/Deep Work first, even ahead of a hard-deadline category', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: {
+            'Writing/Deep Work': { weeklyCount: 1, targetLength: '1h', preferredTimes: [] },
+            B: { weeklyCount: 1, targetLength: '1h', preferredTimes: [] },
+          },
+          typeMapping: { 'Writing/Deep Work': ['deep'], B: ['b'] },
+          scheduling: { workingDays: ['Monday'] },
+        }),
+        candidateTasks: [
+          task({ gid: 'd1', typeSignals: ['deep'] }),
+          task({ gid: 'b1', typeSignals: ['b'], deadlineType: 'hard' }),
+        ],
+      })
+    );
+    // Deep work claims the earliest slot despite B having a hard deadline.
+    const first = proposals.find(p => p.start === '09:00');
+    expect(first?.category).toBe('Writing/Deep Work');
+  });
 });
 
 describe('proposeBlocks - soft day spread', () => {
@@ -381,6 +403,77 @@ describe('proposeBlocks - priority ranking', () => {
       })
     );
     expect(proposals[0].task?.gid).toBe('prio');
+  });
+});
+
+describe('proposeBlocks - grouped blocks', () => {
+  // A grouped Engagement-style category: 3 blocks/week, any number of tasks
+  // distributed across them round-robin rather than one task per block.
+  const groupedConfig = () =>
+    makeConfig({
+      quotas: {
+        Engage: { weeklyCount: 3, targetLength: '1h', grouped: true, preferredTimes: ['13:00-17:00'] },
+      },
+      typeMapping: { Engage: ['engage'] },
+    });
+  const engageTask = (gid: string) => task({ gid, typeSignals: ['engage'] });
+
+  it('places weeklyCount blocks with tasks and no single task, distributed round-robin', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: groupedConfig(),
+        candidateTasks: ['a', 'b', 'c', 'd', 'e'].map(engageTask),
+      })
+    );
+    // 3 blocks (weeklyCount), never one-per-task.
+    expect(proposals).toHaveLength(3);
+    for (const p of proposals) {
+      expect(p.task).toBeUndefined();
+      expect(Array.isArray(p.tasks)).toBe(true);
+    }
+    // Every selected task appears exactly once across the blocks.
+    const allTaskGids = proposals.flatMap(p => p.tasks!.map(t => t.gid)).sort();
+    expect(allTaskGids).toEqual(['a', 'b', 'c', 'd', 'e']);
+    // Round-robin: 5 tasks over 3 blocks -> 2,2,1.
+    expect(proposals.map(p => p.tasks!.length).sort()).toEqual([1, 2, 2]);
+  });
+
+  it('places in the afternoon preferred window', () => {
+    const proposals = proposeBlocks(
+      makeInput({ config: groupedConfig(), candidateTasks: [engageTask('a')] })
+    );
+    expect(proposals.every(p => p.start >= '13:00')).toBe(true);
+  });
+
+  it('still schedules all N blocks when there are fewer tasks than blocks', () => {
+    const proposals = proposeBlocks(
+      makeInput({ config: groupedConfig(), candidateTasks: [engageTask('a')] })
+    );
+    expect(proposals).toHaveLength(3);
+    // One block carries the task; the others are empty (0 tasks) but still placed.
+    expect(proposals.filter(p => p.tasks!.length === 1)).toHaveLength(1);
+    expect(proposals.filter(p => p.tasks!.length === 0)).toHaveLength(2);
+  });
+
+  it('schedules N reserved-style blocks with no tasks when none are selected', () => {
+    const proposals = proposeBlocks(
+      makeInput({ config: groupedConfig(), candidateTasks: [] })
+    );
+    expect(proposals).toHaveLength(3);
+    expect(proposals.every(p => p.tasks!.length === 0)).toBe(true);
+  });
+
+  it('reduces block count by existing scheduled blocks', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: groupedConfig(),
+        candidateTasks: ['a', 'b'].map(engageTask),
+        existingScheduledCounts: { Engage: 1 },
+      })
+    );
+    expect(proposals).toHaveLength(2); // 3 - 1 already scheduled
+    const allTaskGids = proposals.flatMap(p => p.tasks!.map(t => t.gid)).sort();
+    expect(allTaskGids).toEqual(['a', 'b']);
   });
 });
 

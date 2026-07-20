@@ -46,13 +46,19 @@ export async function POST(request: NextRequest) {
       .map(q => {
         const weeklyCount = q.weeklyCount ?? 0;
         const noQuota = weeklyCount <= 0;
+        // Grouped categories (e.g. Engagement / Outreach) place a fixed number of
+        // blocks but let the user pick ANY number of tasks to spread across them,
+        // so — like no-quota catch-alls — they surface uncapped (remainingQuota
+        // null) and the wizard renders them "Pick any".
+        const grouped = ctx.config.taskQuotas[q.category]?.grouped === true;
         const existing = ctx.existingScheduledCounts[q.category] ?? 0;
         const list = (tasksByCategory.get(q.category) ?? []).slice();
         list.sort((a, b) => compareKeys(taskSortKey(a), taskSortKey(b)));
         return {
           category: q.category,
           noQuota,
-          remainingQuota: noQuota ? null : Math.max(0, weeklyCount - existing),
+          grouped,
+          remainingQuota: noQuota || grouped ? null : Math.max(0, weeklyCount - existing),
           autoSelect: noQuota ? false : ctx.config.taskQuotas[q.category]?.autoSelect === true,
           candidates: list.map(t => ({
             id: t.gid ?? t.adhocId ?? '',

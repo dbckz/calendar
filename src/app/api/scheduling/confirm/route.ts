@@ -65,12 +65,25 @@ export async function POST(request: NextRequest) {
       try {
         const { start, end } = toStartEnd(proposal.date, proposal.start, proposal.durationMinutes);
         const isPrep = proposal.kind === 'prep';
-        const isReserved = !isPrep && !proposal.task;
+        // A grouped block (e.g. Engagement / Outreach) carries a `tasks` list
+        // instead of a single `task`: one container event titled with the
+        // category, its agenda listed in the description.
+        const isGrouped = Array.isArray(proposal.tasks);
+        const isReserved = !isPrep && !isGrouped && !proposal.task;
         const title = isPrep
           ? `Prep: ${proposal.meeting?.title ?? proposal.category}`
-          : isReserved
-            ? `${proposal.category} block`
-            : proposal.task!.title;
+          : isGrouped
+            ? proposal.category
+            : isReserved
+              ? `${proposal.category} block`
+              : proposal.task!.title;
+
+        // Grouped blocks list their assigned tasks as a bulleted agenda beneath
+        // the reason; everything else just uses the reason as the description.
+        const description =
+          isGrouped && proposal.tasks!.length > 0
+            ? `${proposal.reason}\n\n${proposal.tasks!.map(t => `• ${t.title}`).join('\n')}`
+            : proposal.reason;
 
         const event = await createCalendarEvent(
           credentials,
@@ -79,12 +92,39 @@ export async function POST(request: NextRequest) {
           title,
           start,
           end,
-          proposal.reason,
+          description,
           'default',
           'primary'
         );
 
-        if (!isReserved && proposal.task) {
+        if (isGrouped) {
+          // Record each listed task as scheduled to the shared container event, so
+          // they show as scheduled and drop out of future candidate pools.
+          for (const t of proposal.tasks!) {
+            if (t.gid) {
+              await scheduleAsanaTask(
+                t.gid,
+                t.integrationId,
+                proposal.date,
+                proposal.start,
+                proposal.durationMinutes,
+                event.id,
+                googleIntegration.id
+              );
+              if (t.integrationId) {
+                await setGoogleEventAttribution(event.id, googleIntegration.id, t.integrationId);
+              }
+            } else if (t.adhocId) {
+              await updateAdHocTask(t.adhocId, {
+                dueDate: proposal.date,
+                dueTime: proposal.start,
+                duration: proposal.durationMinutes,
+                googleEventId: event.id,
+                googleIntegrationId: googleIntegration.id,
+              });
+            }
+          }
+        } else if (!isReserved && proposal.task) {
           const { gid, adhocId, integrationId } = proposal.task;
           if (gid) {
             await scheduleAsanaTask(

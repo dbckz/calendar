@@ -188,9 +188,19 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     byCat[category] = (byCat[category] ?? 0) + 1;
   };
 
+  // Grouped-block tasks (e.g. Engagement / Outreach) all point at the SAME Google
+  // event, so count that block once even though it records several scheduled
+  // tasks — otherwise remaining quota / maxTasksPerDay would be over-counted on a
+  // mid-week re-run. Single-task blocks each have a unique event, so this is a
+  // no-op for them; entries without an event id are always counted.
+  const countedEvents = new Set<string>();
   for (const s of scheduledAsana) {
     if (!inWeek(s.scheduledDate)) continue;
-    scheduledGids.add(s.asanaTaskId);
+    scheduledGids.add(s.asanaTaskId); // every listed task still drops from candidates
+    if (s.googleEventId) {
+      if (countedEvents.has(s.googleEventId)) continue;
+      countedEvents.add(s.googleEventId);
+    }
     existingBlocksByDate[s.scheduledDate] = (existingBlocksByDate[s.scheduledDate] ?? 0) + 1;
     const typeValue = asanaTypeByGid.get(s.asanaTaskId) ?? null;
     bump(classifyBlockCategory(typeValue ? [typeValue] : [], quotas), s.scheduledDate);

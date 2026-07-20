@@ -564,6 +564,7 @@ export function PlanWeekModal({
         id: p.id,
         category: p.category,
         task: p.task,
+        tasks: p.tasks,
         date: p.date,
         start: p.start,
         durationMinutes: p.durationMinutes,
@@ -1308,13 +1309,16 @@ export function PlanWeekModal({
               <ul className="space-y-2">
                 {group.items.map(p => {
                   const isPrep = p.kind === 'prep';
+                  const isGrouped = Array.isArray(p.tasks);
                   const color = categoryColor(p.category);
                   const result = results[p.id];
                   const label = isPrep
                     ? p.meeting?.title ?? 'Prep'
-                    : p.task
-                      ? p.task.title
-                      : 'Reserved';
+                    : isGrouped
+                      ? `${p.tasks!.length} task${p.tasks!.length === 1 ? '' : 's'}`
+                      : p.task
+                        ? p.task.title
+                        : 'Reserved';
                   return (
                     <li
                       key={p.id}
@@ -1351,6 +1355,16 @@ export function PlanWeekModal({
                             {label}
                           </span>
                         </div>
+                        {/* Grouped block: list its assigned tasks as an agenda. */}
+                        {isGrouped && p.tasks!.length > 0 && (
+                          <ul className="mt-1.5 space-y-0.5 pl-1">
+                            {p.tasks!.map((t, i) => (
+                              <li key={t.gid ?? t.adhocId ?? i} className="text-xs text-gray-500 truncate">
+                                • {t.title}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                       </div>
                       <input
                         type="time"

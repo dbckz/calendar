@@ -84,6 +84,9 @@ export interface WeekCandidateCategory {
   // No-quota catch-all categories (e.g. "General Todos") have no weekly cap:
   // noQuota is true and remainingQuota is null — pick any number of candidates.
   noQuota: boolean;
+  // Grouped categories (e.g. Engagement / Outreach) also lift the selection cap
+  // (remainingQuota is null); their picked tasks are spread across fixed blocks.
+  grouped?: boolean;
   remainingQuota: number | null;
   autoSelect: boolean;
   candidates: WeekCandidate[];

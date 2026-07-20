@@ -1,7 +1,7 @@
 // Pure meeting-prep block placement.
 //
 // Given the week's meetings that need preparation (already AI/user-decided
-// upstream), proposePrepBlocks books a 30-minute prep block for each: the day
+// upstream), proposePrepBlocks books a 15-minute prep block for each: the day
 // before during working hours if possible, else the day of before the meeting
 // starts (leaving the configured buffer). Meetings that fit nowhere are
 // returned as `unplaced`. Like the scheduling engine this is I/O-free and
@@ -22,7 +22,7 @@ import {
 } from './engine';
 import type { BusyInterval, ProposedBlock } from './types';
 
-const PREP_DURATION_MINUTES = 30;
+const PREP_DURATION_MINUTES = 15;
 const PREP_CATEGORY = 'Meeting prep';
 const MS_PER_MINUTE = 60 * 1000;
 const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;

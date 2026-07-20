@@ -47,7 +47,7 @@ export function parseTargetLength(input: string | undefined): number {
 // differences shouldn't matter: an Asana Type "Writing / Deep Work" must match
 // the config category "Writing/Deep Work". So we lowercase, trim, drop spaces
 // around slashes, and collapse whitespace runs to a single space.
-function normalize(s: string): string {
+export function normalize(s: string): string {
   return s
     .trim()
     .toLowerCase()

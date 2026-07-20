@@ -14,6 +14,11 @@ export interface TaskQuota {
   // When true, "Plan my week" auto-picks tasks for this category instead of
   // prompting for manual selection. Defaults on for Batch.
   autoSelect?: boolean;
+  // When true, this category is scheduled as "grouped blocks": weeklyCount
+  // reserved blocks are placed, and the user's selected tasks (any number — the
+  // selection cap is lifted) are distributed across those blocks round-robin and
+  // listed inside each block's event as an agenda, rather than one task per block.
+  grouped?: boolean;
 }
 
 export interface SchedulingConfig {
@@ -62,7 +67,7 @@ const DEFAULT_CONFIG: WorkflowConfig = {
     'Writing/Deep Work': {
       weeklyCount: 3,
       targetLength: '2h',
-      preferredTimes: ['09:00-11:00', '21:00-23:00'],
+      preferredTimes: ['08:30-11:00'],
     },
     Blogs: {
       weeklyCount: 2,
@@ -76,9 +81,11 @@ const DEFAULT_CONFIG: WorkflowConfig = {
       autoSelect: true,
     },
     'Engagement/Outreach': {
-      weeklyCount: 1,
-      targetLength: '45min',
-      preferredTimes: [],
+      weeklyCount: 3,
+      targetLength: '1h',
+      grouped: true,
+      preferredTimes: ['13:00-17:00'],
+      autoSelect: false,
     },
     'General Todos': {
       // This fills remaining time - minimal configuration needed
@@ -88,7 +95,7 @@ const DEFAULT_CONFIG: WorkflowConfig = {
   },
   scheduling: {
     maxTasksPerDay: 4,
-    bufferBetweenTasks: '30min',
+    bufferBetweenTasks: '0',
     workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
     workingHours: {
       start: '09:00',

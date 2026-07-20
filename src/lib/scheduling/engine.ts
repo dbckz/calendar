@@ -30,7 +30,7 @@
 // Categories with no weeklyCount (e.g. a catch-all "General Todos") are skipped
 // — without a target count there is nothing to fill toward.
 
-import { classifyBlockCategory, parseTargetLength, type CapacityQuota } from '@/lib/capacity';
+import { classifyBlockCategory, normalize, parseTargetLength, type CapacityQuota } from '@/lib/capacity';
 import type { BestTime } from '@/types';
 import type {
   CandidateTask,
@@ -316,12 +316,20 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
     if (remaining > 0) remainingByCategory.set(quota.category, remaining);
   }
 
-  // Category processing order: hard-deadline categories first, then by
-  // remaining quota desc, then name.
+  // Category processing order: the Writing/Deep Work category is processed
+  // FIRST so it claims the earliest morning slots before other categories fill
+  // them; then hard-deadline categories first, then by remaining quota desc,
+  // then name. Deep work is matched via the whitespace-robust normalize so
+  // "Writing / Deep Work" and "Writing/Deep Work" are treated the same.
   const categoryHasHard = (category: string): boolean =>
     (tasksByCategory.get(category) ?? []).some(t => t.deadlineType === 'hard');
+  const isDeepWork = (category: string): boolean =>
+    normalize(category) === normalize('Writing/Deep Work');
 
   const orderedCategories = [...remainingByCategory.keys()].sort((a, b) => {
+    const deepA = isDeepWork(a);
+    const deepB = isDeepWork(b);
+    if (deepA !== deepB) return deepA ? -1 : 1;
     const hardA = categoryHasHard(a);
     const hardB = categoryHasHard(b);
     if (hardA !== hardB) return hardA ? -1 : 1;
@@ -352,6 +360,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
 
     let remaining = remainingByCategory.get(category)!;
     const categoryTasks = tasksByCategory.get(category) ?? [];
+    const grouped = config.taskQuotas[category]?.grouped === true;
 
     // Per-date count of this category's blocks, seeded from what's already on the
     // calendar. Drives the leveled (spread) search below so same-category blocks
@@ -361,17 +370,11 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
       catCount[wd.dateStr] = input.existingCategoryCountsByDate?.[wd.dateStr]?.[category] ?? 0;
     }
 
-    while (remaining > 0) {
-      const task = categoryTasks.find(t => {
-        const id = t.gid ?? t.adhocId;
-        return id ? !usedTaskIds.has(id) : true;
-      });
-
-      const windows = buildWindowsForTask(task?.bestTime, preferredWindows, workingDays);
-      // Leveled search: level 0 allows only days with zero blocks of this
-      // category, level 1 up to one, etc. Window ordering (preferred/bestTime,
-      // then working hours) is preserved within each level, so spread outranks
-      // earliness but preferred times still win across distinct days.
+    // Leveled (spread) slot search shared by both modes: level 0 allows only days
+    // with zero blocks of this category, level 1 up to one, etc. Window ordering
+    // (preferred/bestTime, then working hours) is preserved within each level, so
+    // spread outranks earliness but preferred times still win across distinct days.
+    const findLeveledSlot = (windows: Window[]) => {
       let slot: ReturnType<typeof findSlot> = null;
       for (let level = 0; level <= 7 && !slot; level++) {
         const allowed = new Set(
@@ -379,6 +382,62 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
         );
         slot = findSlot(windows, duration, buffer, busy, nowMs, maxPerDay, countByDate, allowed);
       }
+      return slot;
+    };
+
+    // Grouped mode: place `remaining` reserved-style blocks (no per-block task
+    // consumption), then distribute the category's selected candidate tasks across
+    // those blocks round-robin (in the engine's task sort order). Each block emits
+    // a ProposedBlock with `tasks` (its assigned subset) and no single `task`.
+    if (grouped) {
+      const placed: Array<{ blockId: string; dateStr: string; start: string }> = [];
+      while (remaining > 0) {
+        const windows = buildWindowsForTask(undefined, preferredWindows, workingDays);
+        const slot = findLeveledSlot(windows);
+        if (!slot) break; // no more room this week for this category
+        const start = timeStr(slot.startMs);
+        placed.push({ blockId: `${slot.dateStr}-${start}-${category}`, dateStr: slot.dateStr, start });
+        busy.push({ start: slot.startMs, end: slot.endMs });
+        countByDate[slot.dateStr] = (countByDate[slot.dateStr] ?? 0) + 1;
+        catCount[slot.dateStr] = (catCount[slot.dateStr] ?? 0) + 1;
+        remaining -= 1;
+      }
+      if (placed.length > 0) {
+        // Round-robin the selected tasks (already sorted) across the placed blocks.
+        const buckets: CandidateTask[][] = placed.map(() => []);
+        categoryTasks.forEach((t, i) => buckets[i % placed.length].push(t));
+        placed.forEach((slot, i) => {
+          const bucket = buckets[i];
+          proposals.push({
+            id: slot.blockId,
+            category,
+            tasks: bucket.map(t => ({
+              gid: t.gid,
+              adhocId: t.adhocId,
+              title: t.title,
+              integrationId: t.integrationId,
+            })),
+            date: slot.dateStr,
+            start: slot.start,
+            durationMinutes: duration,
+            reason:
+              bucket.length > 0
+                ? `${category} block — ${bucket.length} task${bucket.length === 1 ? '' : 's'} on the agenda.`
+                : `Reserved ${category} time — no task assigned to this block.`,
+          });
+        });
+      }
+      continue;
+    }
+
+    while (remaining > 0) {
+      const task = categoryTasks.find(t => {
+        const id = t.gid ?? t.adhocId;
+        return id ? !usedTaskIds.has(id) : true;
+      });
+
+      const windows = buildWindowsForTask(task?.bestTime, preferredWindows, workingDays);
+      const slot = findLeveledSlot(windows);
       if (!slot) break; // no more room this week for this category
 
       const start = timeStr(slot.startMs);

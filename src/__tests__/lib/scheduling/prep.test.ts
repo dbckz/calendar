@@ -60,7 +60,7 @@ describe('proposePrepBlocks', () => {
     const block = placed[0];
     expect(block.kind).toBe('prep');
     expect(block.category).toBe('Meeting prep');
-    expect(block.durationMinutes).toBe(30);
+    expect(block.durationMinutes).toBe(15);
     expect(block.date).toBe('2026-07-14'); // Tuesday, the day before
     expect(block.start).toBe('09:00');
     expect(block.meeting?.eventId).toBe('evt-1');
@@ -80,9 +80,9 @@ describe('proposePrepBlocks', () => {
   });
 
   it('respects the buffer before the meeting on the day-of fallback', () => {
-    // Monday meeting at 09:45: day-of window is [09:00, 09:15] (buffer 30m),
-    // too short for a 30-min prep -> unplaced.
-    const startMs = new Date(2026, 6, 13, 9, 45).getTime();
+    // Monday meeting at 09:40: day-of window is [09:00, 09:10] (buffer 30m),
+    // too short for a 15-min prep -> unplaced.
+    const startMs = new Date(2026, 6, 13, 9, 40).getTime();
     const { placed, unplaced } = run({ meetings: [meeting({ startMs })] });
 
     expect(placed).toHaveLength(0);
