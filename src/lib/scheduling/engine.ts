@@ -386,9 +386,10 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
     };
 
     // Grouped mode: place `remaining` reserved-style blocks (no per-block task
-    // consumption), then distribute the category's selected candidate tasks across
-    // those blocks round-robin (in the engine's task sort order). Each block emits
-    // a ProposedBlock with `tasks` (its assigned subset) and no single `task`.
+    // consumption), then give EVERY block the SAME full agenda — all of the
+    // category's selected candidate tasks (in the engine's task sort order). Each
+    // block emits a ProposedBlock with `tasks` (the whole shared list) and no
+    // single `task`, so every block shares the identical outreach agenda.
     if (grouped) {
       const placed: Array<{ blockId: string; dateStr: string; start: string }> = [];
       while (remaining > 0) {
@@ -402,29 +403,25 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
         catCount[slot.dateStr] = (catCount[slot.dateStr] ?? 0) + 1;
         remaining -= 1;
       }
-      if (placed.length > 0) {
-        // Round-robin the selected tasks (already sorted) across the placed blocks.
-        const buckets: CandidateTask[][] = placed.map(() => []);
-        categoryTasks.forEach((t, i) => buckets[i % placed.length].push(t));
-        placed.forEach((slot, i) => {
-          const bucket = buckets[i];
-          proposals.push({
-            id: slot.blockId,
-            category,
-            tasks: bucket.map(t => ({
-              gid: t.gid,
-              adhocId: t.adhocId,
-              title: t.title,
-              integrationId: t.integrationId,
-            })),
-            date: slot.dateStr,
-            start: slot.start,
-            durationMinutes: duration,
-            reason:
-              bucket.length > 0
-                ? `${category} block — ${bucket.length} task${bucket.length === 1 ? '' : 's'} on the agenda.`
-                : `Reserved ${category} time — no task assigned to this block.`,
-          });
+      // The full agenda shared by every placed block (same list in each).
+      const agenda = categoryTasks.map(t => ({
+        gid: t.gid,
+        adhocId: t.adhocId,
+        title: t.title,
+        integrationId: t.integrationId,
+      }));
+      for (const slot of placed) {
+        proposals.push({
+          id: slot.blockId,
+          category,
+          tasks: agenda,
+          date: slot.dateStr,
+          start: slot.start,
+          durationMinutes: duration,
+          reason:
+            agenda.length > 0
+              ? `${category} block — ${agenda.length} task${agenda.length === 1 ? '' : 's'} on the agenda.`
+              : `Reserved ${category} time — no task assigned to this block.`,
         });
       }
       continue;

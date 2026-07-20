@@ -407,8 +407,8 @@ describe('proposeBlocks - priority ranking', () => {
 });
 
 describe('proposeBlocks - grouped blocks', () => {
-  // A grouped Engagement-style category: 3 blocks/week, any number of tasks
-  // distributed across them round-robin rather than one task per block.
+  // A grouped Engagement-style category: 3 blocks/week, where every block shares
+  // the SAME full agenda of all selected tasks rather than one task per block.
   const groupedConfig = () =>
     makeConfig({
       quotas: {
@@ -418,7 +418,7 @@ describe('proposeBlocks - grouped blocks', () => {
     });
   const engageTask = (gid: string) => task({ gid, typeSignals: ['engage'] });
 
-  it('places weeklyCount blocks with tasks and no single task, distributed round-robin', () => {
+  it('places weeklyCount blocks with no single task, each carrying the full agenda', () => {
     const proposals = proposeBlocks(
       makeInput({
         config: groupedConfig(),
@@ -431,11 +431,12 @@ describe('proposeBlocks - grouped blocks', () => {
       expect(p.task).toBeUndefined();
       expect(Array.isArray(p.tasks)).toBe(true);
     }
-    // Every selected task appears exactly once across the blocks.
-    const allTaskGids = proposals.flatMap(p => p.tasks!.map(t => t.gid)).sort();
-    expect(allTaskGids).toEqual(['a', 'b', 'c', 'd', 'e']);
-    // Round-robin: 5 tasks over 3 blocks -> 2,2,1.
-    expect(proposals.map(p => p.tasks!.length).sort()).toEqual([1, 2, 2]);
+    // Every block lists the identical full set of selected tasks.
+    for (const p of proposals) {
+      expect(p.tasks!.map(t => t.gid).sort()).toEqual(['a', 'b', 'c', 'd', 'e']);
+    }
+    // Reason reflects the full agenda size, not a per-block bucket.
+    expect(proposals.every(p => p.reason.includes('5 tasks on the agenda'))).toBe(true);
   });
 
   it('places in the afternoon preferred window', () => {
@@ -445,14 +446,13 @@ describe('proposeBlocks - grouped blocks', () => {
     expect(proposals.every(p => p.start >= '13:00')).toBe(true);
   });
 
-  it('still schedules all N blocks when there are fewer tasks than blocks', () => {
+  it('gives every one of the N blocks the same single-task agenda', () => {
     const proposals = proposeBlocks(
       makeInput({ config: groupedConfig(), candidateTasks: [engageTask('a')] })
     );
     expect(proposals).toHaveLength(3);
-    // One block carries the task; the others are empty (0 tasks) but still placed.
-    expect(proposals.filter(p => p.tasks!.length === 1)).toHaveLength(1);
-    expect(proposals.filter(p => p.tasks!.length === 0)).toHaveLength(2);
+    // All three blocks carry the same one selected task.
+    expect(proposals.every(p => p.tasks!.length === 1 && p.tasks![0].gid === 'a')).toBe(true);
   });
 
   it('schedules N reserved-style blocks with no tasks when none are selected', () => {
@@ -463,7 +463,7 @@ describe('proposeBlocks - grouped blocks', () => {
     expect(proposals.every(p => p.tasks!.length === 0)).toBe(true);
   });
 
-  it('reduces block count by existing scheduled blocks', () => {
+  it('reduces block count by existing scheduled blocks, keeping the full agenda in each', () => {
     const proposals = proposeBlocks(
       makeInput({
         config: groupedConfig(),
@@ -472,8 +472,9 @@ describe('proposeBlocks - grouped blocks', () => {
       })
     );
     expect(proposals).toHaveLength(2); // 3 - 1 already scheduled
-    const allTaskGids = proposals.flatMap(p => p.tasks!.map(t => t.gid)).sort();
-    expect(allTaskGids).toEqual(['a', 'b']);
+    for (const p of proposals) {
+      expect(p.tasks!.map(t => t.gid).sort()).toEqual(['a', 'b']);
+    }
   });
 });
 
