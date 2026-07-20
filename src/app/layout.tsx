@@ -3,12 +3,12 @@ import "./globals.css";
 import { Providers } from "@/components/Providers";
 
 export const metadata: Metadata = {
-  title: "Dave's Daily Planner",
+  title: "Dave's Command Center",
   description: "Plan your day with Google Calendar, Asana, and ad-hoc tasks",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
-    title: "Daily Planner",
+    title: "Command Center",
     statusBarStyle: "black-translucent",
   },
   icons: {
