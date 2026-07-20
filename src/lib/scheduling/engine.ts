@@ -130,7 +130,7 @@ const DEADLINE_RANK: Record<string, number> = { hard: 0, soft: 1, aspirational: 
 const ENERGY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
 const BEST_TIME_RANK: Record<string, number> = { morning: 0, afternoon: 1, evening: 2 };
 
-function taskSortKey(task: CandidateTask): Array<number | string> {
+export function taskSortKey(task: CandidateTask): Array<number | string> {
   return [
     task.isPriority ? 0 : 1,
     task.deadlineType ? DEADLINE_RANK[task.deadlineType] : 3,
@@ -142,7 +142,7 @@ function taskSortKey(task: CandidateTask): Array<number | string> {
   ];
 }
 
-function compareKeys(a: Array<number | string>, b: Array<number | string>): number {
+export function compareKeys(a: Array<number | string>, b: Array<number | string>): number {
   for (let i = 0; i < a.length; i++) {
     if (a[i] < b[i]) return -1;
     if (a[i] > b[i]) return 1;

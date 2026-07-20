@@ -19,6 +19,8 @@ export interface CalendarEvent {
   integrationName?: string;
   calendarId?: string;       // Google sub-calendar ID (for mutations)
   calendarName?: string;     // Display name of the sub-calendar
+  recurringEventId?: string; // Set when this event is an instance of a recurring series
+  attendeeCount?: number;    // Number of attendees on the event (separates meetings from solo blocks)
   // Asana-specific fields
   projects?: Array<{ gid: string; name: string }>;
   customFields?: AsanaCustomField[];
@@ -466,4 +468,15 @@ export interface StaleClassificationEntry {
   stale: boolean;
   reason: string;
   assessedAt: string;
+}
+
+// Remembered "does this meeting need a prep block?" decision, keyed by a
+// normalized meeting title. User decisions are permanent; AI decisions carry a
+// content hash + prompt version so they can be re-used or re-assessed.
+export interface MeetingPrepDecision {
+  needsPrep: boolean;
+  decidedBy: 'user' | 'ai';
+  contentHash?: string;  // ai entries only — cache key
+  promptVersion?: string;
+  updatedAt: string;
 }

@@ -125,7 +125,7 @@ function formatDateOnly(date: Date): string {
 }
 
 function toCalendarEvent(
-  event: { id?: string | null; summary?: string | null; description?: string | null; start?: { date?: string | null; dateTime?: string | null } | null; end?: { date?: string | null; dateTime?: string | null } | null; colorId?: string | null; location?: string | null },
+  event: { id?: string | null; summary?: string | null; description?: string | null; start?: { date?: string | null; dateTime?: string | null } | null; end?: { date?: string | null; dateTime?: string | null } | null; colorId?: string | null; location?: string | null; recurringEventId?: string | null; attendees?: unknown[] | null },
   fallbackColor: string,
   calendarId?: string
 ): CalendarEvent {
@@ -148,6 +148,8 @@ function toCalendarEvent(
     location: event.location || undefined,
     allDay: isAllDay,
     calendarId,
+    recurringEventId: event.recurringEventId || undefined,
+    attendeeCount: event.attendees?.length,
   };
 }
 
