@@ -457,3 +457,13 @@ export interface AiClassificationEntry {
   reason: string;
   assessedAt: string;
 }
+
+// Cached staleness verdict for a task (keyed by Asana GID) — feeds the
+// "Triage stale" review. Cached by content hash + prompt version like above.
+export interface StaleClassificationEntry {
+  contentHash: string;
+  promptVersion: string;
+  stale: boolean;
+  reason: string;
+  assessedAt: string;
+}

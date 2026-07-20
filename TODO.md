@@ -1,0 +1,1 @@
+- Explore: for sprint planning, could i have a chat interface in the app, that uses claude on the backend, and allows me to plan by chatting with AI?

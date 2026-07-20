@@ -2,7 +2,7 @@
 // Uses file-based storage in ~/.claude/data/calendar/ for persistence across builds
 
 import { promises as fs } from 'fs';
-import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState, TemplateGroup, TaskMetadata, DelegationQueueEntry, AiClassificationEntry } from '@/types';
+import { AdHocTask, ScheduledAsanaTask, TaskTemplate, CustomTaskType, AsanaFilterState, TemplateGroup, TaskMetadata, DelegationQueueEntry, AiClassificationEntry, StaleClassificationEntry } from '@/types';
 import { DATA_DIR, USER_DATA_FILE } from './data-paths';
 
 const DEFAULT_ASANA_FILTERS: AsanaFilterState = {
@@ -39,6 +39,8 @@ interface UserData {
   taskMetadata?: Record<string, TaskMetadata>; // Key is Asana task GID
   delegationQueue?: Record<string, DelegationQueueEntry>; // Key is Asana task GID
   aiClassification?: Record<string, AiClassificationEntry>; // Key is Asana task GID
+  staleClassification?: Record<string, StaleClassificationEntry>; // Key is Asana task GID
+  staleKeep?: Record<string, string>; // GID -> ISO timestamp: "keep active" until (snooze)
 }
 
 const DEFAULT_USER_DATA: UserData = {
@@ -52,6 +54,8 @@ const DEFAULT_USER_DATA: UserData = {
   taskMetadata: {},
   delegationQueue: {},
   aiClassification: {},
+  staleClassification: {},
+  staleKeep: {},
 };
 
 async function ensureDataDir(): Promise<void> {
@@ -87,6 +91,8 @@ export async function getUserData(): Promise<UserData> {
       taskMetadata: parsed.taskMetadata || {},
       delegationQueue: parsed.delegationQueue || {},
       aiClassification: parsed.aiClassification || {},
+      staleClassification: parsed.staleClassification || {},
+      staleKeep: parsed.staleKeep || {},
     };
   } catch {
     // Deep clone so callers that mutate nested collections (e.g. upserting into
@@ -625,3 +631,24 @@ export async function saveAiClassification(entries: Record<string, AiClassificat
   await saveUserData(data);
 }
 
+// Staleness classification cache + "keep active" snoozes (both keyed by GID).
+export async function getStaleData(): Promise<{
+  staleClassification: Record<string, StaleClassificationEntry>;
+  staleKeep: Record<string, string>;
+}> {
+  const data = await getUserData();
+  return { staleClassification: data.staleClassification || {}, staleKeep: data.staleKeep || {} };
+}
+
+export async function saveStaleClassification(entries: Record<string, StaleClassificationEntry>): Promise<void> {
+  const data = await getUserData();
+  data.staleClassification = { ...(data.staleClassification || {}), ...entries };
+  await saveUserData(data);
+}
+
+// Mark a task "keep active": snooze it out of the stale list until `until`.
+export async function setStaleKeep(asanaTaskGid: string, until: string): Promise<void> {
+  const data = await getUserData();
+  data.staleKeep = { ...(data.staleKeep || {}), [asanaTaskGid]: until };
+  await saveUserData(data);
+}

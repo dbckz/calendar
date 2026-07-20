@@ -64,17 +64,15 @@ function buildPrompt(tasks: ClassifierTask[]): string {
   return PROMPT_TEMPLATE.replace('{{TASKS}}', lines.join('\n'));
 }
 
-// Recover the JSON array of results from the model's (possibly fenced/prose-wrapped) text.
-function extractResults(text: string): ClassifierResult[] {
+// Recover the JSON array of objects from the model's (possibly fenced/prose-
+// wrapped) text. Generic — each classifier maps the raw records to its own shape.
+export function extractJsonArray(text: string): Record<string, unknown>[] {
   const start = text.indexOf('[');
   const end = text.lastIndexOf(']');
   if (start < 0 || end <= start) return [];
   try {
     const parsed = JSON.parse(text.slice(start, end + 1));
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(r => r && typeof r.gid === 'string')
-      .map(r => ({ gid: String(r.gid), aiSuitable: Boolean(r.aiSuitable), reason: String(r.reason || '').slice(0, 120) }));
+    return Array.isArray(parsed) ? parsed.filter(r => r && typeof r === 'object') : [];
   } catch {
     return [];
   }
@@ -82,13 +80,13 @@ function extractResults(text: string): ClassifierResult[] {
 
 interface ClaudeEnvelope { result?: unknown; is_error?: boolean }
 
-// Classify a batch in a single headless call. No tools are needed (pure reasoning
-// over the supplied text), so the runner passes an empty allowlist.
-export async function classifyTasks(tasks: ClassifierTask[], timeoutSeconds = 180): Promise<ClassifierResult[]> {
-  if (tasks.length === 0) return [];
-
+// Run a single headless `claude -p` reasoning call and return the parsed JSON
+// array from its output. No tools are needed (pure reasoning over the supplied
+// text), so the runner passes an empty allowlist. Shared by every task
+// classifier (AI-suitability, staleness, …).
+export async function runClaudeJsonArray(prompt: string, timeoutSeconds = 180): Promise<Record<string, unknown>[]> {
   const bin = claudeBin();
-  const args = ['-p', buildPrompt(tasks), '--output-format', 'json', '--allowedTools', ''];
+  const args = ['-p', prompt, '--output-format', 'json', '--allowedTools', ''];
   const env = {
     ...process.env,
     PATH: `/opt/homebrew/bin:/usr/local/bin:${path.join(homedir(), '.local', 'bin')}:${process.env.PATH || '/usr/bin:/bin'}`,
@@ -99,7 +97,7 @@ export async function classifyTasks(tasks: ClassifierTask[], timeoutSeconds = 18
     let err = '';
     let settled = false;
     const child = spawn(bin, args, { env });
-    const timer = setTimeout(() => { settled = true; child.kill('SIGKILL'); reject(new Error(`AI classifier timed out after ${timeoutSeconds}s.`)); }, timeoutSeconds * 1000);
+    const timer = setTimeout(() => { settled = true; child.kill('SIGKILL'); reject(new Error(`Claude classifier timed out after ${timeoutSeconds}s.`)); }, timeoutSeconds * 1000);
 
     child.stdout.on('data', (c: Buffer) => { out += c.toString('utf8'); });
     child.stderr.on('data', (c: Buffer) => { err += c.toString('utf8'); });
@@ -125,7 +123,16 @@ export async function classifyTasks(tasks: ClassifierTask[], timeoutSeconds = 18
     envelope = JSON.parse(stdout) as ClaudeEnvelope;
   } catch {
     // Some CLI configs stream plain text; fall back to parsing stdout directly.
-    return extractResults(stdout);
+    return extractJsonArray(stdout);
   }
-  return extractResults(typeof envelope.result === 'string' ? envelope.result : stdout);
+  return extractJsonArray(typeof envelope.result === 'string' ? envelope.result : stdout);
+}
+
+// Classify a batch of tasks for AI-suitability in one headless call.
+export async function classifyTasks(tasks: ClassifierTask[], timeoutSeconds = 180): Promise<ClassifierResult[]> {
+  if (tasks.length === 0) return [];
+  const records = await runClaudeJsonArray(buildPrompt(tasks), timeoutSeconds);
+  return records
+    .filter(r => typeof r.gid === 'string')
+    .map(r => ({ gid: String(r.gid), aiSuitable: Boolean(r.aiSuitable), reason: String(r.reason || '').slice(0, 120) }));
 }

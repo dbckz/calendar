@@ -161,6 +161,7 @@ export default function Home() {
 
   const [highlightedAsanaTaskId, setHighlightedAsanaTaskId] = useState<string | null>(null);
   const [openTaskDialogId, setOpenTaskDialogId] = useState<string | null>(null);
+  const [staleModalOpen, setStaleModalOpen] = useState(false);
   const [selectedGoogleEvent, setSelectedGoogleEvent] = useState<CalendarEvent | null>(null);
   const [isEditingGoogleEvent, setIsEditingGoogleEvent] = useState(false);
   const [editingGoogleEventTitle, setEditingGoogleEventTitle] = useState('');
@@ -857,7 +858,11 @@ export default function Home() {
             onOpenTask={handleOpenTaskInPlace}
             onDelegateTask={setDelegateTask}
             onReloadMetadata={reloadMetadata}
+            onDeleteTask={handleSidebarAsanaDelete}
             onPlanApplied={fetchAllEvents}
+            staleModalOpen={staleModalOpen}
+            onStaleModalOpenChange={setStaleModalOpen}
+            taskDialogOpen={Boolean(dashboardDialogTask)}
           />
           {delegateTask && delegateTask.integrationId && (
             <DelegateModal
@@ -875,6 +880,8 @@ export default function Home() {
               task={dashboardDialogTask}
               formatDuration={formatMinutes}
               onClose={handleClearOpenTaskDialog}
+              elevated={staleModalOpen}
+              onBack={staleModalOpen ? handleClearOpenTaskDialog : undefined}
               onToggleComplete={handleSidebarAsanaComplete}
               onAddComment={handleSidebarAsanaComment}
               onUpdateTask={handleSidebarAsanaUpdate}

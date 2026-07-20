@@ -2,7 +2,7 @@
 
 import { useState, memo, useMemo, useCallback, useRef, useEffect, forwardRef } from 'react';
 import { CalendarEvent, DragItem, AsanaProject, AsanaFilterState, AsanaDateFilter, AsanaSortField, AsanaFilterLogic, AsanaGroupBy, ScheduledAsanaTask, AsanaStory, TaskMetadata, DelegationQueueEntry, DelegationState } from '@/types';
-import { Calendar, GripVertical, Filter, X, ChevronDown, ChevronUp, ChevronRight, ExternalLink, Send, Check, ArrowUpDown, Clock, Folder, Tag, PlayCircle, Plus, Trash2, MessageSquare, Loader2, Layers, Search, Bot, CheckCircle2, XCircle, Copy } from 'lucide-react';
+import { Calendar, GripVertical, Filter, X, ChevronDown, ChevronUp, ChevronRight, ExternalLink, Send, Check, ArrowUpDown, ArrowLeft, Clock, Folder, Tag, PlayCircle, Plus, Trash2, MessageSquare, Loader2, Layers, Search, Bot, CheckCircle2, XCircle, Copy } from 'lucide-react';
 import { format, parseISO, isToday, isPast } from 'date-fns';
 import { getAsanaTaskUrl } from '@/lib/asana';
 import { api } from '@/lib/api';
@@ -1113,6 +1113,11 @@ interface TaskDetailDialogProps {
   scheduledDuration?: number;
   formatDuration: (minutes: number) => string;
   onClose: () => void;
+  // Render above another modal (e.g. the stale-triage modal at z-[60]).
+  elevated?: boolean;
+  // When set, show a Back arrow in the header that returns to the underlying
+  // view (typically closes just this dialog, leaving the triage modal open).
+  onBack?: () => void;
   onToggleComplete?: (taskId: string, integrationId: string, completed: boolean) => void;
   onAddComment?: (taskId: string, integrationId: string, comment: string) => void;
   onUpdateTask?: (taskId: string, integrationId: string, updates: UpdateTaskOptions) => void;
@@ -1141,6 +1146,8 @@ export function TaskDetailDialog({
   scheduledDuration,
   formatDuration,
   onClose,
+  elevated,
+  onBack,
   onToggleComplete,
   onAddComment,
   onUpdateTask,
@@ -1337,7 +1344,7 @@ export function TaskDetailDialog({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+    <div className={`fixed inset-0 bg-black/50 flex items-center justify-center ${elevated ? 'z-[70]' : 'z-50'}`} onClick={onClose}>
       <div
         className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden max-h-[90vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
@@ -1345,7 +1352,18 @@ export function TaskDetailDialog({
         {/* Header */}
         <div className="p-4 border-b border-gray-200 flex-shrink-0">
           <div className="flex items-start justify-between gap-3">
-            <h3 className="font-semibold text-gray-900 line-clamp-2">{task.title}</h3>
+            <div className="flex items-start gap-2 min-w-0">
+              {onBack && (
+                <button
+                  onClick={onBack}
+                  className="p-1 -ml-1 mt-0.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded flex-shrink-0"
+                  title="Back"
+                >
+                  <ArrowLeft className="w-5 h-5" />
+                </button>
+              )}
+              <h3 className="font-semibold text-gray-900 line-clamp-2">{task.title}</h3>
+            </div>
             <div className="flex items-center gap-1 flex-shrink-0">
               {onUpdateTask && task.integrationId && !isEditing && (
                 <button

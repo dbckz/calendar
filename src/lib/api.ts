@@ -387,6 +387,31 @@ export const api = {
     );
   },
 
+  // Triage which tasks look stale (deletion candidates). Cached/snoozed tasks are
+  // skipped server-side. No retry — the call is expensive.
+  async triageStaleTasks(
+    tasks: Array<{ gid: string; integrationId: string; title: string; description?: string; createdAt?: string; dueOn?: string; startOn?: string; integrationName?: string }>
+  ): Promise<{ total: number; assessed: number; staleTasks: Array<{ gid: string; reason: string }> }> {
+    return fetchWithRetry(
+      '/api/tasks/triage-stale',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tasks }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // "Keep active": snooze a task out of the stale list for a period (default 90 days).
+  async keepTaskActive(asanaTaskGid: string, days?: number): Promise<{ success: boolean; keptUntil: string }> {
+    return fetchWithRetry('/api/tasks/stale-keep', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ asanaTaskGid, ...(days ? { days } : {}) }),
+    });
+  },
+
   async getSettings(): Promise<SettingsResponse> {
     return fetchWithRetry<SettingsResponse>('/api/settings');
   },

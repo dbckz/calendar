@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { CalendarClock, Bot, Loader2 } from 'lucide-react';
+import { CalendarClock, Bot, Loader2, Archive } from 'lucide-react';
 
 import { CalendarEvent, TaskMetadata } from '@/types';
 import { api } from '@/lib/api';
@@ -12,6 +12,7 @@ import { CapacityWidget } from './CapacityWidget';
 import { ClientTimeWidget } from './ClientTimeWidget';
 import { DelegationWidget } from './DelegationWidget';
 import { AiRunnableTasks } from './AiRunnableTasks';
+import { StaleTasksModal } from './StaleTasksModal';
 import { PlanWeekModal } from './PlanWeekModal';
 
 interface Integration {
@@ -28,7 +29,14 @@ interface DashboardContentProps {
   onOpenTask?: (taskId: string) => void;
   onDelegateTask?: (task: CalendarEvent) => void; // open the compose-brief modal directly
   onReloadMetadata?: () => Promise<void> | void; // refresh aiDelegable flags after re-assessment
+  onDeleteTask?: (taskId: string, integrationId: string) => void; // optimistic delete (stale triage)
   onPlanApplied?: () => void; // refresh calendar/asana data after applying a plan
+  // Stale-triage modal open state is lifted to page.tsx so the in-place task
+  // dialog (rendered there) can sit on top of it with a Back affordance.
+  staleModalOpen?: boolean;
+  onStaleModalOpenChange?: (open: boolean) => void;
+  // A task dialog is open on top of the triage modal (suppresses its Escape).
+  taskDialogOpen?: boolean;
 }
 
 // Fixed, viewport-height three-column layout — nothing scrolls the page itself;
@@ -42,7 +50,11 @@ export function DashboardContent({
   onOpenTask,
   onDelegateTask,
   onReloadMetadata,
+  onDeleteTask,
   onPlanApplied,
+  staleModalOpen = false,
+  onStaleModalOpenChange,
+  taskDialogOpen,
 }: DashboardContentProps) {
   const { data, isLoading, refetch } = useDashboard();
   const [showPlanModal, setShowPlanModal] = useState(false);
@@ -81,7 +93,14 @@ export function DashboardContent({
       <div className="flex items-center justify-between mb-4 flex-shrink-0 gap-3">
         <h1 className="text-xl font-semibold text-gray-900">Command Center</h1>
         <div className="flex items-center gap-3">
-          {reassessNote && <span className="text-xs text-gray-500 hidden md:inline">{reassessNote}</span>}
+          {reassessNote && <span className="text-xs text-gray-500 hidden lg:inline">{reassessNote}</span>}
+          <button
+            onClick={() => onStaleModalOpenChange?.(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-50 transition-colors"
+            title="Review tasks that look old / stale and delete or keep them"
+          >
+            <Archive className="w-4 h-4" /> Triage stale
+          </button>
           <button
             onClick={handleReassess}
             disabled={isReassessing}
@@ -144,6 +163,16 @@ export function DashboardContent({
           </div>
         </div>
       </div>
+
+      {staleModalOpen && (
+        <StaleTasksModal
+          tasks={asanaTasks}
+          onClose={() => onStaleModalOpenChange?.(false)}
+          onOpenTask={onOpenTask}
+          onDeleteTask={onDeleteTask}
+          childDialogOpen={taskDialogOpen}
+        />
+      )}
 
       <PlanWeekModal
         isOpen={showPlanModal}
