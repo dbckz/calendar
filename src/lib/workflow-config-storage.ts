@@ -11,6 +11,9 @@ export interface TaskQuota {
   weeklyCount?: number;
   targetLength: string;
   preferredTimes: string[];
+  // When true, "Plan my week" auto-picks tasks for this category instead of
+  // prompting for manual selection. Defaults on for Batch.
+  autoSelect?: boolean;
 }
 
 export interface SchedulingConfig {
@@ -70,6 +73,7 @@ const DEFAULT_CONFIG: WorkflowConfig = {
       weeklyCount: 2,
       targetLength: '1h',
       preferredTimes: [],
+      autoSelect: true,
     },
     'Engagement/Outreach': {
       weeklyCount: 1,
@@ -170,8 +174,15 @@ export async function getWorkflowConfig(): Promise<WorkflowConfig> {
       }
     }
 
+    // Backward compat: older config files predate autoSelect. Default it to
+    // true only for Batch (which historically auto-picked its tasks).
+    const taskQuotas = parsed.taskQuotas || DEFAULT_CONFIG.taskQuotas;
+    for (const [category, quota] of Object.entries(taskQuotas)) {
+      if (quota.autoSelect === undefined) quota.autoSelect = category === 'Batch';
+    }
+
     return {
-      taskQuotas: parsed.taskQuotas || DEFAULT_CONFIG.taskQuotas,
+      taskQuotas,
       scheduling: parsed.scheduling || DEFAULT_CONFIG.scheduling,
       agentPacing: parsed.agentPacing || DEFAULT_CONFIG.agentPacing,
       typeMapping,

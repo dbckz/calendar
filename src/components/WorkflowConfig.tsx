@@ -8,6 +8,7 @@ interface TaskQuota {
   weeklyCount?: number;
   targetLength: string;
   preferredTimes: string[];
+  autoSelect?: boolean;
 }
 
 interface SchedulingConfig {
@@ -298,6 +299,18 @@ export default function WorkflowConfig() {
                       </button>
                     </div>
                   </div>
+                )}
+
+                {showWeeklyCount && (
+                  <label className="flex items-center mt-4 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={quota.autoSelect ?? false}
+                      onChange={(e) => updateTaskQuota(taskType, 'autoSelect', e.target.checked)}
+                      className="mr-2"
+                    />
+                    Auto-pick tasks (skip manual selection in Plan my week)
+                  </label>
                 )}
               </div>
             );
