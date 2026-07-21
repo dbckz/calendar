@@ -6,9 +6,15 @@ import {
   proposeRitualBlocks,
   placeWeekRituals,
   proposedBlockToBusyInterval,
+  ritualKindForTitle,
+  isBreakTitle,
+  isRitualTitle,
+  ritualIntegrationIdForKind,
+  ritualIntegrationIdForBlock,
   LUNCH_TITLE,
   EXERCISE_TITLE,
   EMAILS_TITLE,
+  BREAK_TITLE,
 } from '@/lib/scheduling/rituals';
 import { proposePrepBlocks } from '@/lib/scheduling/prep';
 import type { BusyInterval } from '@/lib/scheduling/types';
@@ -48,6 +54,55 @@ function run(input: {
 const busy = (h1: number, m1: number, h2: number, m2: number): BusyInterval => ({
   start: new Date(2026, 6, 13, h1, m1),
   end: new Date(2026, 6, 13, h2, m2),
+});
+
+describe('break title helpers', () => {
+  it('classifies "☕ Break" as a break kind and a break title', () => {
+    expect(ritualKindForTitle(BREAK_TITLE)).toBe('break');
+    expect(isBreakTitle(BREAK_TITLE)).toBe(true);
+    expect(isRitualTitle(BREAK_TITLE)).toBe(true);
+    // Lunch + exercise are still breaks; emails is not.
+    expect(isBreakTitle(LUNCH_TITLE)).toBe(true);
+    expect(isBreakTitle(EXERCISE_TITLE)).toBe(true);
+    expect(isBreakTitle(EMAILS_TITLE)).toBe(false);
+  });
+
+  it('tags a break block as a break busy interval', () => {
+    const interval = proposedBlockToBusyInterval({
+      id: 'b',
+      category: 'Break',
+      kind: 'break',
+      title: BREAK_TITLE,
+      date: '2026-07-13',
+      start: '11:00',
+      durationMinutes: 15,
+      reason: 'r',
+    });
+    expect(interval.isBreak).toBe(true);
+  });
+});
+
+describe('ritualIntegrationIdForKind', () => {
+  const scheduling = {
+    ritualCalendars: { lunch: 'om', emails: 'om', exercise: 'personal' },
+  } as WorkflowConfig['scheduling'];
+
+  it('routes exercise and break to the exercise calendar, lunch/emails to theirs', () => {
+    expect(ritualIntegrationIdForKind(scheduling, 'exercise')).toBe('personal');
+    expect(ritualIntegrationIdForKind(scheduling, 'break')).toBe('personal');
+    expect(ritualIntegrationIdForKind(scheduling, 'lunch')).toBe('om');
+    expect(ritualIntegrationIdForKind(scheduling, 'emails')).toBe('om');
+    expect(ritualIntegrationIdForBlock(scheduling, BREAK_TITLE)).toBe('personal');
+    expect(ritualIntegrationIdForBlock(scheduling, LUNCH_TITLE)).toBe('om');
+  });
+
+  it('falls back to the legacy single id for lunch/emails, but not exercise/break', () => {
+    const legacy = { ritualGoogleIntegrationId: 'om-legacy' } as WorkflowConfig['scheduling'];
+    expect(ritualIntegrationIdForKind(legacy, 'lunch')).toBe('om-legacy');
+    expect(ritualIntegrationIdForKind(legacy, 'emails')).toBe('om-legacy');
+    expect(ritualIntegrationIdForKind(legacy, 'exercise')).toBeUndefined();
+    expect(ritualIntegrationIdForKind(legacy, 'break')).toBeUndefined();
+  });
 });
 
 describe('proposeRitualBlocks', () => {

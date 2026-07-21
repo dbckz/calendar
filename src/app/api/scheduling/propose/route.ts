@@ -8,6 +8,7 @@ import {
   proposedBlockToBusyInterval,
   EXERCISE_TITLE,
 } from '@/lib/scheduling/rituals';
+import { proposeBreakBlocks } from '@/lib/scheduling/breaks';
 import type { CandidateTask, ProposedBlock } from '@/lib/scheduling/types';
 
 export async function POST(request: NextRequest) {
@@ -123,16 +124,36 @@ export async function POST(request: NextRequest) {
       now: ctx.now,
     });
 
-    // Prep + ritual blocks are shown first, ahead of the task/reserved blocks.
-    const proposals = [...prepBlocks, ...ritualBlocks, ...taskBlocks];
+    const { workRun, workingDays } = resolveWorkingWindow(ctx.config.scheduling, ctx.weekStart, ctx.now);
+
+    // --- Break gaps (post-placement) ---
+    // After ALL proposals are placed (rituals + prep + tasks), turn the buffer the
+    // work-run rule leaves after each ~2h run into visible "☕ Break" events. Fed
+    // the FINAL busy timeline (calendar busy + prep + rituals + every task block).
+    const finalBusyForBreaks = [
+      ...busyIntervals,
+      ...taskBlocks.map(proposedBlockToBusyInterval),
+    ];
+    const breakBlocks = proposeBreakBlocks({
+      workingDays,
+      busyIntervals: finalBusyForBreaks,
+      workRun,
+      now: ctx.now,
+    });
+
+    // Prep + ritual + break blocks are shown first, ahead of the task/reserved blocks.
+    const proposals = [...prepBlocks, ...ritualBlocks, ...breakBlocks, ...taskBlocks];
 
     // --- Spare-capacity assessment (computed AFTER all proposals) ---
     // Busy = calendar busy + accepted prep + placed rituals (already in
-    // busyIntervals) + every proposed task/reserved block. Measure the usable
-    // free work time left in the remaining week under the same working-window and
-    // work-run model the engine used.
-    const { workRun, workingDays } = resolveWorkingWindow(ctx.config.scheduling, ctx.weekStart, ctx.now);
-    const spareBusyMs = [...busyIntervals, ...taskBlocks.map(proposedBlockToBusyInterval)].map(i => ({
+    // busyIntervals) + every proposed task/reserved block + break gaps. Measure the
+    // usable free work time left in the remaining week under the same
+    // working-window and work-run model the engine used.
+    const spareBusyMs = [
+      ...busyIntervals,
+      ...taskBlocks.map(proposedBlockToBusyInterval),
+      ...breakBlocks.map(proposedBlockToBusyInterval),
+    ].map(i => ({
       start: i.start.getTime(),
       end: i.end.getTime(),
       isBreak: i.isBreak,

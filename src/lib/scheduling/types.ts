@@ -61,9 +61,10 @@ export interface ProposedBlock {
   durationMinutes: number;
   reason: string;
   // Block classification. Absent on engine task/reserved blocks (derive from
-  // `task` presence for back-compat); set to 'prep' by the prep placer and
-  // 'ritual' by the ritual (lunch/emails) placer.
-  kind?: 'task' | 'reserved' | 'prep' | 'ritual';
+  // `task` presence for back-compat); set to 'prep' by the prep placer,
+  // 'ritual' by the ritual (lunch/exercise/emails) placer, and 'break' by the
+  // post-placement break pass ("☕ Break" gaps after each work run).
+  kind?: 'task' | 'reserved' | 'prep' | 'ritual' | 'break';
   // Present only on prep blocks: the meeting this block prepares for.
   meeting?: { eventId: string; title: string; meetingStart: string /* ISO */ };
   // Present only on ritual blocks (lunch/exercise/emails): the exact event title

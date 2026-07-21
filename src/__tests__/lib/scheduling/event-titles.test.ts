@@ -4,13 +4,16 @@
 import {
   categoryBlockTitle,
   categoryEmoji,
+  colorIdForBlock,
   eventTitleForBlock,
   isPrepTitle,
+  NON_WORK_COLOR_ID,
   prepMeetingTitleFromEvent,
   prepTitle,
   reservedBlockTitle,
   startsWithEmoji,
   taskBlockTitle,
+  WORK_COLOR_ID,
 } from '@/lib/scheduling/event-titles';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 
@@ -126,5 +129,40 @@ describe('eventTitleForBlock', () => {
   it('passes a ritual title through unchanged (already emoji\'d)', () => {
     const block: ProposedBlock = { ...base, category: 'Lunch', kind: 'ritual', title: '🍽️ Lunch' };
     expect(eventTitleForBlock(block)).toBe('🍽️ Lunch');
+  });
+
+  it('passes a break title through unchanged', () => {
+    const block: ProposedBlock = { ...base, category: 'Break', kind: 'break', title: '☕ Break' };
+    expect(eventTitleForBlock(block)).toBe('☕ Break');
+  });
+});
+
+describe('colorIdForBlock', () => {
+  const base: ProposedBlock = {
+    id: 'b',
+    category: 'X',
+    date: '2026-07-15',
+    start: '09:00',
+    durationMinutes: 60,
+    reason: 'r',
+  };
+
+  it('colours WORK blocks yellow (task / grouped / reserved / prep / emails / overflow)', () => {
+    expect(colorIdForBlock({ ...base, task: { title: 'T' } })).toBe(WORK_COLOR_ID);
+    expect(colorIdForBlock({ ...base, tasks: [{ title: 'T' }] })).toBe(WORK_COLOR_ID); // grouped
+    expect(colorIdForBlock({ ...base })).toBe(WORK_COLOR_ID); // reserved
+    expect(colorIdForBlock({ ...base, kind: 'prep' })).toBe(WORK_COLOR_ID);
+    expect(colorIdForBlock({ ...base, kind: 'ritual', title: '📧 Emails' })).toBe(WORK_COLOR_ID);
+    expect(colorIdForBlock({ ...base, kind: 'task', overflow: true, task: { title: 'T' } })).toBe(
+      WORK_COLOR_ID
+    );
+  });
+
+  it('colours NON-WORK blocks green (lunch / exercise / break)', () => {
+    expect(colorIdForBlock({ ...base, kind: 'ritual', title: '🍽️ Lunch' })).toBe(NON_WORK_COLOR_ID);
+    expect(colorIdForBlock({ ...base, kind: 'ritual', title: '🏋️ Exercise' })).toBe(
+      NON_WORK_COLOR_ID
+    );
+    expect(colorIdForBlock({ ...base, kind: 'break', title: '☕ Break' })).toBe(NON_WORK_COLOR_ID);
   });
 });

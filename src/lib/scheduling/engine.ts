@@ -615,33 +615,6 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
     if (remaining > 0) remainingByCategory.set(quota.category, remaining);
   }
 
-  // Category processing order: no-quota catch-all categories are always LAST
-  // (they're filler and must not steal slots from quota'd work). Among quota'd
-  // categories, the Writing/Deep Work category is processed FIRST so it claims
-  // the earliest morning slots before other categories fill them; then
-  // hard-deadline categories first, then by remaining quota desc, then name.
-  // Deep work is matched via the whitespace-robust normalize so
-  // "Writing / Deep Work" and "Writing/Deep Work" are treated the same.
-  const categoryHasHard = (category: string): boolean =>
-    (tasksByCategory.get(category) ?? []).some(t => t.deadlineType === 'hard');
-
-  const orderedCategories = [...remainingByCategory.keys()].sort((a, b) => {
-    const noqA = noQuotaCategories.has(a);
-    const noqB = noQuotaCategories.has(b);
-    if (noqA !== noqB) return noqA ? 1 : -1; // no-quota categories last
-    if (noqA && noqB) return a < b ? -1 : a > b ? 1 : 0; // among no-quota: by name
-    const deepA = isDeepWork(a);
-    const deepB = isDeepWork(b);
-    if (deepA !== deepB) return deepA ? -1 : 1;
-    const hardA = categoryHasHard(a);
-    const hardB = categoryHasHard(b);
-    if (hardA !== hardB) return hardA ? -1 : 1;
-    const remA = remainingByCategory.get(a)!;
-    const remB = remainingByCategory.get(b)!;
-    if (remA !== remB) return remB - remA;
-    return a < b ? -1 : a > b ? 1 : 0;
-  });
-
   // Mutable run state.
   const busy: BusyMs[] = input.busyIntervals.map(i => ({
     start: i.start.getTime(),
@@ -659,14 +632,144 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
   // filler and unmet-quota blocks are never collected here — only real tasks.
   const leftovers: Array<{ task: CandidateTask; category: string; duration: number }> = [];
 
+  // Category-level block length: a per-category override, else the parsed
+  // targetLength (default 30). A single-task block may further override per task.
+  const categoryDurationFor = (category: string): number =>
+    input.durationOverridesByCategory?.[category] ??
+    (parseTargetLength(quotaByCategory.get(category)!.targetLength) || 30);
+
+  const preferredWindowsFor = (category: string): Array<[TimeOfDay, TimeOfDay]> =>
+    preferredWindowsForCategory(config, category, workingHoursEnd);
+
+  // Per-date count of each category's blocks, seeded from what's already on the
+  // calendar. Drives the leveled (spread) search so same-category blocks fan out
+  // across distinct days before doubling up. Shared across the must-do first pass
+  // and the main category loop so both contribute to the same spread state.
+  const catCountByCategory = new Map<string, Record<string, number>>();
+  for (const category of remainingByCategory.keys()) {
+    const catCount: Record<string, number> = {};
+    for (const wd of workingDays) {
+      catCount[wd.dateStr] = input.existingCategoryCountsByDate?.[wd.dateStr]?.[category] ?? 0;
+    }
+    catCountByCategory.set(category, catCount);
+  }
+
+  // Leveled (spread) slot search shared by every pass: level 0 allows only days
+  // with zero blocks of this category, level 1 up to one, etc. Window ordering
+  // (preferred/bestTime, then working hours) is preserved within each level, so
+  // spread outranks earliness but preferred times still win across distinct days.
+  const findLeveledSlot = (
+    catCount: Record<string, number>,
+    windows: Window[],
+    duration: number
+  ) => {
+    let slot: ReturnType<typeof findSlot> = null;
+    for (let level = 0; level <= 7 && !slot; level++) {
+      const allowed = new Set(
+        workingDays.filter(wd => catCount[wd.dateStr] <= level).map(wd => wd.dateStr)
+      );
+      slot = findSlot(windows, duration, workRun, busy, nowMs, allowed);
+    }
+    return slot;
+  };
+
+  const isGroupedCategory = (category: string): boolean =>
+    config.taskQuotas[category]?.grouped === true && !noQuotaCategories.has(category);
+
+  // --- Must-do first pass ---------------------------------------------------
+  // A task flagged "must be done this week" (isPriority) has to land as early in
+  // the week as possible, ahead of equal-length non-priority work — even work in
+  // a category the main loop processes earlier. Because the main loop walks
+  // categories in a fixed order and isPriority only sorts WITHIN a category, a
+  // must-do in a late category (e.g. a no-quota General Todo) would otherwise be
+  // pushed to the end of the week. So place every isPriority single-task
+  // candidate up front, across all (non-grouped) categories in deadline-then-name
+  // order, each using its own category's duration, preferred windows and shared
+  // spread state, and consuming that category's quota + marking the task used so
+  // the main pass never double-places it. Grouped categories are excluded here (a
+  // must-do agenda item can't move its shared container); instead a grouped
+  // category holding a must-do has its CONTAINER placement bumped to the front of
+  // the category loop (see orderedCategories below). A must-do that finds no slot
+  // here is left unconsumed so the main pass and leftover/overflow logic see it.
+  const mustDos: Array<{ task: CandidateTask; category: string }> = [];
+  for (const category of remainingByCategory.keys()) {
+    if (isGroupedCategory(category)) continue;
+    for (const t of tasksByCategory.get(category) ?? []) {
+      if (t.isPriority) mustDos.push({ task: t, category });
+    }
+  }
+  mustDos.sort((a, b) => compareKeys(taskSortKey(a.task), taskSortKey(b.task)));
+
+  for (const { task, category } of mustDos) {
+    const remaining = remainingByCategory.get(category);
+    if (remaining === undefined || remaining <= 0) continue; // category quota already full
+    const taskId = task.gid ?? task.adhocId;
+    if (taskId && usedTaskIds.has(taskId)) continue;
+    const duration = (taskId && input.durationOverridesByTask?.[taskId]) || categoryDurationFor(category);
+    const windows = buildWindowsForTask(task.bestTime, preferredWindowsFor(category), workingDays);
+    const catCount = catCountByCategory.get(category)!;
+    const slot = findLeveledSlot(catCount, windows, duration);
+    if (!slot) continue; // leave unplaced; the main pass / overflow logic will see it
+    const start = timeStr(slot.startMs);
+    proposals.push({
+      id: `${slot.dateStr}-${start}-${category}`,
+      category,
+      task: {
+        gid: task.gid,
+        adhocId: task.adhocId,
+        title: task.title,
+        integrationId: task.integrationId,
+      },
+      date: slot.dateStr,
+      start,
+      durationMinutes: duration,
+      reason: buildReason(category, slot.preferred, task),
+    });
+    busy.push({ start: slot.startMs, end: slot.endMs });
+    catCount[slot.dateStr] = (catCount[slot.dateStr] ?? 0) + 1;
+    if (taskId) usedTaskIds.add(taskId);
+    remainingByCategory.set(category, remaining - 1);
+  }
+
+  // Category processing order: a grouped category that holds a must-do task comes
+  // FIRST so its shared containers land early in the week (its must-do can't move
+  // on its own). Then no-quota catch-all categories are always LAST (filler must
+  // not steal slots from quota'd work). Among the rest, Writing/Deep Work is
+  // processed first so it claims the earliest morning slots; then hard-deadline
+  // categories, then by remaining quota desc, then name. Deep work is matched via
+  // the whitespace-robust normalize so "Writing / Deep Work" and "Writing/Deep
+  // Work" are treated the same.
+  const categoryHasHard = (category: string): boolean =>
+    (tasksByCategory.get(category) ?? []).some(t => t.deadlineType === 'hard');
+  const groupedHasMustDo = (category: string): boolean =>
+    isGroupedCategory(category) && (tasksByCategory.get(category) ?? []).some(t => t.isPriority);
+
+  const orderedCategories = [...remainingByCategory.keys()].sort((a, b) => {
+    const gmA = groupedHasMustDo(a);
+    const gmB = groupedHasMustDo(b);
+    if (gmA !== gmB) return gmA ? -1 : 1; // grouped-with-must-do containers first
+    const noqA = noQuotaCategories.has(a);
+    const noqB = noQuotaCategories.has(b);
+    if (noqA !== noqB) return noqA ? 1 : -1; // no-quota categories last
+    if (noqA && noqB) return a < b ? -1 : a > b ? 1 : 0; // among no-quota: by name
+    const deepA = isDeepWork(a);
+    const deepB = isDeepWork(b);
+    if (deepA !== deepB) return deepA ? -1 : 1;
+    const hardA = categoryHasHard(a);
+    const hardB = categoryHasHard(b);
+    if (hardA !== hardB) return hardA ? -1 : 1;
+    const remA = remainingByCategory.get(a)!;
+    const remB = remainingByCategory.get(b)!;
+    if (remA !== remB) return remB - remA;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+
   for (const category of orderedCategories) {
-    const quota = quotaByCategory.get(category)!;
-    // Category-level block length: an explicit per-category override, else the
-    // parsed targetLength (default 30). Grouped/reserved blocks use this; a
-    // single-task block may further override it per task (see below).
-    const categoryDuration =
-      input.durationOverridesByCategory?.[category] ?? (parseTargetLength(quota.targetLength) || 30);
-    const preferredWindows = preferredWindowsForCategory(config, category, workingHoursEnd);
+    // Category-level block length: a per-category override, else the parsed
+    // targetLength (default 30). Grouped/reserved blocks use this; a single-task
+    // block may further override it per task (see below).
+    const categoryDuration = categoryDurationFor(category);
+    const preferredWindows = preferredWindowsFor(category);
 
     let remaining = remainingByCategory.get(category)!;
     const categoryTasks = tasksByCategory.get(category) ?? [];
@@ -675,28 +778,10 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
     // it never applies to a no-quota catch-all, which schedules real tasks only.
     const grouped = config.taskQuotas[category]?.grouped === true && !isNoQuota;
 
-    // Per-date count of this category's blocks, seeded from what's already on the
-    // calendar. Drives the leveled (spread) search below so same-category blocks
+    // Shared per-date spread state for this category (the must-do first pass may
+    // have already incremented some days). Drives the leveled search so blocks
     // fan out across distinct days before doubling up on any one day.
-    const catCount: Record<string, number> = {};
-    for (const wd of workingDays) {
-      catCount[wd.dateStr] = input.existingCategoryCountsByDate?.[wd.dateStr]?.[category] ?? 0;
-    }
-
-    // Leveled (spread) slot search shared by both modes: level 0 allows only days
-    // with zero blocks of this category, level 1 up to one, etc. Window ordering
-    // (preferred/bestTime, then working hours) is preserved within each level, so
-    // spread outranks earliness but preferred times still win across distinct days.
-    const findLeveledSlot = (windows: Window[], duration: number) => {
-      let slot: ReturnType<typeof findSlot> = null;
-      for (let level = 0; level <= 7 && !slot; level++) {
-        const allowed = new Set(
-          workingDays.filter(wd => catCount[wd.dateStr] <= level).map(wd => wd.dateStr)
-        );
-        slot = findSlot(windows, duration, workRun, busy, nowMs, allowed);
-      }
-      return slot;
-    };
+    const catCount = catCountByCategory.get(category)!;
 
     // Grouped mode: place `remaining` reserved-style blocks (no per-block task
     // consumption), then give EVERY block the SAME full agenda — all of the
@@ -707,7 +792,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
       const placed: Array<{ blockId: string; dateStr: string; start: string }> = [];
       while (remaining > 0) {
         const windows = buildWindowsForTask(undefined, preferredWindows, workingDays);
-        const slot = findLeveledSlot(windows, categoryDuration);
+        const slot = findLeveledSlot(catCount, windows, categoryDuration);
         if (!slot) break; // no more room this week for this category
         const start = timeStr(slot.startMs);
         placed.push({ blockId: `${slot.dateStr}-${start}-${category}`, dateStr: slot.dateStr, start });
@@ -757,7 +842,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
         (taskId && input.durationOverridesByTask?.[taskId]) || categoryDuration;
 
       const windows = buildWindowsForTask(task?.bestTime, preferredWindows, workingDays);
-      const slot = findLeveledSlot(windows, duration);
+      const slot = findLeveledSlot(catCount, windows, duration);
       if (!slot) {
         // No room left this week for this category inside working hours. A real
         // selected task becomes an evening-overflow candidate; the rest of this

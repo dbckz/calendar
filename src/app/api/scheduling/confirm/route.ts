@@ -15,8 +15,9 @@ import {
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import type { GoogleCalendarCredentials, GoogleIntegration } from '@/types';
 import type { ProposedBlock } from '@/lib/scheduling/types';
-import { eventTitleForBlock } from '@/lib/scheduling/event-titles';
+import { colorIdForBlock, eventTitleForBlock } from '@/lib/scheduling/event-titles';
 import { createRitualEvent } from '@/lib/scheduling/ritual-events';
+import { ritualIntegrationIdForBlock } from '@/lib/scheduling/rituals';
 
 // An accepted proposal is a ProposedBlock, optionally with a user-edited date /
 // start time.
@@ -71,11 +72,11 @@ export async function POST(request: NextRequest) {
     // integration's primary calendar, with the integration's `eventTransparency`
     // (e.g. OM tasks → OM Google calendar, marked Free). Everything else uses the
     // default integration and opaque (busy) availability.
-    // Ritual events (Lunch / Exercise / Emails) go on the configured ritual Google
-    // integration (e.g. the OM work calendar) when set, else the default. They
-    // stay opaque/busy so the blocks reserve time.
+    // Ritual + break events (Lunch / Exercise / Emails / Break) go on the
+    // configured per-kind ritual Google calendar (lunch+emails → OM work calendar,
+    // exercise+break → personal) when set, else the default. They stay opaque/busy
+    // so the blocks reserve time.
     const config = await getWorkflowConfig();
-    const ritualGoogleIntegrationId = config.scheduling.ritualGoogleIntegrationId;
 
     const asanaIntegrations = await getEnabledAsanaIntegrations();
     const asanaRouting = new Map(
@@ -123,9 +124,13 @@ export async function POST(request: NextRequest) {
       proposal: ProposedBlock
     ): { googleIntegrationId: string; transparency: 'opaque' | 'transparent' } => {
       const fallback = { googleIntegrationId: defaultGoogle!.id, transparency: 'opaque' as const };
-      if (proposal.kind === 'ritual') {
-        return ritualGoogleIntegrationId
-          ? { googleIntegrationId: ritualGoogleIntegrationId, transparency: 'opaque' as const }
+      if (proposal.kind === 'ritual' || proposal.kind === 'break') {
+        const ritualId = ritualIntegrationIdForBlock(
+          config.scheduling,
+          proposal.title ?? ''
+        );
+        return ritualId
+          ? { googleIntegrationId: ritualId, transparency: 'opaque' as const }
           : fallback;
       }
       if (proposal.kind === 'prep') return fallback;
@@ -148,7 +153,9 @@ export async function POST(request: NextRequest) {
       try {
         const { start, end } = toStartEnd(proposal.date, proposal.start, proposal.durationMinutes);
         const isPrep = proposal.kind === 'prep';
-        const isRitual = proposal.kind === 'ritual';
+        // Break blocks are created + tracked exactly like rituals (opaque event +
+        // ritualBlocks record), so they route through the shared ritual creator.
+        const isRitual = proposal.kind === 'ritual' || proposal.kind === 'break';
         // A grouped block (e.g. Engagement / Outreach) carries a `tasks` list
         // instead of a single `task`: one container event titled with the
         // category, its agenda listed in the description.
@@ -188,7 +195,7 @@ export async function POST(request: NextRequest) {
           description,
           'default',
           'primary',
-          { transparency: route.transparency }
+          { transparency: route.transparency, colorId: colorIdForBlock(proposal) }
         );
 
         if (isPrep) {

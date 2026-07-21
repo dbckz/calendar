@@ -14,7 +14,27 @@
 
 import { normalize } from '@/lib/capacity';
 
+import { isBreakTitle } from './rituals';
 import type { ProposedBlock } from './types';
+
+// Google Calendar colorIds for every app-created event. WORK time (task /
+// grouped / reserved / prep / 📧 Emails / overflow blocks) is Banana (yellow);
+// NON-WORK time (🍽️ Lunch, 🏋️ Exercise and ☕ Break) is Basil (green). The
+// single place the WORK/NON-WORK colour decision is made — every creation path
+// (weekly confirm, ritual-events, replan additions) routes through it.
+export const WORK_COLOR_ID = '5'; // Banana / yellow
+export const NON_WORK_COLOR_ID = '10'; // Basil / green
+
+// The Google colorId a proposed block's event should use. A block is NON-WORK
+// when it's a break block, or a ritual block whose title is a break ritual
+// (lunch / exercise); everything else is WORK.
+export function colorIdForBlock(block: ProposedBlock): string {
+  if (block.kind === 'break') return NON_WORK_COLOR_ID;
+  if (block.kind === 'ritual' && block.title && isBreakTitle(block.title)) {
+    return NON_WORK_COLOR_ID;
+  }
+  return WORK_COLOR_ID;
+}
 
 // Prep-title prefixes. Legacy events predate the emoji; new events carry it.
 export const LEGACY_PREP_TITLE_PREFIX = 'Prep: ';
@@ -88,9 +108,9 @@ export function eventTitleForBlock(block: ProposedBlock): string {
   if (block.kind === 'prep') {
     return prepTitle(block.meeting?.title ?? block.category);
   }
-  if (block.kind === 'ritual') {
-    // Rituals are already emoji'd in rituals.ts; route through here so titles
-    // have one source of truth.
+  if (block.kind === 'ritual' || block.kind === 'break') {
+    // Rituals + breaks are already emoji'd in rituals.ts / breaks.ts; route
+    // through here so titles have one source of truth.
     return block.title ?? block.category;
   }
   if (Array.isArray(block.tasks)) {

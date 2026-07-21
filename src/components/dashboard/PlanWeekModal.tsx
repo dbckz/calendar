@@ -1809,12 +1809,13 @@ export function PlanWeekModal({
                 {group.items.map(p => {
                   const isPrep = p.kind === 'prep';
                   const isRitual = p.kind === 'ritual';
+                  const isBreak = p.kind === 'break';
                   const isGrouped = Array.isArray(p.tasks);
                   const color = categoryColor(p.category);
                   const result = results[p.id];
                   const label = isPrep
                     ? p.meeting?.title ?? 'Prep'
-                    : isRitual
+                    : isRitual || isBreak
                       ? p.title ?? p.category
                       : isGrouped
                         ? `${p.tasks!.length} task${p.tasks!.length === 1 ? '' : 's'}`
@@ -1846,6 +1847,11 @@ export function PlanWeekModal({
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-teal-100 text-teal-700">
                               <span className="w-1.5 h-1.5 rounded-full bg-teal-400" />
                               Ritual
+                            </span>
+                          ) : isBreak ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                              Break
                             </span>
                           ) : (
                             <span

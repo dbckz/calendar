@@ -63,11 +63,12 @@ export interface ReplanBlock {
   // before its meeting starts (absolute ms). If the meeting is already past, or
   // no slot fits before it, the block is returned as `stale` instead of moved.
   mustEndBeforeMs?: number;
-  // Ritual blocks (lunch/exercise/emails). A ritual is NEVER "missed" (a skipped
-  // ritual is not rescheduled); only a future ritual that now conflicts with a
-  // meeting is moved, re-slotted into its ritual window. `isBreak` (lunch /
-  // exercise) splits work runs.
-  ritualKind?: 'lunch' | 'exercise' | 'emails';
+  // Ritual/break blocks (lunch/exercise/emails/break). A ritual is NEVER "missed"
+  // (a skipped ritual is not rescheduled); only a future ritual that now conflicts
+  // with a meeting is moved, re-slotted into its ritual window. A future 'break'
+  // that conflicts is DELETED instead of moved — a break has no fixed home.
+  // `isBreak` (lunch / exercise / break) splits work runs.
+  ritualKind?: 'lunch' | 'exercise' | 'emails' | 'break';
   isBreak?: boolean;
 }
 
@@ -137,6 +138,20 @@ export interface ReplanInput {
   existingRitualTitlesByDate?: Record<string, Set<string>>;
 }
 
+// A break block that now conflicts with a meeting. Breaks have no fixed home, so
+// a conflicted future one is DELETED (calendar event + tracking record) rather
+// than re-slotted.
+export interface ReplanDeletion {
+  googleEventId: string;
+  googleIntegrationId?: string;
+  category: string;
+  titles: string[];
+  oldDate: string;
+  oldStart: string;
+  durationMinutes: number;
+  reason: ReplanReason;
+}
+
 export interface ReplanResult {
   kept: ReplanKept[];
   moves: ReplanMove[];
@@ -145,6 +160,8 @@ export interface ReplanResult {
   // Missing rituals to ADD on remaining working days (new events, no existing
   // googleEventId). Empty when no ritual titles context was supplied.
   additions: ProposedBlock[];
+  // Break blocks that now conflict with a meeting → delete (no fixed home).
+  deletions: ReplanDeletion[];
 }
 
 const MS_PER_MINUTE = 60 * 1000;
@@ -177,6 +194,7 @@ export function planReplan(input: ReplanInput): ReplanResult {
   // --- Classify ---
   const kept: ReplanKept[] = [];
   const toMove: Array<{ block: ReplanBlock; reason: ReplanReason }> = [];
+  const deletions: ReplanDeletion[] = [];
   // Kept blocks re-enter the busy set for re-slotting; lunch rituals keep their
   // break flag so they split runs rather than count as work.
   const keptBusy: BusyMs[] = [];
@@ -206,7 +224,22 @@ export function planReplan(input: ReplanInput): ReplanResult {
       block.endMs > nowMs &&
       overlapsAny(block.startMs, block.endMs, otherBusyMs)
     ) {
-      toMove.push({ block, reason: 'conflict' });
+      // A future break that now conflicts is DELETED (no fixed home); everything
+      // else is re-slotted.
+      if (block.ritualKind === 'break') {
+        deletions.push({
+          googleEventId: block.googleEventId,
+          googleIntegrationId: block.googleIntegrationId,
+          category: block.category,
+          titles: block.titles,
+          oldDate: block.date,
+          oldStart: block.start,
+          durationMinutes: block.durationMinutes,
+          reason: 'conflict',
+        });
+      } else {
+        toMove.push({ block, reason: 'conflict' });
+      }
     } else {
       keep(block);
     }
@@ -246,7 +279,9 @@ export function planReplan(input: ReplanInput): ReplanResult {
     // Ritual movers re-slot into their ritual window (lunch prefers 11:30–13:00,
     // exercise near 15:00, emails the end of the working day); everything else
     // uses its category's preferred/afternoon-default windows.
-    let windows = block.ritualKind
+    // Breaks are never re-slotted (they're deleted on conflict), so a mover with a
+    // ritualKind here is always lunch/exercise/emails.
+    let windows = block.ritualKind && block.ritualKind !== 'break'
       ? ritualWindows(block.ritualKind, workingDays)
       : buildWindowsForTask(
           undefined,
@@ -320,7 +355,7 @@ export function planReplan(input: ReplanInput): ReplanResult {
     });
   }
 
-  return { kept, moves, unplaceable, stale, additions };
+  return { kept, moves, unplaceable, stale, additions, deletions };
 }
 
 // Build ritual re-slot windows across the remaining working days. Lunch prefers

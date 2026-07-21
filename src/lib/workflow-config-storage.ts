@@ -56,6 +56,22 @@ function parseOverflow(raw: unknown): OverflowConfig | undefined {
   return { start: start.trim(), end: end.trim() };
 }
 
+// Parse+validate per-kind ritual calendars from untrusted JSON. Keep only the
+// lunch/emails/exercise entries whose value is a non-empty string; return
+// undefined when nothing valid survives so the field stays absent.
+function parseRitualCalendars(
+  raw: unknown
+): { lunch?: string; emails?: string; exercise?: string } | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const src = raw as Record<string, unknown>;
+  const out: { lunch?: string; emails?: string; exercise?: string } = {};
+  for (const kind of ['lunch', 'emails', 'exercise'] as const) {
+    const v = src[kind];
+    if (typeof v === 'string' && v.trim()) out[kind] = v.trim();
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export interface SchedulingConfig {
   // Legacy flat buffer between tasks. No longer read (superseded by workRun);
   // tolerated on load so old config files still parse.
@@ -67,10 +83,15 @@ export interface SchedulingConfig {
     start: string;
     end: string;
   };
-  // Optional Google integration id that daily ritual events (Lunch / Exercise /
-  // Emails) are created on. When unset, rituals fall back to the default Google
-  // integration. Lets rituals live on a specific calendar (e.g. the OM work calendar).
+  // Legacy: single Google integration id that ALL daily ritual events were
+  // created on. Superseded by `ritualCalendars` (per-kind routing) but still read
+  // as the fallback for lunch/emails so existing config files keep working.
   ritualGoogleIntegrationId?: string;
+  // Per-ritual-kind Google integration routing. Lets each ritual live on its own
+  // calendar (e.g. lunch/emails on the OM work calendar, exercise on personal).
+  // Any unset kind falls back: lunch/emails → `ritualGoogleIntegrationId`,
+  // exercise → default Google integration. Break events follow the exercise calendar.
+  ritualCalendars?: { lunch?: string; emails?: string; exercise?: string };
   // Optional evening-overflow window for tasks that don't fit inside working hours.
   overflow?: OverflowConfig;
 }
@@ -254,6 +275,9 @@ export async function getWorkflowConfig(): Promise<WorkflowConfig> {
             parsed.scheduling.ritualGoogleIntegrationId.trim()
               ? parsed.scheduling.ritualGoogleIntegrationId
               : undefined,
+          // Tolerant load: keep per-kind ritual calendars, dropping any entry
+          // that isn't a non-empty string. Omit the field entirely when nothing valid.
+          ritualCalendars: parseRitualCalendars(parsed.scheduling.ritualCalendars),
           // Tolerant load: keep the overflow window only when both ends parse.
           overflow: parseOverflow(parsed.scheduling.overflow),
         }

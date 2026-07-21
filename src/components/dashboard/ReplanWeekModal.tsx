@@ -58,6 +58,8 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
   // exercise being priority one) + per-id creation result.
   const [additionIncluded, setAdditionIncluded] = useState<Set<string>>(new Set());
   const [additionResults, setAdditionResults] = useState<Record<string, ReplanAdditionResult>>({});
+  // Conflicted break blocks to delete (default-checked — a break has no fixed home).
+  const [deletionIncluded, setDeletionIncluded] = useState<Set<string>>(new Set());
   const [showUnchanged, setShowUnchanged] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [results, setResults] = useState<Record<string, ReplanConfirmResult>>({});
@@ -81,6 +83,8 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
       // Every missing-ritual addition is checked by default (exercise is priority one).
       setAdditionIncluded(new Set((res.additions ?? []).map(a => a.id)));
       setAdditionResults({});
+      // Every conflicted break is checked for deletion by default.
+      setDeletionIncluded(new Set((res.deletions ?? []).map(d => d.googleEventId)));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to analyze your week');
     } finally {
@@ -97,6 +101,7 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
     setStaleMode({});
     setAdditionIncluded(new Set());
     setAdditionResults({});
+    setDeletionIncluded(new Set());
     setShowUnchanged(false);
     setIsConfirming(false);
     setResults({});
@@ -124,6 +129,7 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
     Object.keys(results).length > 0 || Object.keys(additionResults).length > 0;
   const stale = useMemo(() => data?.stale ?? [], [data]);
   const additions = useMemo(() => data?.additions ?? [], [data]);
+  const deletions = useMemo(() => data?.deletions ?? [], [data]);
 
   // Partition the confirm payload from the per-row choices.
   const payload = useMemo(() => {
@@ -152,14 +158,18 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
       }
     }
     const additionBlocks = additions.filter(a => additionIncluded.has(a.id));
-    return { moves, doneIds, dismissIds, additionBlocks };
-  }, [data, included, moveMode, stale, staleMode, additions, additionIncluded]);
+    const deletionBlocks = deletions
+      .filter(d => deletionIncluded.has(d.googleEventId))
+      .map(d => ({ googleEventId: d.googleEventId, googleIntegrationId: d.googleIntegrationId }));
+    return { moves, doneIds, dismissIds, additionBlocks, deletionBlocks };
+  }, [data, included, moveMode, stale, staleMode, additions, additionIncluded, deletions, deletionIncluded]);
 
   const actionCount =
     payload.moves.length +
     payload.doneIds.length +
     payload.dismissIds.length +
-    payload.additionBlocks.length;
+    payload.additionBlocks.length +
+    payload.deletionBlocks.length;
 
   const toggle = (id: string) =>
     setIncluded(prev => {
@@ -177,6 +187,14 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
       return next;
     });
 
+  const toggleDeletion = (id: string) =>
+    setDeletionIncluded(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   const confirm = useCallback(async () => {
     if (!data || actionCount === 0) return;
     setIsConfirming(true);
@@ -186,7 +204,8 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
         payload.moves,
         payload.doneIds,
         payload.dismissIds,
-        payload.additionBlocks
+        payload.additionBlocks,
+        payload.deletionBlocks
       );
       const map: Record<string, ReplanConfirmResult> = {};
       for (const r of [...res, ...doneResults]) map[r.googleEventId] = r;
@@ -227,7 +246,8 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
     data.moves.length === 0 &&
     data.unplaceable.length === 0 &&
     stale.length === 0 &&
-    additions.length === 0;
+    additions.length === 0 &&
+    deletions.length === 0;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -492,6 +512,61 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
                 </div>
               )}
 
+              {/* Conflicted breaks — remove (a break has no fixed home) */}
+              {deletions.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 flex items-center gap-1.5">
+                    <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                    Breaks to remove ({deletions.length})
+                  </h3>
+                  <ul className="space-y-2">
+                    {deletions.map(d => {
+                      const result = results[d.googleEventId];
+                      const isIn = deletionIncluded.has(d.googleEventId);
+                      return (
+                        <li
+                          key={d.googleEventId}
+                          className={`flex items-start gap-3 rounded-lg border p-3 ${
+                            isIn ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isIn}
+                            onChange={() => toggleDeletion(d.googleEventId)}
+                            disabled={hasResults}
+                            className="mt-1 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-700">
+                                remove
+                              </span>
+                              <span className="text-sm font-medium text-gray-800 truncate">
+                                {titleLabel(d.titles)}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-xs text-gray-500">
+                              <span className="line-through">{slotLabel(d.oldDate, d.oldStart)}</span>
+                              <span className="ml-1.5 text-gray-400">now clashes with a meeting</span>
+                            </div>
+                          </div>
+                          {result &&
+                            (result.success ? (
+                              <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                            ) : (
+                              <AlertTriangle
+                                className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+                                aria-label={result.error}
+                              />
+                            ))}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+
               {/* Couldn't fit */}
               {data.unplaceable.length > 0 && (
                 <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
@@ -598,7 +673,11 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
                 >
                   Cancel
                 </button>
-                {data && (data.moves.length > 0 || stale.length > 0 || additions.length > 0) && (
+                {data &&
+                  (data.moves.length > 0 ||
+                    stale.length > 0 ||
+                    additions.length > 0 ||
+                    deletions.length > 0) && (
                   <button
                     onClick={confirm}
                     disabled={isLoading || isConfirming || actionCount === 0}

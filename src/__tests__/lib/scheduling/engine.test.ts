@@ -640,6 +640,109 @@ describe('proposeBlocks - priority ranking', () => {
   });
 });
 
+describe('proposeBlocks - must-do first pass', () => {
+  it('places a must-do no-quota task earlier in the week than equal-length quota work', () => {
+    // One 1h afternoon slot per day (12:00-13:00), three days. Two non-must-do
+    // blog tasks (quota'd) plus one must-do General Todo (no-quota catch-all).
+    // Without the first pass the quota'd blogs claim Mon+Tue and the must-do is
+    // pushed to Wednesday; the first pass must instead land the must-do on Monday.
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: {
+            Blogs: { weeklyCount: 2, targetLength: '1h', preferredTimes: [] },
+            'General Todos': { targetLength: '1h', preferredTimes: [] },
+          },
+          typeMapping: { Blogs: ['blog'], 'General Todos': [] },
+          scheduling: {
+            workingDays: ['Monday', 'Tuesday', 'Wednesday'],
+            workingHours: { start: '12:00', end: '13:00' },
+          },
+        }),
+        candidateTasks: [
+          task({ gid: 'b1', typeSignals: ['blog'] }),
+          task({ gid: 'b2', typeSignals: ['blog'] }),
+          task({ gid: 'must', typeSignals: ['todo'], isPriority: true }),
+        ],
+      })
+    );
+    const must = proposals.find(p => p.task?.gid === 'must');
+    const blogs = proposals.filter(p => p.category === 'Blogs');
+    expect(must).toBeDefined();
+    // Must-do claims the earliest day (Monday).
+    expect(must!.date).toBe(dateStr(WEEK_START));
+    // Every non-must-do block is on a strictly later day.
+    expect(blogs).toHaveLength(2);
+    expect(blogs.every(b => b.date > must!.date)).toBe(true);
+  });
+
+  it('a must-do consumes its category quota (placed once, not again in the main pass)', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({ quotas: { Deep: { weeklyCount: 2, targetLength: '1h', preferredTimes: [] } } }),
+        candidateTasks: [
+          task({ gid: 'p', isPriority: true }),
+          task({ gid: 'q' }),
+          task({ gid: 'r' }),
+        ],
+      })
+    );
+    const deep = proposals.filter(p => p.category === 'Deep');
+    // Quota of 2 respected despite 3 candidates — the must-do isn't double-placed.
+    expect(deep).toHaveLength(2);
+    expect(deep.filter(p => p.task?.gid === 'p')).toHaveLength(1);
+  });
+
+  it('bumps a grouped category holding a must-do ahead of other categories', () => {
+    // Two days, one 1h slot each. Blogs sorts before Engage by name, so without
+    // the bump Blogs would take Monday. Because Engage (grouped) holds a must-do,
+    // its container is bumped to the front of the loop and claims Monday.
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: {
+            Blogs: { weeklyCount: 1, targetLength: '1h', preferredTimes: ['13:00-14:00'] },
+            Engage: { weeklyCount: 1, targetLength: '1h', grouped: true, preferredTimes: ['13:00-14:00'] },
+          },
+          typeMapping: { Blogs: ['blog'], Engage: ['engage'] },
+          scheduling: {
+            workingDays: ['Monday', 'Tuesday'],
+            workingHours: { start: '13:00', end: '14:00' },
+          },
+        }),
+        candidateTasks: [
+          task({ gid: 'blog', typeSignals: ['blog'] }),
+          task({ gid: 'eng', typeSignals: ['engage'], isPriority: true }),
+        ],
+      })
+    );
+    const engage = proposals.find(p => p.category === 'Engage');
+    const blog = proposals.find(p => p.category === 'Blogs');
+    expect(engage!.date).toBe(dateStr(WEEK_START));
+    expect(blog!.date > engage!.date).toBe(true);
+    // The must-do rides the grouped agenda (no standalone block from pass 1).
+    expect(engage!.tasks?.some(t => t.gid === 'eng')).toBe(true);
+    expect(proposals.some(p => p.task?.gid === 'eng')).toBe(false);
+  });
+
+  it('spreads multiple must-dos across distinct days rather than stacking one day', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({ quotas: { Deep: { weeklyCount: 3, targetLength: '1h', preferredTimes: [] } } }),
+        candidateTasks: [
+          task({ gid: 'p1', isPriority: true }),
+          task({ gid: 'p2', isPriority: true }),
+          task({ gid: 'p3', isPriority: true }),
+        ],
+      })
+    );
+    const deep = proposals.filter(p => p.category === 'Deep');
+    expect(deep).toHaveLength(3);
+    // The leveled spread applies across the first pass — three distinct days.
+    expect(new Set(deep.map(p => p.date)).size).toBe(3);
+  });
+});
+
 describe('proposeBlocks - grouped blocks', () => {
   // A grouped Engagement-style category: 3 blocks/week, where every block shares
   // the SAME full agenda of all selected tasks rather than one task per block.

@@ -135,4 +135,14 @@ describe('eventsToBusyIntervals', () => {
     expect(busy).toHaveLength(1);
     expect(busy[0].isBreak).toBeFalsy();
   });
+
+  it('tags a "☕ Break" event as a break so work runs stay split around it', () => {
+    const busy = eventsToBusyIntervals([
+      { title: 'Focus', startTime: d('2026-07-13T09:00:00'), endTime: d('2026-07-13T11:00:00') },
+      { title: '☕ Break', startTime: d('2026-07-13T11:00:00'), endTime: d('2026-07-13T11:15:00') },
+      { title: 'Focus 2', startTime: d('2026-07-13T11:15:00'), endTime: d('2026-07-13T13:00:00') },
+    ]);
+    const brk = busy.find(b => b.start.getTime() === d('2026-07-13T11:00:00').getTime());
+    expect(brk?.isBreak).toBe(true);
+  });
 });

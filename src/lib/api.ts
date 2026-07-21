@@ -3,7 +3,7 @@
 import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { CapacityRow } from '@/lib/capacity';
 import type { ProposedBlock } from '@/lib/scheduling/types';
-import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale } from '@/lib/scheduling/replan';
+import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion } from '@/lib/scheduling/replan';
 
 export interface QuotaSummaryRow {
   category: string;
@@ -154,6 +154,8 @@ export interface ReplanAnalyzeResponse {
   stale: ReplanStale[];
   // Missing rituals to add on remaining working days (exercise is priority one).
   additions: ProposedBlock[];
+  // Conflicted break blocks to delete (a break has no fixed home to move to).
+  deletions: ReplanDeletion[];
 }
 
 export interface ReplanConfirmResult {
@@ -995,7 +997,8 @@ export const api = {
     }>,
     done?: string[],
     dismiss?: string[],
-    additions?: ProposedBlock[]
+    additions?: ProposedBlock[],
+    deletions?: Array<{ googleEventId: string; googleIntegrationId?: string }>
   ): Promise<{
     results: ReplanConfirmResult[];
     doneResults: ReplanConfirmResult[];
@@ -1015,6 +1018,7 @@ export const api = {
           ...(done && done.length ? { done } : {}),
           ...(dismiss && dismiss.length ? { dismiss } : {}),
           ...(additions && additions.length ? { additions } : {}),
+          ...(deletions && deletions.length ? { deletions } : {}),
         }),
       }
     );

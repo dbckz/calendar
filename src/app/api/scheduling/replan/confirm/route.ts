@@ -1,19 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { ensureValidCredentials, updateCalendarEvent } from '@/lib/google-calendar';
+import { deleteCalendarEvent, ensureValidCredentials, updateCalendarEvent } from '@/lib/google-calendar';
 import {
   getEnabledGoogleIntegrations,
   getGoogleIntegrationById,
 } from '@/lib/integration-storage';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import { createRitualEvent } from '@/lib/scheduling/ritual-events';
+import { ritualIntegrationIdForBlock } from '@/lib/scheduling/rituals';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import {
   getAdHocTasks,
   getPrepBlocks,
+  getRitualBlocks,
   updateAdHocTask,
   updatePrepBlock,
   deletePrepBlock,
+  deleteRitualBlock,
   setBlockDoneOverride,
   removeGoogleEventAttribution,
   removeBlockDoneOverride,
@@ -79,14 +82,25 @@ export async function POST(request: NextRequest) {
     const additions: ProposedBlock[] = Array.isArray(body?.additions)
       ? body.additions.filter((a: unknown): a is ProposedBlock => !!a && typeof a === 'object')
       : [];
+    // Conflicted break blocks the user accepted deleting: the calendar event AND
+    // its ritual record are removed (a break has no fixed home to move to).
+    const deletions: Array<{ googleEventId: string; googleIntegrationId?: string }> = Array.isArray(
+      body?.deletions
+    )
+      ? body.deletions.filter(
+          (d: unknown): d is { googleEventId: string; googleIntegrationId?: string } =>
+            !!d && typeof d === 'object' && typeof (d as { googleEventId?: unknown }).googleEventId === 'string'
+        )
+      : [];
     if (
       moves.length === 0 &&
       doneEventIds.length === 0 &&
       dismissEventIds.length === 0 &&
-      additions.length === 0
+      additions.length === 0 &&
+      deletions.length === 0
     ) {
       return NextResponse.json(
-        { error: 'No moves, done markings, dismissals or additions provided' },
+        { error: 'No moves, done markings, dismissals, additions or deletions provided' },
         { status: 400 }
       );
     }
@@ -111,7 +125,11 @@ export async function POST(request: NextRequest) {
       return resolved;
     };
 
-    const [adHocTasks, prepBlocks] = await Promise.all([getAdHocTasks(), getPrepBlocks()]);
+    const [adHocTasks, prepBlocks, ritualBlocks] = await Promise.all([
+      getAdHocTasks(),
+      getPrepBlocks(),
+      getRitualBlocks(),
+    ]);
     const results: MoveResult[] = [];
 
     // --- Done markings (no calendar mutation; the event stays as history) ---
@@ -155,6 +173,42 @@ export async function POST(request: NextRequest) {
           googleEventId,
           success: false,
           error: err instanceof Error ? err.message : 'Failed to dismiss',
+        });
+      }
+    }
+
+    // --- Deletions: remove conflicted break events + their tracking records ---
+    for (const del of deletions) {
+      try {
+        const record = ritualBlocks.find(r => r.googleEventId === del.googleEventId);
+        const resolved = await resolveGoogle(del.googleIntegrationId ?? record?.googleIntegrationId);
+        if (resolved) {
+          try {
+            await deleteCalendarEvent(
+              resolved.credentials,
+              resolved.integration.clientId,
+              resolved.integration.clientSecret,
+              del.googleEventId
+            );
+          } catch (err) {
+            // A 404/410 means the event is already gone — the deletion still succeeds.
+            const status =
+              (err as { code?: number; status?: number; response?: { status?: number } })?.code ??
+              (err as { status?: number })?.status ??
+              (err as { response?: { status?: number } })?.response?.status;
+            if (status !== 404 && status !== 410) throw err;
+          }
+        }
+        if (record) await deleteRitualBlock(record.id);
+        await removeGoogleEventAttribution(del.googleEventId);
+        await removeBlockDoneOverride(del.googleEventId);
+        doneResults.push({ googleEventId: del.googleEventId, success: true });
+      } catch (err) {
+        console.error(`[Replan Confirm] Failed to delete break ${del.googleEventId}:`, err);
+        doneResults.push({
+          googleEventId: del.googleEventId,
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to delete break',
         });
       }
     }
@@ -212,10 +266,10 @@ export async function POST(request: NextRequest) {
     const additionResults: AdditionResult[] = [];
     if (additions.length > 0) {
       const config = await getWorkflowConfig();
-      const ritualGoogleIntegrationId = config.scheduling.ritualGoogleIntegrationId;
       for (const block of additions) {
         try {
-          const resolved = await resolveGoogle(ritualGoogleIntegrationId);
+          const ritualId = ritualIntegrationIdForBlock(config.scheduling, block.title ?? '');
+          const resolved = await resolveGoogle(ritualId);
           if (!resolved) {
             additionResults.push({
               id: block.id,

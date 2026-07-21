@@ -26,6 +26,7 @@ interface SchedulingConfig {
     end: string;
   };
   ritualGoogleIntegrationId?: string;
+  ritualCalendars?: { lunch?: string; emails?: string; exercise?: string };
   overflow?: {
     start: string;
     end: string;
@@ -563,25 +564,48 @@ export default function WorkflowConfig() {
         </p>
 
         <div className="mt-4">
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Ritual calendar (Lunch, Exercise &amp; Emails)
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Ritual calendars
           </label>
-          <select
-            value={config.scheduling.ritualGoogleIntegrationId ?? ''}
-            onChange={(e) =>
-              updateScheduling('ritualGoogleIntegrationId', e.target.value || undefined)
-            }
-            className="w-full px-3 py-2 border border-gray-300 rounded-md"
-          >
-            <option value="">Default calendar</option>
-            {googleIntegrations.map(g => (
-              <option key={g.id} value={g.id}>
-                {g.name}
-              </option>
-            ))}
-          </select>
+          <div className="space-y-2">
+            {([
+              { kind: 'lunch', label: 'Lunch' },
+              { kind: 'emails', label: 'Emails' },
+              { kind: 'exercise', label: 'Exercise' },
+            ] as const).map(({ kind, label }) => {
+              // Lunch/emails fall back to the legacy single id so an existing
+              // config keeps showing the right calendar until it's re-saved.
+              const legacy = config.scheduling.ritualGoogleIntegrationId;
+              const value =
+                config.scheduling.ritualCalendars?.[kind] ??
+                (kind === 'exercise' ? '' : legacy ?? '');
+              return (
+                <div key={kind} className="flex items-center gap-3">
+                  <span className="w-20 text-sm text-gray-600">{label}</span>
+                  <select
+                    value={value}
+                    onChange={(e) =>
+                      updateScheduling('ritualCalendars', {
+                        ...config.scheduling.ritualCalendars,
+                        [kind]: e.target.value || undefined,
+                      })
+                    }
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-md"
+                  >
+                    <option value="">Default calendar</option>
+                    {googleIntegrations.map(g => (
+                      <option key={g.id} value={g.id}>
+                        {g.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
           <p className="text-xs text-gray-400 mt-1">
-            Which Google calendar daily Lunch / Exercise / Emails events are created on. Defaults to the primary calendar.
+            Which Google calendar each daily ritual is created on. Break events follow the
+            Exercise calendar. Defaults to the primary calendar.
           </p>
         </div>
       </div>

@@ -14,7 +14,7 @@
 // passed in and the output is a plain list of ProposedBlocks, so the propose
 // route stays thin and the logic is unit-testable.
 
-import type { WorkflowConfig } from '@/lib/workflow-config-storage';
+import type { SchedulingConfig, WorkflowConfig } from '@/lib/workflow-config-storage';
 import type { CalendarEvent } from '@/types';
 
 import {
@@ -31,15 +31,24 @@ import type { BusyInterval, ProposedBlock } from './types';
 export const LUNCH_TITLE = '🍽️ Lunch';
 export const EXERCISE_TITLE = '🏋️ Exercise';
 export const EMAILS_TITLE = '📧 Emails';
-export const RITUAL_TITLES: readonly string[] = [LUNCH_TITLE, EXERCISE_TITLE, EMAILS_TITLE];
+// Explicit break events placed after each ~2h work run (see breaks.ts). Tracked
+// in the ritualBlocks store like the daily rituals so reconcile / reset / replan
+// sweeps cover them.
+export const BREAK_TITLE = '☕ Break';
+export const RITUAL_TITLES: readonly string[] = [
+  LUNCH_TITLE,
+  EXERCISE_TITLE,
+  EMAILS_TITLE,
+  BREAK_TITLE,
+];
 
-// The three ritual kinds. Lunch + exercise are BREAKS (split work runs); emails
-// counts as WORK.
-export type RitualKind = 'lunch' | 'exercise' | 'emails';
+// The ritual/break kinds. Lunch + exercise + break are BREAKS (split work runs);
+// emails counts as WORK.
+export type RitualKind = 'lunch' | 'exercise' | 'emails' | 'break';
 
-// Lunch + exercise are breaks (split work runs); emails counts as work. A
-// calendar event titled exactly like either break ritual is treated as a break
-// by the run rule.
+// Lunch + exercise + break are breaks (split work runs); emails counts as work.
+// A calendar event titled exactly like any of them is treated as a break by the
+// run rule so it keeps work runs split.
 export function isLunchTitle(title: string): boolean {
   return title.trim() === LUNCH_TITLE;
 }
@@ -48,18 +57,44 @@ export function isExerciseTitle(title: string): boolean {
 }
 export function isBreakTitle(title: string): boolean {
   const t = title.trim();
-  return t === LUNCH_TITLE || t === EXERCISE_TITLE;
+  return t === LUNCH_TITLE || t === EXERCISE_TITLE || t === BREAK_TITLE;
 }
 export function isRitualTitle(title: string): boolean {
   return RITUAL_TITLES.includes(title.trim());
 }
-// Resolve a ritual title to its kind. A non-ritual title falls back to 'emails'
-// (callers pass ritual titles only; the fallback keeps the return total).
+// Resolve a ritual/break title to its kind. A non-ritual title falls back to
+// 'emails' (callers pass ritual titles only; the fallback keeps the return total).
 export function ritualKindForTitle(title: string): RitualKind {
   const t = title.trim();
   if (t === EXERCISE_TITLE) return 'exercise';
   if (t === LUNCH_TITLE) return 'lunch';
+  if (t === BREAK_TITLE) return 'break';
   return 'emails';
+}
+
+// Per-kind ritual calendar routing. Exercise (and the break events, which are
+// also green/non-work and belong on the same personal calendar) resolve to the
+// exercise calendar; lunch + emails resolve to their own calendar, falling back
+// to the legacy single `ritualGoogleIntegrationId` so existing configs still work.
+// Returns undefined when nothing is configured for the kind → caller uses the
+// default Google integration.
+export function ritualIntegrationIdForKind(
+  scheduling: Pick<SchedulingConfig, 'ritualCalendars' | 'ritualGoogleIntegrationId'>,
+  kind: RitualKind
+): string | undefined {
+  const cals = scheduling.ritualCalendars;
+  const legacy = scheduling.ritualGoogleIntegrationId;
+  if (kind === 'exercise' || kind === 'break') return cals?.exercise;
+  if (kind === 'lunch') return cals?.lunch ?? legacy;
+  return cals?.emails ?? legacy; // emails
+}
+
+// The ritual calendar for a proposed ritual/break block (by its exact title).
+export function ritualIntegrationIdForBlock(
+  scheduling: Pick<SchedulingConfig, 'ritualCalendars' | 'ritualGoogleIntegrationId'>,
+  title: string
+): string | undefined {
+  return ritualIntegrationIdForKind(scheduling, ritualKindForTitle(title));
 }
 
 const MS_PER_MINUTE = 60 * 1000;
@@ -206,7 +241,9 @@ export function proposedBlockToBusyInterval(block: ProposedBlock): BusyInterval 
   const [h, m] = block.start.split(':').map(Number);
   const start = new Date(y, mo - 1, d, h, m, 0, 0);
   const end = new Date(start.getTime() + block.durationMinutes * MS_PER_MINUTE);
-  const isBreak = block.kind === 'ritual' && !!block.title && isBreakTitle(block.title);
+  const isBreak =
+    block.kind === 'break' ||
+    (block.kind === 'ritual' && !!block.title && isBreakTitle(block.title));
   return { start, end, ...(isBreak ? { isBreak: true } : {}) };
 }
 

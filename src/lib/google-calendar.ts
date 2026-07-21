@@ -258,6 +258,9 @@ export async function createCalendarEvent(
     // Google Calendar availability: 'opaque' shows as busy (default),
     // 'transparent' marks the event as free.
     transparency?: 'opaque' | 'transparent';
+    // Google Calendar colorId (e.g. '5' Banana/yellow, '10' Basil/green). When
+    // set, the created event is given this colour.
+    colorId?: string;
   }
 ): Promise<CalendarEvent> {
   const oauth2Client = createAuthenticatedClient(credentials, clientId, clientSecret);
@@ -271,6 +274,7 @@ export async function createCalendarEvent(
     end: buildEventDate(endTime, isAllDay),
     ...(options?.recurrence?.length ? { recurrence: options.recurrence } : {}),
     ...(options?.transparency ? { transparency: options.transparency } : {}),
+    ...(options?.colorId ? { colorId: options.colorId } : {}),
   };
 
   // Try with requested eventType first, fall back to default if focusTime isn't supported

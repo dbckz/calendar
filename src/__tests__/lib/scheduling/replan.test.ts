@@ -435,6 +435,63 @@ describe('planReplan - ritual blocks', () => {
   });
 });
 
+describe('planReplan - break blocks', () => {
+  it('deletes a future break that now conflicts with a meeting (never moves it)', () => {
+    const { moves, deletions, kept } = run({
+      blocks: [
+        block({
+          googleEventId: 'brk',
+          date: '2026-07-15', // Wednesday, future
+          start: '10:30',
+          durationMinutes: 15,
+          category: 'Break',
+          titles: ['☕ Break'],
+          ritualKind: 'break',
+          isBreak: true,
+        }),
+      ],
+      otherBusy: [busy(15, 10, 30, 11, 0)], // meeting booked over the break slot
+      now: WED_8AM,
+    });
+    expect(moves).toHaveLength(0);
+    expect(kept).toHaveLength(0);
+    expect(deletions).toHaveLength(1);
+    expect(deletions[0].googleEventId).toBe('brk');
+    expect(deletions[0].reason).toBe('conflict');
+  });
+
+  it('keeps a future break with no conflict, and never treats a past break as missed', () => {
+    const { moves, deletions, kept } = run({
+      blocks: [
+        block({
+          googleEventId: 'brk-future',
+          date: '2026-07-15',
+          start: '10:30',
+          durationMinutes: 15,
+          category: 'Break',
+          titles: ['☕ Break'],
+          ritualKind: 'break',
+          isBreak: true,
+        }),
+        block({
+          googleEventId: 'brk-past',
+          date: '2026-07-13', // Monday, already past
+          start: '10:30',
+          durationMinutes: 15,
+          category: 'Break',
+          titles: ['☕ Break'],
+          ritualKind: 'break',
+          isBreak: true,
+        }),
+      ],
+      now: WED_8AM,
+    });
+    expect(moves).toHaveLength(0);
+    expect(deletions).toHaveLength(0);
+    expect(kept.map(k => k.googleEventId).sort()).toEqual(['brk-future', 'brk-past']);
+  });
+});
+
 describe('planReplan - missing-ritual additions', () => {
   it('proposes exercise/lunch/emails additions for remaining working days missing them', () => {
     // No ritual context at all → every remaining working day (Wed–Sun, from the

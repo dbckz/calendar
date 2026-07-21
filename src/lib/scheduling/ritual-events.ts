@@ -6,7 +6,7 @@
 
 import { createCalendarEvent } from '@/lib/google-calendar';
 import { addRitualBlock } from '@/lib/user-data-storage';
-import { eventTitleForBlock } from '@/lib/scheduling/event-titles';
+import { colorIdForBlock, eventTitleForBlock } from '@/lib/scheduling/event-titles';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { GoogleCalendarCredentials, GoogleIntegration } from '@/types';
 
@@ -39,7 +39,7 @@ export async function createRitualEvent(
     block.reason,
     'default',
     'primary',
-    { transparency: 'opaque' }
+    { transparency: 'opaque', colorId: colorIdForBlock(block) }
   );
   await addRitualBlock({
     googleEventId: event.id,

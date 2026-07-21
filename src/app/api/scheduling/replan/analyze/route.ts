@@ -154,7 +154,7 @@ export async function POST(request: NextRequest) {
 
     // Daily ritual blocks (lunch/exercise/emails). Never "missed" — only a future
     // ritual that now conflicts with a meeting is moved (re-slotted to its window).
-    const RITUAL_CATEGORY = { lunch: 'Lunch', exercise: 'Exercise', emails: 'Emails' } as const;
+    const RITUAL_CATEGORY = { lunch: 'Lunch', exercise: 'Exercise', emails: 'Emails', break: 'Break' } as const;
     for (const r of ritualBlocks) {
       if (!inWeek(r.date)) continue;
       appEventIds.add(r.googleEventId);
