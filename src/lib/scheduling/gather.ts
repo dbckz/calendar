@@ -336,27 +336,45 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     byCat[category] = (byCat[category] ?? 0) + 1;
   };
 
-  // Every listed task still drops from candidates, even grouped ones.
+  // Candidate exclusion is per-task: every listed task drops from candidates,
+  // even grouped ones, so populate the exclusion sets over ALL in-week records.
   const inWeekAsana = scheduledAsana.filter(s => inWeek(s.scheduledDate));
   for (const s of inWeekAsana) scheduledGids.add(s.asanaTaskId);
 
-  // Grouped-block tasks (e.g. Engagement / Outreach) all point at the SAME Google
-  // event, so count that block once even though it records several scheduled
-  // tasks — otherwise remaining quota / per-category spread counts would be
-  // over-counted on a mid-week re-run. Single-task blocks each have a unique
-  // event, so this is a no-op for them; entries without an event id are always
-  // counted.
-  for (const s of dedupeByEventId(inWeekAsana, s => s.googleEventId)) {
-    const typeValue = asanaTypeByGid.get(s.asanaTaskId) ?? null;
-    bump(classifyBlockCategory(typeValue ? [typeValue] : [], quotas), s.scheduledDate);
-  }
-
   const scheduledAdhocIds = new Set<string>();
-  for (const t of adHocTasks) {
-    if (t.completed || !inWeek(t.dueDate)) continue;
-    scheduledAdhocIds.add(t.id);
-    bump(classifyBlockCategory(adHocTypeSignals(t.taskType, customTypes), quotas), t.dueDate!);
+  const inWeekAdhoc = adHocTasks.filter(t => !t.completed && inWeek(t.dueDate));
+  for (const t of inWeekAdhoc) scheduledAdhocIds.add(t.id);
+
+  // Count existing BLOCKS this week. Grouped blocks (e.g. Engagement / Outreach,
+  // Batch) all point at the SAME Google event, and record one entry per agenda
+  // task — Asana tasks AND ad-hoc tasks alike. The quota counts BLOCKS, so we
+  // combine both record types and dedupe by googleEventId across the COMBINED
+  // set: records sharing an event id collapse to one, records with no event id
+  // each count. Deduping per-type would inflate "existing" counts on a mid-week
+  // re-run (N ad-hoc tasks on one Batch block → N, or an event carrying both an
+  // Asana and an ad-hoc record → 2).
+  interface CountRecord {
+    googleEventId?: string | null;
+    category: string | null;
+    date: string;
   }
+  const countRecords: CountRecord[] = [];
+  for (const s of inWeekAsana) {
+    const typeValue = asanaTypeByGid.get(s.asanaTaskId) ?? null;
+    countRecords.push({
+      googleEventId: s.googleEventId,
+      category: classifyBlockCategory(typeValue ? [typeValue] : [], quotas),
+      date: s.scheduledDate,
+    });
+  }
+  for (const t of inWeekAdhoc) {
+    countRecords.push({
+      googleEventId: t.googleEventId,
+      category: classifyBlockCategory(adHocTypeSignals(t.taskType, customTypes), quotas),
+      date: t.dueDate!,
+    });
+  }
+  for (const r of dedupeByEventId(countRecords, r => r.googleEventId)) bump(r.category, r.date);
 
   // --- Candidate tasks (not yet scheduled this week) ---
   const candidateTasks: CandidateTask[] = [];

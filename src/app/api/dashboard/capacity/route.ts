@@ -93,34 +93,46 @@ export async function GET() {
       })
     );
 
-    const blocks: CapacityBlock[] = [];
+    // App-scheduled blocks in the current ISO week. Grouped categories (e.g.
+    // Batch, Engagement) store one record per agenda task — Asana tasks AND
+    // ad-hoc tasks alike — all pointing at the SAME container event id; the
+    // weekly quota counts BLOCKS. So we combine both record types and dedupe by
+    // googleEventId across the COMBINED set (matching gatherWeekContext):
+    // records sharing an event id collapse to one block, records with no event
+    // id (each its own block) always count. Deduping per-type would over-count a
+    // Batch block that carries several ad-hoc tasks (N ad-hoc → N blocks) and
+    // could double-count an event carrying both an Asana and an ad-hoc record.
+    interface WeekRecord {
+      googleEventId?: string | null;
+      block: CapacityBlock;
+    }
+    const records: WeekRecord[] = [];
 
-    // App-scheduled Asana blocks in the current ISO week. Grouped categories
-    // store one record per agenda task, all pointing at the SAME googleEventId;
-    // the weekly quota counts BLOCKS, so dedupe by event id (matching
-    // gatherWeekContext) — otherwise a 3-task deep-work agenda across 3 blocks
-    // would show 9/3, Engagement 33/3, etc.
-    const inWeekAsana = scheduledAsana.filter(
-      s => s.scheduledDate >= weekStart && s.scheduledDate <= weekEnd
-    );
-    for (const s of dedupeByEventId(inWeekAsana, s => s.googleEventId)) {
+    for (const s of scheduledAsana) {
+      if (s.scheduledDate < weekStart || s.scheduledDate > weekEnd) continue;
       const info = asanaTypeMap.get(s.asanaTaskId);
-      blocks.push({
-        typeSignals: info?.typeValue ? [info.typeValue] : [],
-        minutes: s.duration,
-        completed: info?.completed ?? false,
+      records.push({
+        googleEventId: s.googleEventId,
+        block: {
+          typeSignals: info?.typeValue ? [info.typeValue] : [],
+          minutes: s.duration,
+          completed: info?.completed ?? false,
+        },
       });
     }
-
-    // App-scheduled ad-hoc blocks in the current ISO week
     for (const t of adHocTasks) {
       if (!t.dueDate || t.dueDate < weekStart || t.dueDate > weekEnd) continue;
-      blocks.push({
-        typeSignals: adHocTypeSignals(t.taskType, customTypes),
-        minutes: t.duration ?? 30,
-        completed: t.completed,
+      records.push({
+        googleEventId: t.googleEventId,
+        block: {
+          typeSignals: adHocTypeSignals(t.taskType, customTypes),
+          minutes: t.duration ?? 30,
+          completed: t.completed,
+        },
       });
     }
+
+    const blocks = dedupeByEventId(records, r => r.googleEventId).map(r => r.block);
 
     const capacity = computeCapacity(quotas, blocks);
 

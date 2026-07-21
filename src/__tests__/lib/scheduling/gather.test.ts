@@ -10,7 +10,7 @@ import { getScheduledAsanaTasks, getAdHocTasks, getCustomTaskTypes, getAllTaskMe
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations } from '@/lib/integration-storage';
 import { getIncompleteTasks } from '@/lib/asana';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
-import type { AsanaTask, ScheduledAsanaTask } from '@/types';
+import type { AdHocTask, AsanaTask, ScheduledAsanaTask } from '@/types';
 
 jest.mock('@/lib/workflow-config-storage', () => ({ getWorkflowConfig: jest.fn() }));
 jest.mock('@/lib/user-data-storage', () => ({
@@ -88,5 +88,95 @@ describe('gatherWeekContext - week-scoped rollover', () => {
     const gids = ctx.candidateTasks.map(t => t.gid);
     expect(gids).toContain('rollover'); // incomplete last-week task is selectable again
     expect(gids).not.toContain('inweek'); // already scheduled this week -> not a candidate
+  });
+});
+
+describe('gatherWeekContext - existing block counts dedupe across record types', () => {
+  const batchAsanaTask = (gid: string): AsanaTask => ({
+    id: gid,
+    gid,
+    name: `Batch ${gid}`,
+    completed: false,
+    customFields: [{ name: 'Type', displayValue: 'batch' } as never],
+  });
+  const scheduledOn = (asanaTaskId: string, eventId: string): ScheduledAsanaTask => ({
+    id: `s-${asanaTaskId}-${eventId}`,
+    asanaTaskId,
+    scheduledDate: '2026-07-15',
+    scheduledTime: '13:00',
+    duration: 30,
+    googleEventId: eventId,
+  });
+  const adhoc = (id: string, googleEventId?: string): AdHocTask => ({
+    id,
+    title: `Ad-hoc ${id}`,
+    completed: false,
+    priority: 'medium',
+    taskType: 'batch', // built-in "Batch" -> classifies to the Batch category
+    dueDate: '2026-07-15',
+    dueTime: '13:00',
+    duration: 30,
+    googleEventId,
+    createdAt: '2026-07-13T00:00:00.000Z',
+    updatedAt: '2026-07-13T00:00:00.000Z',
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers().setSystemTime(new Date(2026, 6, 15, 9, 0, 0));
+
+    (getWorkflowConfig as jest.Mock).mockResolvedValue({
+      taskQuotas: { Batch: { weeklyCount: 2, targetLength: '30min' } },
+      typeMapping: { Batch: ['batch'] },
+    });
+    (getCustomTaskTypes as jest.Mock).mockResolvedValue([]);
+    (getAllTaskMetadata as jest.Mock).mockResolvedValue({});
+    (getPrepBlocks as jest.Mock).mockResolvedValue([]);
+    (getRitualBlocks as jest.Mock).mockResolvedValue([]);
+    (getEnabledGoogleIntegrations as jest.Mock).mockResolvedValue([]);
+    (getEnabledAsanaIntegrations as jest.Mock).mockResolvedValue([
+      {
+        id: 'int1',
+        clientId: 'c',
+        clientSecret: 's',
+        workspaceId: 'ws',
+        credentials: { accessToken: 'tok', expiresAt: Date.now() + 3_600_000 },
+      },
+    ]);
+  });
+
+  afterEach(() => jest.useRealTimers());
+
+  it('counts a mixed Asana + ad-hoc grouped block (one shared event) as 1', async () => {
+    // A Batch container event carries one Asana task and one ad-hoc task, both
+    // pointing at the SAME googleEventId. That is ONE block, not two.
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([scheduledOn('a1', 'evt-batch')]);
+    (getAdHocTasks as jest.Mock).mockResolvedValue([adhoc('ad1', 'evt-batch')]);
+    (getIncompleteTasks as jest.Mock).mockResolvedValue([batchAsanaTask('a1')]);
+
+    const ctx = await gatherWeekContext();
+    expect(ctx.existingScheduledCounts.Batch).toBe(1);
+  });
+
+  it('counts an ad-hoc-only grouped block (one shared event) as 1', async () => {
+    // Two ad-hoc tasks recorded against the SAME container event -> 1 block.
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([]);
+    (getAdHocTasks as jest.Mock).mockResolvedValue([
+      adhoc('ad1', 'evt-batch'),
+      adhoc('ad2', 'evt-batch'),
+    ]);
+    (getIncompleteTasks as jest.Mock).mockResolvedValue([]);
+
+    const ctx = await gatherWeekContext();
+    expect(ctx.existingScheduledCounts.Batch).toBe(1);
+  });
+
+  it('still counts ad-hoc tasks with no event id as separate blocks', async () => {
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([]);
+    (getAdHocTasks as jest.Mock).mockResolvedValue([adhoc('ad1'), adhoc('ad2')]);
+    (getIncompleteTasks as jest.Mock).mockResolvedValue([]);
+
+    const ctx = await gatherWeekContext();
+    expect(ctx.existingScheduledCounts.Batch).toBe(2);
   });
 });

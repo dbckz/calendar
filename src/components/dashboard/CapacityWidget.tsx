@@ -13,6 +13,15 @@ function barColor(ratio: number): string {
   return 'bg-orange-400';
 }
 
+// Progress ratio for a row's bar. Quota'd rows use scheduled/target (capped at
+// 100% by the caller). No-quota rows (e.g. General Todos) have no target to
+// progress toward, so any scheduled work reads as "on track" — full green bar —
+// rather than the low-ratio orange a 0-target division would otherwise imply.
+function barRatio(scheduledCount: number, target: number): number {
+  if (target > 0) return scheduledCount / target;
+  return scheduledCount > 0 ? 1 : 0;
+}
+
 export function CapacityWidget({ rows, isLoading }: CapacityWidgetProps) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-4">
@@ -29,7 +38,7 @@ export function CapacityWidget({ rows, isLoading }: CapacityWidgetProps) {
         <ul className="space-y-1.5">
           {rows.map(row => {
             const target = row.weeklyCount || 0;
-            const ratio = target > 0 ? row.scheduledCount / target : 0;
+            const ratio = barRatio(row.scheduledCount, target);
             const pct = Math.min(100, Math.round(ratio * 100));
             return (
               <li key={row.category}>
@@ -46,7 +55,7 @@ export function CapacityWidget({ rows, isLoading }: CapacityWidgetProps) {
                 <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                   <div
                     className={`h-full rounded-full ${barColor(ratio)}`}
-                    style={{ width: `${target > 0 ? pct : row.scheduledCount > 0 ? 100 : 0}%` }}
+                    style={{ width: `${pct}%` }}
                   />
                 </div>
               </li>
