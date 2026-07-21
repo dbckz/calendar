@@ -10,7 +10,7 @@ import {
   type PrepMeetingInput,
   type PrepResult,
 } from '@/lib/prep-classifier';
-import { getMeetingPrepDecisions, setMeetingPrepDecision } from '@/lib/user-data-storage';
+import { getMeetingPrepDecisions, getPrepBlocks, setMeetingPrepDecision } from '@/lib/user-data-storage';
 import type { CalendarEvent, MeetingPrepDecision } from '@/types';
 
 const PREP_TITLE_PREFIX = 'Prep: ';
@@ -41,10 +41,33 @@ export async function POST(request: NextRequest) {
     const nowMs = ctx.now.getTime();
 
     // Meetings that already have a prep block this week (dedupe on re-run).
+    // Two sources feed the "already prepped" key set:
+    //  (a) any "Prep:"-titled event on the calendar (covers preps created outside
+    //      this app, or whose stored record was lost), and
+    //  (b) stored prepBlocks whose event STILL EXISTS in the week's fetch.
+    // A stored prep block whose event is GONE must NOT suppress re-proposing —
+    // that is the user's "I deleted the prep, re-suggest it" case. Because gather
+    // runs its reconcile step first (see the ordering note below), a deleted
+    // prep's record is normally already purged before we get here, so (b) is
+    // belt-and-braces against a record that survived (e.g. an integration whose
+    // fetch failed, so reconcile conservatively skipped it) — we still guard on
+    // event presence directly so a stale record can never wrongly suppress.
     const preppedTitles = new Set<string>();
     for (const e of ctx.weekEvents) {
       if (e.title.startsWith(PREP_TITLE_PREFIX)) {
         preppedTitles.add(normalizePrepKey(e.title.slice(PREP_TITLE_PREFIX.length)));
+      }
+    }
+
+    const presentEventIds = new Set(ctx.weekEvents.map(e => e.id));
+    const prepBlocks = await getPrepBlocks();
+    for (const p of prepBlocks) {
+      // Only a prep block whose event is still on the calendar suppresses a
+      // re-proposal. A done prep that still has its event is covered here (and by
+      // the title check); a prep whose event was deleted is intentionally NOT
+      // suppressed, so the meeting's prep can be re-proposed.
+      if (presentEventIds.has(p.googleEventId)) {
+        preppedTitles.add(normalizePrepKey(p.meetingTitle));
       }
     }
 

@@ -37,6 +37,7 @@ import {
   resolveWorkingWindow,
   timeStr,
   type BusyMs,
+  type Window,
 } from './engine';
 import type { BusyInterval } from './types';
 
@@ -54,6 +55,10 @@ export interface ReplanBlock {
   done: boolean;
   startMs: number;
   endMs: number;
+  // Present only on meeting-prep blocks: the prep must be re-slotted to END
+  // before its meeting starts (absolute ms). If the meeting is already past, or
+  // no slot fits before it, the block is returned as `stale` instead of moved.
+  mustEndBeforeMs?: number;
 }
 
 export type ReplanReason = 'missed' | 'conflict';
@@ -91,6 +96,20 @@ export interface ReplanUnplaceable {
   reason: ReplanReason;
 }
 
+// A prep block that can no longer be usefully re-slotted: its meeting has
+// already happened, or no slot fits before the meeting starts. Offered to the
+// user only as "mark done" / dismiss.
+export interface ReplanStale {
+  googleEventId: string;
+  googleIntegrationId?: string;
+  category: string;
+  titles: string[];
+  oldDate: string;
+  oldStart: string;
+  durationMinutes: number;
+  reason: ReplanReason;
+}
+
 export interface ReplanInput {
   config: WorkflowConfig;
   weekStart: Date; // local midnight of the week's Monday
@@ -106,6 +125,7 @@ export interface ReplanResult {
   kept: ReplanKept[];
   moves: ReplanMove[];
   unplaceable: ReplanUnplaceable[];
+  stale: ReplanStale[];
 }
 
 const MS_PER_MINUTE = 60 * 1000;
@@ -172,23 +192,52 @@ export function planReplan(input: ReplanInput): ReplanResult {
 
   const moves: ReplanMove[] = [];
   const unplaceable: ReplanUnplaceable[] = [];
+  const stale: ReplanStale[] = [];
+
+  const staleOf = (block: ReplanBlock, reason: ReplanReason): ReplanStale => ({
+    googleEventId: block.googleEventId,
+    googleIntegrationId: block.googleIntegrationId,
+    category: block.category,
+    titles: block.titles,
+    oldDate: block.date,
+    oldStart: block.start,
+    durationMinutes: block.durationMinutes,
+    reason,
+  });
 
   for (const { block, reason } of toMove) {
+    // A prep block whose meeting has already started/passed can never be
+    // usefully re-slotted → stale.
+    if (block.mustEndBeforeMs !== undefined && block.mustEndBeforeMs <= nowMs) {
+      stale.push(staleOf(block, reason));
+      continue;
+    }
+
     const preferredWindows = preferredWindowsForCategory(config, block.category, workingHoursEnd);
-    const windows = buildWindowsForTask(undefined, preferredWindows, workingDays);
+    let windows = buildWindowsForTask(undefined, preferredWindows, workingDays);
+    // Prep constraint: the new slot must END before the meeting starts. Cap each
+    // window's end at the meeting start; drop windows left with no room.
+    if (block.mustEndBeforeMs !== undefined) {
+      windows = capWindows(windows, block.mustEndBeforeMs);
+    }
     const slot = findSlot(windows, block.durationMinutes, buffer, busy, nowMs);
 
     if (!slot) {
-      unplaceable.push({
-        googleEventId: block.googleEventId,
-        googleIntegrationId: block.googleIntegrationId,
-        category: block.category,
-        titles: block.titles,
-        oldDate: block.date,
-        oldStart: block.start,
-        durationMinutes: block.durationMinutes,
-        reason,
-      });
+      // No fit before the meeting → stale for prep blocks; unplaceable otherwise.
+      if (block.mustEndBeforeMs !== undefined) {
+        stale.push(staleOf(block, reason));
+      } else {
+        unplaceable.push({
+          googleEventId: block.googleEventId,
+          googleIntegrationId: block.googleIntegrationId,
+          category: block.category,
+          titles: block.titles,
+          oldDate: block.date,
+          oldStart: block.start,
+          durationMinutes: block.durationMinutes,
+          reason,
+        });
+      }
       continue;
     }
 
@@ -207,7 +256,18 @@ export function planReplan(input: ReplanInput): ReplanResult {
     busy.push({ start: slot.startMs, end: slot.endMs });
   }
 
-  return { kept, moves, unplaceable };
+  return { kept, moves, unplaceable, stale };
+}
+
+// Cap each window's end at `capMs` (a prep block's meeting start), dropping any
+// window left with no room for a slot.
+function capWindows(windows: Window[], capMs: number): Window[] {
+  const out: Window[] = [];
+  for (const w of windows) {
+    const endMs = Math.min(w.endMs, capMs);
+    if (endMs > w.startMs) out.push({ ...w, endMs });
+  }
+  return out;
 }
 
 // Absolute-ms interval for a local yyyy-MM-dd + HH:mm + duration.

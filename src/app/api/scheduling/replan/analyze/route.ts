@@ -8,6 +8,8 @@ import {
   getScheduledAsanaTasks,
   getAdHocTasks,
   getCustomTaskTypes,
+  getPrepBlocks,
+  getBlockDoneOverrides,
 } from '@/lib/user-data-storage';
 import type { ScheduledAsanaTask } from '@/types';
 
@@ -23,10 +25,12 @@ export async function POST(request: NextRequest) {
     const weekStartParam = typeof body?.weekStart === 'string' ? body.weekStart : undefined;
 
     const ctx = await gatherWeekContext(weekStartParam);
-    const [scheduledAsana, adHocTasks, customTypes] = await Promise.all([
+    const [scheduledAsana, adHocTasks, customTypes, prepBlocks, doneOverrides] = await Promise.all([
       getScheduledAsanaTasks(),
       getAdHocTasks(),
       getCustomTaskTypes(),
+      getPrepBlocks(),
+      getBlockDoneOverrides(),
     ]);
 
     const inWeek = (d?: string) => !!d && d >= ctx.weekStartStr && d <= ctx.weekEndStr;
@@ -70,7 +74,10 @@ export async function POST(request: NextRequest) {
       appEventIds.add(eventId);
       const first = entries[0];
       const titles = entries.map(e => incompleteByGid.get(e.asanaTaskId)?.name ?? 'Scheduled task');
-      const done = entries.every(e => !incompleteByGid.has(e.asanaTaskId));
+      // Done when the Asana task(s) are complete, OR the user marked this block
+      // "done for planning" in a prior replan (Asana task stays open).
+      const done =
+        !!doneOverrides[eventId] || entries.every(e => !incompleteByGid.has(e.asanaTaskId));
       let category: string | null = null;
       for (const e of entries) {
         const tv = asanaTypeByGid.get(e.asanaTaskId);
@@ -113,9 +120,31 @@ export async function POST(request: NextRequest) {
         start: t.dueTime,
         durationMinutes: duration,
         titles: [t.title],
-        done: t.completed,
+        done: t.completed || !!doneOverrides[t.googleEventId],
         startMs,
         endMs,
+      });
+    }
+
+    // Meeting-prep blocks (from the prep store). Each re-slots under the extra
+    // constraint that it must end before its meeting starts (mustEndBeforeMs).
+    for (const p of prepBlocks) {
+      if (!inWeek(p.date)) continue;
+      appEventIds.add(p.googleEventId);
+      const { startMs, endMs } = intervalFor(p.googleEventId, p.date, p.start, p.durationMinutes);
+      const meetingStartMs = new Date(p.meetingStart).getTime();
+      blocks.push({
+        googleEventId: p.googleEventId,
+        googleIntegrationId: p.googleIntegrationId,
+        category: 'Meeting prep',
+        date: p.date,
+        start: p.start,
+        durationMinutes: p.durationMinutes,
+        titles: [`Prep: ${p.meetingTitle}`],
+        done: p.done || !!doneOverrides[p.googleEventId],
+        startMs,
+        endMs,
+        ...(Number.isNaN(meetingStartMs) ? {} : { mustEndBeforeMs: meetingStartMs }),
       });
     }
 

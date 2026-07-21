@@ -14,7 +14,14 @@ import {
   getAdHocTasks,
   getCustomTaskTypes,
   getAllTaskMetadata,
+  getPrepBlocks,
+  unscheduleAsanaTask,
+  updateAdHocTask,
+  deletePrepBlock,
+  removeGoogleEventAttribution,
+  type PrepBlock,
 } from '@/lib/user-data-storage';
+import { selectStaleRecords, type ReconcileRecord } from '@/lib/scheduling/reconcile';
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations, updateIntegration } from '@/lib/integration-storage';
 import { getIncompleteTasks, refreshAsanaToken } from '@/lib/asana';
 import { ensureValidCredentials, getCalendarEvents } from '@/lib/google-calendar';
@@ -22,6 +29,7 @@ import { classifyBlockCategory, type CapacityQuota } from '@/lib/capacity';
 import { eventsToBusyIntervals } from '@/lib/scheduling/free-busy';
 import type { BusyInterval, CandidateTask } from '@/lib/scheduling/types';
 import {
+  AdHocTask,
   AsanaIntegration,
   AsanaTask,
   BUILT_IN_TASK_TYPE_LABELS,
@@ -29,6 +37,7 @@ import {
   CalendarEvent,
   CustomTaskType,
   GoogleIntegration,
+  ScheduledAsanaTask,
   isCustomTaskType,
   getCustomTaskTypeId,
 } from '@/types';
@@ -104,15 +113,25 @@ async function fetchAsanaCandidates(): Promise<AsanaCandidate[]> {
 // Fetch all timed/all-day events across enabled Google calendars for the week.
 // One fetch serves both prep classification (needs titles/recurrence/attendees)
 // and free/busy (derived via eventsToBusyIntervals).
-async function fetchWeekEvents(weekStart: Date): Promise<CalendarEvent[]> {
+//
+// Returns the events (each tagged with the integration it came from) plus the
+// set of integration ids whose fetch FULLY succeeded — every day/calendar
+// sub-fetch returned without error. Reconcile only trusts "the event is gone"
+// for integrations in that set, so a swallowed partial failure never triggers a
+// mass purge.
+async function fetchWeekEvents(
+  weekStart: Date
+): Promise<{ events: CalendarEvent[]; fetchedIntegrationIds: Set<string> }> {
   const integrations = await getEnabledGoogleIntegrations();
   const allEvents: CalendarEvent[] = [];
+  const fetchedIntegrationIds = new Set<string>();
 
   const DEFAULT_CALENDAR = { id: 'primary', backgroundColor: '#4285f4', summary: 'Primary', selected: true as const };
 
   await Promise.all(
     integrations.map(async (integration: GoogleIntegration) => {
       if (!integration.credentials) return;
+      let fullySucceeded = true;
       try {
         const credentials = await ensureValidCredentials(integration);
         const selected = integration.calendars?.filter(c => c.selected);
@@ -128,19 +147,114 @@ async function fetchWeekEvents(weekStart: Date): Promise<CalendarEvent[]> {
                 day,
                 cal.id
               );
-              allEvents.push(...events);
+              // Tag each event with its integration so reconcile can match a
+              // stored record's googleIntegrationId to the calendar it lives on.
+              for (const e of events) allEvents.push({ ...e, integrationId: integration.id });
             } catch (err) {
+              fullySucceeded = false;
               console.error(`[Scheduling] calendar ${cal.id} fetch failed:`, err);
             }
           }
         }
       } catch (err) {
+        fullySucceeded = false;
         console.error(`[Scheduling] integration ${integration.name} failed:`, err);
       }
+      if (fullySucceeded) fetchedIntegrationIds.add(integration.id);
     })
   );
 
-  return allEvents;
+  return { events: allEvents, fetchedIntegrationIds };
+}
+
+// Purge stored records whose backing Google event has been deleted off the
+// calendar, then return the in-week arrays with those purges applied so the rest
+// of gather sees reality: a deleted Asana block's gid drops back into
+// candidates, a deleted ad-hoc block becomes unscheduled, a deleted prep block
+// is removed and re-proposable. Only records on fully-fetched integrations are
+// touched (see selectStaleRecords).
+async function reconcileDeletedEvents(
+  scheduledAsana: ScheduledAsanaTask[],
+  adHocTasks: AdHocTask[],
+  prepBlocks: PrepBlock[],
+  weekEvents: CalendarEvent[],
+  fetchedIntegrationIds: Set<string>,
+  weekStartStr: string,
+  weekEndStr: string
+): Promise<{ scheduledAsana: ScheduledAsanaTask[]; adHocTasks: AdHocTask[] }> {
+  const presentEventIds = new Set(weekEvents.map(e => e.id));
+
+  const records: ReconcileRecord[] = [];
+  for (const s of scheduledAsana) {
+    if (!s.googleEventId) continue;
+    records.push({
+      kind: 'asana',
+      id: s.id,
+      googleEventId: s.googleEventId,
+      googleIntegrationId: s.googleIntegrationId,
+      date: s.scheduledDate,
+    });
+  }
+  for (const t of adHocTasks) {
+    if (!t.googleEventId) continue;
+    records.push({
+      kind: 'adhoc',
+      id: t.id,
+      googleEventId: t.googleEventId,
+      googleIntegrationId: t.googleIntegrationId,
+      date: t.dueDate,
+    });
+  }
+  for (const p of prepBlocks) {
+    records.push({
+      kind: 'prep',
+      id: p.id,
+      googleEventId: p.googleEventId,
+      googleIntegrationId: p.googleIntegrationId,
+      date: p.date,
+    });
+  }
+
+  const stale = selectStaleRecords({
+    records,
+    presentEventIds,
+    fetchedIntegrationIds,
+    weekStartStr,
+    weekEndStr,
+  });
+  if (stale.length === 0) return { scheduledAsana, adHocTasks };
+
+  const staleAsanaIds = new Set<string>();
+  const staleAdhocIds = new Set<string>();
+  const purgedEventIds = new Set<string>();
+  for (const r of stale) {
+    purgedEventIds.add(r.googleEventId);
+    if (r.kind === 'asana') {
+      await unscheduleAsanaTask(r.id);
+      staleAsanaIds.add(r.id);
+    } else if (r.kind === 'adhoc') {
+      await updateAdHocTask(r.id, { googleEventId: undefined, dueDate: undefined, dueTime: undefined });
+      staleAdhocIds.add(r.id);
+    } else {
+      await deletePrepBlock(r.id);
+    }
+  }
+  // Any time-tracking attribution for a purged event is now meaningless.
+  for (const eventId of purgedEventIds) await removeGoogleEventAttribution(eventId);
+
+  console.log(
+    `[Scheduling] Reconcile purged ${stale.length} record(s) for deleted calendar events: ` +
+      stale.map(r => `${r.kind}:${r.id}→${r.googleEventId}`).join(', ')
+  );
+
+  return {
+    scheduledAsana: scheduledAsana.filter(s => !staleAsanaIds.has(s.id)),
+    adHocTasks: adHocTasks.map(t =>
+      staleAdhocIds.has(t.id)
+        ? { ...t, googleEventId: undefined, dueDate: undefined, dueTime: undefined }
+        : t
+    ),
+  };
 }
 
 export async function gatherWeekContext(weekStartParam?: string): Promise<WeekContext> {
@@ -151,7 +265,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   const weekStartStr = format(weekStart, 'yyyy-MM-dd');
   const weekEndStr = format(addDays(weekStart, 6), 'yyyy-MM-dd');
 
-  const [config, scheduledAsana, adHocTasks, customTypes, metadata, asanaCandidates, weekEvents] =
+  const [config, scheduledAsanaRaw, adHocTasksRaw, customTypes, metadata, asanaCandidates, fetched, prepBlocksRaw] =
     await Promise.all([
       getWorkflowConfig(),
       getScheduledAsanaTasks(),
@@ -160,7 +274,26 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
       getAllTaskMetadata(),
       fetchAsanaCandidates(),
       fetchWeekEvents(weekStart),
+      getPrepBlocks(),
     ]);
+
+  const weekEvents = fetched.events;
+
+  // --- Reconcile stored records with the live calendar (deleted events) ---
+  // A stored record whose backing event has been deleted off the calendar must
+  // not keep suppressing candidates / consuming quota. selectStaleRecords is
+  // conservative: it only flags records on integrations whose fetch fully
+  // succeeded (never on a failed/partial fetch), so we don't mass-purge on a
+  // transient Google error.
+  const { scheduledAsana, adHocTasks } = await reconcileDeletedEvents(
+    scheduledAsanaRaw,
+    adHocTasksRaw,
+    prepBlocksRaw,
+    weekEvents,
+    fetched.fetchedIntegrationIds,
+    weekStartStr,
+    weekEndStr
+  );
 
   const busyIntervals = eventsToBusyIntervals(weekEvents);
 

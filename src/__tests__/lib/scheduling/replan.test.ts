@@ -227,3 +227,136 @@ describe('planReplan - re-slotting', () => {
     expect(moves[0].newStart).toBe('09:00'); // deep work falls back to morning working hours
   });
 });
+
+// Absolute ms for a local yyyy-MM-dd + HH:mm (matches the block helper).
+function ms(date: string, time: string): number {
+  const [y, mo, d] = date.split('-').map(Number);
+  const [h, m] = time.split(':').map(Number);
+  return new Date(y, mo - 1, d, h, m, 0, 0).getTime();
+}
+
+describe('planReplan - meeting prep blocks', () => {
+  const PREP_CONFIG = makeConfig({
+    quotas: { 'Meeting prep': { weeklyCount: 0, targetLength: '15min', preferredTimes: [] } },
+  });
+
+  it('classifies a past, undone prep block as missed and re-slots it before its meeting', () => {
+    // Prep block scheduled Monday for a Friday meeting; Monday has passed.
+    const { moves, stale, unplaceable } = run({
+      blocks: [
+        block({
+          googleEventId: 'prep',
+          date: '2026-07-13',
+          start: '09:00',
+          durationMinutes: 15,
+          category: 'Meeting prep',
+          mustEndBeforeMs: ms('2026-07-17', '10:00'), // Friday 10:00 meeting
+        }),
+      ],
+      now: WED_8AM,
+      config: PREP_CONFIG,
+    });
+    expect(stale).toHaveLength(0);
+    expect(unplaceable).toHaveLength(0);
+    expect(moves).toHaveLength(1);
+    expect(moves[0].reason).toBe('missed');
+    // Slot must land before the Friday meeting.
+    expect(ms(moves[0].newDate, moves[0].newStart) + 15 * 60 * 1000).toBeLessThanOrEqual(
+      ms('2026-07-17', '10:00')
+    );
+  });
+
+  it('honors mustEndBeforeMs: never re-slots a prep block past its meeting start', () => {
+    // Meeting is Wednesday 10:00; today is Wednesday 08:00. The only room before
+    // it is 08:00–10:00 today. A prep block must land entirely before 10:00.
+    const cfg = makeConfig({
+      quotas: { 'Meeting prep': { weeklyCount: 0, targetLength: '30min', preferredTimes: [] } },
+      scheduling: { workingHours: { start: '08:00', end: '17:00' } },
+    });
+    const { moves, stale } = run({
+      blocks: [
+        block({
+          googleEventId: 'prep',
+          date: '2026-07-13',
+          start: '09:00',
+          durationMinutes: 30,
+          category: 'Meeting prep',
+          mustEndBeforeMs: ms('2026-07-15', '10:00'),
+        }),
+      ],
+      now: WED_8AM,
+      config: cfg,
+    });
+    expect(stale).toHaveLength(0);
+    expect(moves).toHaveLength(1);
+    expect(ms(moves[0].newDate, moves[0].newStart) + 30 * 60 * 1000).toBeLessThanOrEqual(
+      ms('2026-07-15', '10:00')
+    );
+  });
+
+  it('marks a prep block stale when its meeting has already happened', () => {
+    // Meeting was Monday; it is now Wednesday. Nothing to prepare for.
+    const { moves, stale, unplaceable } = run({
+      blocks: [
+        block({
+          googleEventId: 'prep',
+          date: '2026-07-13',
+          start: '09:00',
+          durationMinutes: 15,
+          category: 'Meeting prep',
+          mustEndBeforeMs: ms('2026-07-13', '10:00'), // Monday meeting, already past
+        }),
+      ],
+      now: WED_8AM,
+      config: PREP_CONFIG,
+    });
+    expect(moves).toHaveLength(0);
+    expect(unplaceable).toHaveLength(0);
+    expect(stale).toHaveLength(1);
+    expect(stale[0].googleEventId).toBe('prep');
+    expect(stale[0].reason).toBe('missed');
+  });
+
+  it('marks a prep block stale when no slot fits before a still-future meeting', () => {
+    // Meeting is today at 09:00 but now is 08:00 and working hours start at 09:00,
+    // so there is no working slot that ends before the meeting → stale.
+    const { moves, stale } = run({
+      blocks: [
+        block({
+          googleEventId: 'prep',
+          date: '2026-07-13',
+          start: '09:00',
+          durationMinutes: 15,
+          category: 'Meeting prep',
+          mustEndBeforeMs: ms('2026-07-15', '09:00'), // Wednesday 09:00, right at hours start
+        }),
+      ],
+      now: WED_8AM,
+      config: PREP_CONFIG,
+    });
+    expect(moves).toHaveLength(0);
+    expect(stale).toHaveLength(1);
+    expect(stale[0].googleEventId).toBe('prep');
+  });
+
+  it('keeps a done prep block untouched', () => {
+    const { moves, stale, kept } = run({
+      blocks: [
+        block({
+          googleEventId: 'prep',
+          date: '2026-07-13',
+          start: '09:00',
+          durationMinutes: 15,
+          category: 'Meeting prep',
+          done: true,
+          mustEndBeforeMs: ms('2026-07-13', '10:00'),
+        }),
+      ],
+      now: WED_8AM,
+      config: PREP_CONFIG,
+    });
+    expect(moves).toHaveLength(0);
+    expect(stale).toHaveLength(0);
+    expect(kept).toHaveLength(1);
+  });
+});

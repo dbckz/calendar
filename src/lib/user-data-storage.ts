@@ -27,6 +27,24 @@ export interface GoogleEventAttribution {
   createdAt: string;
 }
 
+// A meeting-prep block the "Plan my week" flow created on the calendar. Tracked
+// here (not just as a "Prep:" Google event) so the planner can dedupe against
+// it, reconcile it when the user deletes the event, and reason about it during
+// replan (missed / mark-done / stale-when-meeting-past).
+export interface PrepBlock {
+  id: string;
+  googleEventId: string;
+  googleIntegrationId: string;
+  meetingEventId: string; // the meeting this block prepares for
+  meetingTitle: string;
+  meetingStart: string; // ISO
+  date: string; // yyyy-MM-dd (the prep block's own date)
+  start: string; // HH:mm
+  durationMinutes: number;
+  done: boolean;
+  createdAt: string;
+}
+
 interface UserData {
   taskTemplates: TaskTemplate[];
   templateGroups: TemplateGroup[];
@@ -42,6 +60,10 @@ interface UserData {
   staleClassification?: Record<string, StaleClassificationEntry>; // Key is Asana task GID
   staleKeep?: Record<string, string>; // GID -> ISO timestamp: "keep active" until (snooze)
   meetingPrepDecisions?: Record<string, MeetingPrepDecision>; // Key is normalized meeting title
+  prepBlocks?: PrepBlock[]; // meeting-prep blocks created on the calendar
+  // Google event ids the user explicitly marked "done for planning" during a
+  // replan. Used for Asana-backed blocks whose task must stay open in Asana.
+  blockDoneOverrides?: Record<string, true>;
 }
 
 const DEFAULT_USER_DATA: UserData = {
@@ -58,6 +80,8 @@ const DEFAULT_USER_DATA: UserData = {
   staleClassification: {},
   staleKeep: {},
   meetingPrepDecisions: {},
+  prepBlocks: [],
+  blockDoneOverrides: {},
 };
 
 async function ensureDataDir(): Promise<void> {
@@ -96,6 +120,8 @@ export async function getUserData(): Promise<UserData> {
       staleClassification: parsed.staleClassification || {},
       staleKeep: parsed.staleKeep || {},
       meetingPrepDecisions: parsed.meetingPrepDecisions || {},
+      prepBlocks: parsed.prepBlocks || [],
+      blockDoneOverrides: parsed.blockDoneOverrides || {},
     };
   } catch {
     // Deep clone so callers that mutate nested collections (e.g. upserting into
@@ -686,4 +712,72 @@ export async function setMeetingPrepDecision(key: string, decision: MeetingPrepD
   const data = await getUserData();
   data.meetingPrepDecisions = { ...(data.meetingPrepDecisions || {}), [key]: decision };
   await saveUserData(data);
+}
+
+// Meeting-prep blocks (calendar blocks the planner created for meeting prep).
+export async function getPrepBlocks(): Promise<PrepBlock[]> {
+  const data = await getUserData();
+  return data.prepBlocks || [];
+}
+
+export async function addPrepBlock(
+  block: Omit<PrepBlock, 'id' | 'done' | 'createdAt'>
+): Promise<PrepBlock> {
+  const data = await getUserData();
+  if (!data.prepBlocks) data.prepBlocks = [];
+
+  const newBlock: PrepBlock = {
+    ...block,
+    id: crypto.randomUUID(),
+    done: false,
+    createdAt: new Date().toISOString(),
+  };
+
+  data.prepBlocks.push(newBlock);
+  await saveUserData(data);
+  return newBlock;
+}
+
+export async function updatePrepBlock(id: string, updates: Partial<PrepBlock>): Promise<PrepBlock | null> {
+  const data = await getUserData();
+  if (!data.prepBlocks) return null;
+  const index = data.prepBlocks.findIndex(b => b.id === id);
+  if (index === -1) return null;
+
+  data.prepBlocks[index] = { ...data.prepBlocks[index], ...updates };
+  await saveUserData(data);
+  return data.prepBlocks[index];
+}
+
+export async function deletePrepBlock(id: string): Promise<boolean> {
+  const data = await getUserData();
+  if (!data.prepBlocks) return false;
+  const filtered = data.prepBlocks.filter(b => b.id !== id);
+  if (filtered.length === data.prepBlocks.length) return false;
+
+  data.prepBlocks = filtered;
+  await saveUserData(data);
+  return true;
+}
+
+// Block "done for planning" overrides (keyed by Google event id). Used for
+// Asana-backed replan blocks the user marked done without completing the Asana
+// task itself.
+export async function getBlockDoneOverrides(): Promise<Record<string, true>> {
+  const data = await getUserData();
+  return data.blockDoneOverrides || {};
+}
+
+export async function setBlockDoneOverride(googleEventId: string): Promise<void> {
+  const data = await getUserData();
+  data.blockDoneOverrides = { ...(data.blockDoneOverrides || {}), [googleEventId]: true };
+  await saveUserData(data);
+}
+
+export async function removeBlockDoneOverride(googleEventId: string): Promise<boolean> {
+  const data = await getUserData();
+  if (!data.blockDoneOverrides || !data.blockDoneOverrides[googleEventId]) return false;
+  delete data.blockDoneOverrides[googleEventId];
+  await saveUserData(data);
+  return true;
 }

@@ -6,7 +6,7 @@
  * I/O (config, storage, Asana, Google) is mocked so the test is deterministic.
  */
 import { gatherWeekContext } from '@/lib/scheduling/gather';
-import { getScheduledAsanaTasks, getAdHocTasks, getCustomTaskTypes, getAllTaskMetadata } from '@/lib/user-data-storage';
+import { getScheduledAsanaTasks, getAdHocTasks, getCustomTaskTypes, getAllTaskMetadata, getPrepBlocks } from '@/lib/user-data-storage';
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations } from '@/lib/integration-storage';
 import { getIncompleteTasks } from '@/lib/asana';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
@@ -18,6 +18,11 @@ jest.mock('@/lib/user-data-storage', () => ({
   getAdHocTasks: jest.fn(),
   getCustomTaskTypes: jest.fn(),
   getAllTaskMetadata: jest.fn(),
+  getPrepBlocks: jest.fn(),
+  unscheduleAsanaTask: jest.fn(),
+  updateAdHocTask: jest.fn(),
+  deletePrepBlock: jest.fn(),
+  removeGoogleEventAttribution: jest.fn(),
 }));
 jest.mock('@/lib/integration-storage', () => ({
   getEnabledAsanaIntegrations: jest.fn(),
@@ -56,6 +61,7 @@ describe('gatherWeekContext - week-scoped rollover', () => {
     (getAdHocTasks as jest.Mock).mockResolvedValue([]);
     (getCustomTaskTypes as jest.Mock).mockResolvedValue([]);
     (getAllTaskMetadata as jest.Mock).mockResolvedValue({});
+    (getPrepBlocks as jest.Mock).mockResolvedValue([]);
     (getEnabledGoogleIntegrations as jest.Mock).mockResolvedValue([]);
     (getEnabledAsanaIntegrations as jest.Mock).mockResolvedValue([
       {

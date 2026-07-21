@@ -3,7 +3,7 @@
 import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { CapacityRow } from '@/lib/capacity';
 import type { ProposedBlock } from '@/lib/scheduling/types';
-import type { ReplanKept, ReplanMove, ReplanUnplaceable } from '@/lib/scheduling/replan';
+import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale } from '@/lib/scheduling/replan';
 
 export interface QuotaSummaryRow {
   category: string;
@@ -114,12 +114,18 @@ export interface ReplanAnalyzeResponse {
   kept: ReplanKept[];
   moves: ReplanMove[];
   unplaceable: ReplanUnplaceable[];
+  stale: ReplanStale[];
 }
 
 export interface ReplanConfirmResult {
   googleEventId: string;
   success: boolean;
   error?: string;
+}
+
+export interface ResetWeekResponse {
+  eventsDeleted: number;
+  recordsCleared: number;
 }
 
 export interface ClientTimeRow {
@@ -916,7 +922,7 @@ export const api = {
   },
 
   // Mid-week replan: apply the accepted moves (patch each Google event's time +
-  // update the stored schedule).
+  // update the stored schedule) and/or mark selected blocks "done".
   async confirmReplan(
     moves: Array<{
       googleEventId: string;
@@ -924,13 +930,36 @@ export const api = {
       date: string;
       start: string;
       durationMinutes: number;
-    }>
-  ): Promise<{ results: ReplanConfirmResult[] }> {
-    return fetchWithRetry<{ results: ReplanConfirmResult[] }>('/api/scheduling/replan/confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ moves }),
-    });
+    }>,
+    done?: string[],
+    dismiss?: string[]
+  ): Promise<{ results: ReplanConfirmResult[]; doneResults: ReplanConfirmResult[] }> {
+    return fetchWithRetry<{ results: ReplanConfirmResult[]; doneResults: ReplanConfirmResult[] }>(
+      '/api/scheduling/replan/confirm',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          moves,
+          ...(done && done.length ? { done } : {}),
+          ...(dismiss && dismiss.length ? { dismiss } : {}),
+        }),
+      }
+    );
+  },
+
+  // "Start the week from scratch": delete this week's upcoming app-created blocks
+  // from the calendar and clear the week's planning records.
+  async resetWeek(weekStart?: string): Promise<ResetWeekResponse> {
+    return fetchWithRetry<ResetWeekResponse>(
+      '/api/scheduling/reset-week',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(weekStart ? { weekStart } : {}),
+      },
+      { maxRetries: 0 }
+    );
   },
 };
 

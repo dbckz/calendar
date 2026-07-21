@@ -7,7 +7,13 @@ import {
 } from '@/lib/integration-storage';
 import {
   getAdHocTasks,
+  getPrepBlocks,
   updateAdHocTask,
+  updatePrepBlock,
+  deletePrepBlock,
+  setBlockDoneOverride,
+  removeGoogleEventAttribution,
+  removeBlockDoneOverride,
   updateScheduledAsanaTasksByGoogleEvent,
 } from '@/lib/user-data-storage';
 import type { GoogleCalendarCredentials, GoogleIntegration } from '@/types';
@@ -28,6 +34,12 @@ interface MoveResult {
   error?: string;
 }
 
+interface DoneResult {
+  googleEventId: string;
+  success: boolean;
+  error?: string;
+}
+
 function toStartEnd(date: string, start: string, durationMinutes: number): { start: Date; end: Date } {
   const [y, mo, d] = date.split('-').map(Number);
   const [h, m] = start.split(':').map(Number);
@@ -40,8 +52,19 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const moves: MoveInput[] = Array.isArray(body?.moves) ? body.moves : [];
-    if (moves.length === 0) {
-      return NextResponse.json({ error: 'No moves provided' }, { status: 400 });
+    // Event ids the user chose to mark "done" instead of rescheduling. Ownership
+    // is resolved server-side: prep block → done:true, ad-hoc → completed:true,
+    // Asana-backed → a planning override (the Asana task itself stays open).
+    const doneEventIds: string[] = Array.isArray(body?.done)
+      ? body.done.filter((id: unknown): id is string => typeof id === 'string')
+      : [];
+    // Stale prep blocks the user dismissed: the prep record is deleted (its past
+    // meeting is over, so there is nothing left to prepare for).
+    const dismissEventIds: string[] = Array.isArray(body?.dismiss)
+      ? body.dismiss.filter((id: unknown): id is string => typeof id === 'string')
+      : [];
+    if (moves.length === 0 && doneEventIds.length === 0 && dismissEventIds.length === 0) {
+      return NextResponse.json({ error: 'No moves, done markings or dismissals provided' }, { status: 400 });
     }
 
     const enabledGoogle = await getEnabledGoogleIntegrations();
@@ -64,8 +87,53 @@ export async function POST(request: NextRequest) {
       return resolved;
     };
 
-    const adHocTasks = await getAdHocTasks();
+    const [adHocTasks, prepBlocks] = await Promise.all([getAdHocTasks(), getPrepBlocks()]);
     const results: MoveResult[] = [];
+
+    // --- Done markings (no calendar mutation; the event stays as history) ---
+    const doneResults: DoneResult[] = [];
+    for (const googleEventId of doneEventIds) {
+      try {
+        const prep = prepBlocks.find(p => p.googleEventId === googleEventId);
+        if (prep) {
+          await updatePrepBlock(prep.id, { done: true });
+        } else {
+          const adhoc = adHocTasks.find(t => t.googleEventId === googleEventId);
+          if (adhoc) {
+            await updateAdHocTask(adhoc.id, { completed: true });
+          } else {
+            // Asana-backed (or unknown): a planning-only override.
+            await setBlockDoneOverride(googleEventId);
+          }
+        }
+        doneResults.push({ googleEventId, success: true });
+      } catch (err) {
+        console.error(`[Replan Confirm] Failed to mark done ${googleEventId}:`, err);
+        doneResults.push({
+          googleEventId,
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to mark done',
+        });
+      }
+    }
+
+    // --- Dismissals: delete the (stale) prep record and clean up after it ---
+    for (const googleEventId of dismissEventIds) {
+      try {
+        const prep = prepBlocks.find(p => p.googleEventId === googleEventId);
+        if (prep) await deletePrepBlock(prep.id);
+        await removeGoogleEventAttribution(googleEventId);
+        await removeBlockDoneOverride(googleEventId);
+        doneResults.push({ googleEventId, success: true });
+      } catch (err) {
+        console.error(`[Replan Confirm] Failed to dismiss ${googleEventId}:`, err);
+        doneResults.push({
+          googleEventId,
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to dismiss',
+        });
+      }
+    }
 
     for (const move of moves) {
       try {
@@ -114,7 +182,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results });
+    return NextResponse.json({ results, doneResults });
   } catch (error) {
     console.error('Error confirming mid-week replan:', error);
     return NextResponse.json(

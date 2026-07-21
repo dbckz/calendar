@@ -207,6 +207,13 @@ export function DashboardContent({
           refetch();
           onPlanApplied?.();
         }}
+        onStartFromScratch={() => {
+          // Reset chained into a fresh plan: refresh data, close replan, open the wizard.
+          refetch();
+          onPlanApplied?.();
+          setShowReplanModal(false);
+          setShowPlanModal(true);
+        }}
       />
     </div>
   );

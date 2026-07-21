@@ -10,6 +10,7 @@ import {
   scheduleAsanaTask,
   updateAdHocTask,
   setGoogleEventAttribution,
+  addPrepBlock,
 } from '@/lib/user-data-storage';
 import type { GoogleCalendarCredentials, GoogleIntegration } from '@/types';
 import type { ProposedBlock } from '@/lib/scheduling/types';
@@ -171,7 +172,22 @@ export async function POST(request: NextRequest) {
           { transparency: route.transparency }
         );
 
-        if (isGrouped) {
+        if (isPrep) {
+          // Record the prep block so the planner can dedupe against it, reconcile
+          // it if the user deletes the event, and reason about it during replan.
+          if (proposal.meeting) {
+            await addPrepBlock({
+              googleEventId: event.id,
+              googleIntegrationId: googleIntegration.id,
+              meetingEventId: proposal.meeting.eventId,
+              meetingTitle: proposal.meeting.title,
+              meetingStart: proposal.meeting.meetingStart,
+              date: proposal.date,
+              start: proposal.start,
+              durationMinutes: proposal.durationMinutes,
+            });
+          }
+        } else if (isGrouped) {
           // Record each listed task as scheduled to the shared container event, so
           // they show as scheduled and drop out of future candidate pools.
           for (const t of proposal.tasks!) {

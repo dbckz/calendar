@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { X, RefreshCw, Loader2, Check, AlertTriangle, ArrowRight, ChevronRight } from 'lucide-react';
+import { X, RefreshCw, Loader2, Check, AlertTriangle, ArrowRight, ChevronRight, Trash2 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
 import { api, type ReplanAnalyzeResponse, type ReplanConfirmResult } from '@/lib/api';
@@ -10,6 +10,9 @@ interface ReplanWeekModalProps {
   isOpen: boolean;
   onClose: () => void;
   onApplied?: () => void; // called after a successful confirm so the caller can refresh
+  // Called after "Start week from scratch" resets the week, so the caller can
+  // close this modal and open the Plan-week wizard (with fresh calendar data).
+  onStartFromScratch?: () => void;
 }
 
 // Deterministic pastel colour per category (mirrors PlanWeekModal so a category
@@ -39,15 +42,25 @@ function titleLabel(titles: string[]): string {
   return `${titles[0]} +${titles.length - 1} more`;
 }
 
-export function ReplanWeekModal({ isOpen, onClose, onApplied }: ReplanWeekModalProps) {
+// Per-missed-row action: reschedule to the proposed slot, or mark done.
+type MoveMode = 'reschedule' | 'done';
+// Per-stale-row action: leave untouched, mark done, or dismiss (delete record).
+type StaleMode = 'leave' | 'done' | 'dismiss';
+
+export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch }: ReplanWeekModalProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<ReplanAnalyzeResponse | null>(null);
   const [included, setIncluded] = useState<Set<string>>(new Set());
+  const [moveMode, setMoveMode] = useState<Record<string, MoveMode>>({});
+  const [staleMode, setStaleMode] = useState<Record<string, StaleMode>>({});
   const [showUnchanged, setShowUnchanged] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [results, setResults] = useState<Record<string, ReplanConfirmResult>>({});
   const [done, setDone] = useState(false);
+  // "Start week from scratch" inline confirm + progress.
+  const [resetConfirm, setResetConfirm] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
 
   const analyze = useCallback(async () => {
     setIsLoading(true);
@@ -57,8 +70,10 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied }: ReplanWeekModalP
     try {
       const res = await api.analyzeReplan();
       setData(res);
-      // Default: every proposed move is included.
+      // Default: every proposed move is included and set to reschedule.
       setIncluded(new Set(res.moves.map(m => m.googleEventId)));
+      setMoveMode(Object.fromEntries(res.moves.map(m => [m.googleEventId, 'reschedule' as MoveMode])));
+      setStaleMode(Object.fromEntries((res.stale ?? []).map(s => [s.googleEventId, 'leave' as StaleMode])));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to analyze your week');
     } finally {
@@ -71,10 +86,14 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied }: ReplanWeekModalP
     if (!isOpen) return;
     setData(null);
     setIncluded(new Set());
+    setMoveMode({});
+    setStaleMode({});
     setShowUnchanged(false);
     setIsConfirming(false);
     setResults({});
     setDone(false);
+    setResetConfirm(false);
+    setIsResetting(false);
     analyze();
   }, [isOpen, analyze]);
 
@@ -93,7 +112,38 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied }: ReplanWeekModalP
   }, [data]);
 
   const hasResults = Object.keys(results).length > 0;
-  const includedCount = data ? data.moves.filter(m => included.has(m.googleEventId)).length : 0;
+  const stale = useMemo(() => data?.stale ?? [], [data]);
+
+  // Partition the confirm payload from the per-row choices.
+  const payload = useMemo(() => {
+    const moves: Array<{ googleEventId: string; googleIntegrationId?: string; date: string; start: string; durationMinutes: number }> = [];
+    const doneIds: string[] = [];
+    const dismissIds: string[] = [];
+    if (data) {
+      for (const m of data.moves) {
+        if (!included.has(m.googleEventId)) continue;
+        if (m.reason === 'missed' && moveMode[m.googleEventId] === 'done') {
+          doneIds.push(m.googleEventId);
+        } else {
+          moves.push({
+            googleEventId: m.googleEventId,
+            googleIntegrationId: m.googleIntegrationId,
+            date: m.newDate,
+            start: m.newStart,
+            durationMinutes: m.durationMinutes,
+          });
+        }
+      }
+      for (const s of stale) {
+        const mode = staleMode[s.googleEventId];
+        if (mode === 'done') doneIds.push(s.googleEventId);
+        else if (mode === 'dismiss') dismissIds.push(s.googleEventId);
+      }
+    }
+    return { moves, doneIds, dismissIds };
+  }, [data, included, moveMode, stale, staleMode]);
+
+  const actionCount = payload.moves.length + payload.doneIds.length + payload.dismissIds.length;
 
   const toggle = (id: string) =>
     setIncluded(prev => {
@@ -104,37 +154,48 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied }: ReplanWeekModalP
     });
 
   const confirm = useCallback(async () => {
-    if (!data) return;
-    const moves = data.moves
-      .filter(m => included.has(m.googleEventId))
-      .map(m => ({
-        googleEventId: m.googleEventId,
-        googleIntegrationId: m.googleIntegrationId,
-        date: m.newDate,
-        start: m.newStart,
-        durationMinutes: m.durationMinutes,
-      }));
-    if (moves.length === 0) return;
+    if (!data || actionCount === 0) return;
     setIsConfirming(true);
     setError(null);
     try {
-      const { results: res } = await api.confirmReplan(moves);
+      const { results: res, doneResults } = await api.confirmReplan(
+        payload.moves,
+        payload.doneIds,
+        payload.dismissIds
+      );
       const map: Record<string, ReplanConfirmResult> = {};
-      for (const r of res) map[r.googleEventId] = r;
+      for (const r of [...res, ...doneResults]) map[r.googleEventId] = r;
       setResults(map);
-      if (res.some(r => r.success)) onApplied?.();
+      if ([...res, ...doneResults].some(r => r.success)) onApplied?.();
       setDone(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to apply changes');
     } finally {
       setIsConfirming(false);
     }
-  }, [data, included, onApplied]);
+  }, [data, actionCount, payload, onApplied]);
+
+  const resetWeek = useCallback(async () => {
+    setIsResetting(true);
+    setError(null);
+    try {
+      await api.resetWeek();
+      // Hand off to the caller: close this modal and open the Plan-week wizard.
+      onStartFromScratch?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to reset the week');
+      setIsResetting(false);
+      setResetConfirm(false);
+    }
+  }, [onStartFromScratch]);
 
   if (!isOpen) return null;
 
+  const plannedCount =
+    (data?.kept.length ?? 0) + (data?.moves.length ?? 0) + stale.length + (data?.unplaceable.length ?? 0);
+
   const nothingToDo =
-    data && data.moves.length === 0 && data.unplaceable.length === 0;
+    data && data.moves.length === 0 && data.unplaceable.length === 0 && stale.length === 0;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -192,6 +253,9 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied }: ReplanWeekModalP
                       const color = categoryColor(m.category);
                       const result = results[m.googleEventId];
                       const isIn = included.has(m.googleEventId);
+                      const isMissed = m.reason === 'missed';
+                      const mode = moveMode[m.googleEventId] ?? 'reschedule';
+                      const markingDone = isMissed && mode === 'done';
                       return (
                         <li
                           key={m.googleEventId}
@@ -216,12 +280,10 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied }: ReplanWeekModalP
                               </span>
                               <span
                                 className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${
-                                  m.reason === 'missed'
-                                    ? 'bg-red-100 text-red-700'
-                                    : 'bg-amber-100 text-amber-700'
+                                  isMissed ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
                                 }`}
                               >
-                                {m.reason === 'missed' ? 'missed' : 'conflict'}
+                                {isMissed ? 'missed' : 'conflict'}
                               </span>
                               <span className="text-sm font-medium text-gray-800 truncate">
                                 {titleLabel(m.titles)}
@@ -230,10 +292,96 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied }: ReplanWeekModalP
                             <div className="mt-1 flex items-center gap-1.5 text-xs text-gray-500">
                               <span className="line-through">{slotLabel(m.oldDate, m.oldStart)}</span>
                               <ArrowRight className="w-3.5 h-3.5 text-gray-400" />
-                              <span className="font-medium text-slate-600">
-                                {slotLabel(m.newDate, m.newStart)}
+                              {markingDone ? (
+                                <span className="font-medium text-emerald-600">Mark done (no reschedule)</span>
+                              ) : (
+                                <span className="font-medium text-slate-600">
+                                  {slotLabel(m.newDate, m.newStart)}
+                                </span>
+                              )}
+                            </div>
+                            {/* Missed rows: choose reschedule or mark done. */}
+                            {isMissed && isIn && !hasResults && (
+                              <div className="mt-2 inline-flex rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium">
+                                {(['reschedule', 'done'] as MoveMode[]).map(opt => (
+                                  <button
+                                    key={opt}
+                                    onClick={() =>
+                                      setMoveMode(prev => ({ ...prev, [m.googleEventId]: opt }))
+                                    }
+                                    className={`px-2.5 py-1 transition-colors ${
+                                      mode === opt
+                                        ? 'bg-orange-500 text-white'
+                                        : 'bg-white text-gray-600 hover:bg-gray-50'
+                                    }`}
+                                  >
+                                    {opt === 'reschedule' ? 'Reschedule' : 'Done'}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          {result &&
+                            (result.success ? (
+                              <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                            ) : (
+                              <AlertTriangle
+                                className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+                                aria-label={result.error}
+                              />
+                            ))}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+
+              {/* Stale prep — meeting already happened */}
+              {stale.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
+                    Meeting already happened ({stale.length})
+                  </h3>
+                  <ul className="space-y-2">
+                    {stale.map(s => {
+                      const result = results[s.googleEventId];
+                      const mode = staleMode[s.googleEventId] ?? 'leave';
+                      return (
+                        <li
+                          key={s.googleEventId}
+                          className="flex items-start gap-3 rounded-lg border border-gray-200 bg-white p-3"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-medium text-gray-800 truncate">
+                                {titleLabel(s.titles)}
                               </span>
                             </div>
+                            <p className="mt-0.5 text-xs text-gray-400">
+                              No slot before the meeting — prep can no longer be rescheduled.
+                            </p>
+                            {!hasResults && (
+                              <div className="mt-2 inline-flex rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium">
+                                {(['leave', 'done', 'dismiss'] as StaleMode[]).map(opt => (
+                                  <button
+                                    key={opt}
+                                    onClick={() =>
+                                      setStaleMode(prev => ({ ...prev, [s.googleEventId]: opt }))
+                                    }
+                                    className={`px-2.5 py-1 transition-colors ${
+                                      mode === opt
+                                        ? opt === 'dismiss'
+                                          ? 'bg-red-500 text-white'
+                                          : 'bg-orange-500 text-white'
+                                        : 'bg-white text-gray-600 hover:bg-gray-50'
+                                    }`}
+                                  >
+                                    {opt === 'leave' ? 'Leave' : opt === 'done' ? 'Mark done' : 'Dismiss'}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
                           </div>
                           {result &&
                             (result.success ? (
@@ -304,34 +452,72 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied }: ReplanWeekModalP
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-200">
-          {done ? (
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-medium bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
-            >
-              Done
-            </button>
-          ) : (
-            <>
+        <div className="flex items-center justify-between gap-2 px-5 py-4 border-t border-gray-200">
+          {/* Left: start-from-scratch destructive action / inline confirm */}
+          <div className="min-w-0">
+            {!done && data && !resetConfirm && (
+              <button
+                onClick={() => setResetConfirm(true)}
+                className="text-xs text-gray-400 hover:text-red-600 transition-colors"
+              >
+                Start week from scratch…
+              </button>
+            )}
+            {!done && resetConfirm && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-600 hidden sm:inline">
+                  Reset this week&apos;s planning ({plannedCount} block{plannedCount === 1 ? '' : 's'})? Upcoming
+                  ones are removed from your calendar; past blocks and meetings are left untouched.
+                </span>
+                <button
+                  onClick={resetWeek}
+                  disabled={isResetting}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-50 transition-colors flex-shrink-0"
+                >
+                  {isResetting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  Reset week
+                </button>
+                <button
+                  onClick={() => setResetConfirm(false)}
+                  disabled={isResetting}
+                  className="text-xs text-gray-500 hover:text-gray-700 flex-shrink-0"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Right: apply / close */}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {done ? (
               <button
                 onClick={onClose}
-                className="px-3 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"
+                className="px-4 py-2 text-sm font-medium bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
               >
-                Cancel
+                Done
               </button>
-              {data && data.moves.length > 0 && (
+            ) : (
+              <>
                 <button
-                  onClick={confirm}
-                  disabled={isLoading || isConfirming || includedCount === 0}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  onClick={onClose}
+                  className="px-3 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"
                 >
-                  {isConfirming && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Apply {includedCount > 0 ? includedCount : ''} move{includedCount === 1 ? '' : 's'}
+                  Cancel
                 </button>
-              )}
-            </>
-          )}
+                {data && (data.moves.length > 0 || stale.length > 0) && (
+                  <button
+                    onClick={confirm}
+                    disabled={isLoading || isConfirming || actionCount === 0}
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {isConfirming && <Loader2 className="w-4 h-4 animate-spin" />}
+                    Apply {actionCount > 0 ? actionCount : ''} change{actionCount === 1 ? '' : 's'}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
