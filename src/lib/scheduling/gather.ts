@@ -28,7 +28,7 @@ import { selectStaleRecords, type ReconcileRecord } from '@/lib/scheduling/recon
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations, updateIntegration } from '@/lib/integration-storage';
 import { getIncompleteTasks, refreshAsanaToken } from '@/lib/asana';
 import { ensureValidCredentials, getCalendarEvents } from '@/lib/google-calendar';
-import { classifyBlockCategory, type CapacityQuota } from '@/lib/capacity';
+import { classifyBlockCategory, dedupeByEventId, type CapacityQuota } from '@/lib/capacity';
 import { eventsToBusyIntervals } from '@/lib/scheduling/free-busy';
 import type { BusyInterval, CandidateTask } from '@/lib/scheduling/types';
 import {
@@ -336,20 +336,17 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     byCat[category] = (byCat[category] ?? 0) + 1;
   };
 
+  // Every listed task still drops from candidates, even grouped ones.
+  const inWeekAsana = scheduledAsana.filter(s => inWeek(s.scheduledDate));
+  for (const s of inWeekAsana) scheduledGids.add(s.asanaTaskId);
+
   // Grouped-block tasks (e.g. Engagement / Outreach) all point at the SAME Google
   // event, so count that block once even though it records several scheduled
   // tasks — otherwise remaining quota / per-category spread counts would be
   // over-counted on a mid-week re-run. Single-task blocks each have a unique
   // event, so this is a no-op for them; entries without an event id are always
   // counted.
-  const countedEvents = new Set<string>();
-  for (const s of scheduledAsana) {
-    if (!inWeek(s.scheduledDate)) continue;
-    scheduledGids.add(s.asanaTaskId); // every listed task still drops from candidates
-    if (s.googleEventId) {
-      if (countedEvents.has(s.googleEventId)) continue;
-      countedEvents.add(s.googleEventId);
-    }
+  for (const s of dedupeByEventId(inWeekAsana, s => s.googleEventId)) {
     const typeValue = asanaTypeByGid.get(s.asanaTaskId) ?? null;
     bump(classifyBlockCategory(typeValue ? [typeValue] : [], quotas), s.scheduledDate);
   }

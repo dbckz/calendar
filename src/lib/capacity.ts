@@ -118,6 +118,30 @@ export function resolveSelectionCap(opts: {
   return Math.max(0, weeklyCount - existing);
 }
 
+// Dedupe records so a grouped block counts once toward its quota. Grouped
+// categories (e.g. Writing/Deep Work, Engagement/Outreach) store one scheduled
+// record per agenda task, all pointing at the SAME Google event; the weekly
+// quota counts BLOCKS, not tasks. So records sharing a Google event id collapse
+// to their first occurrence, while records with no event id (each its own
+// block) always pass through. Used by both the dashboard capacity route and
+// gatherWeekContext so counting stays identical.
+export function dedupeByEventId<T>(
+  items: T[],
+  getEventId: (item: T) => string | null | undefined
+): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const item of items) {
+    const eventId = getEventId(item);
+    if (eventId) {
+      if (seen.has(eventId)) continue;
+      seen.add(eventId);
+    }
+    result.push(item);
+  }
+  return result;
+}
+
 export function computeCapacity(
   quotas: CapacityQuota[],
   blocks: CapacityBlock[]

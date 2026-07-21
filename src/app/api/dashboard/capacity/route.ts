@@ -10,6 +10,7 @@ import {
   CapacityQuota,
   CapacityBlock,
   computeCapacity,
+  dedupeByEventId,
 } from '@/lib/capacity';
 import {
   AsanaIntegration,
@@ -94,9 +95,15 @@ export async function GET() {
 
     const blocks: CapacityBlock[] = [];
 
-    // App-scheduled Asana blocks in the current ISO week
-    for (const s of scheduledAsana) {
-      if (s.scheduledDate < weekStart || s.scheduledDate > weekEnd) continue;
+    // App-scheduled Asana blocks in the current ISO week. Grouped categories
+    // store one record per agenda task, all pointing at the SAME googleEventId;
+    // the weekly quota counts BLOCKS, so dedupe by event id (matching
+    // gatherWeekContext) — otherwise a 3-task deep-work agenda across 3 blocks
+    // would show 9/3, Engagement 33/3, etc.
+    const inWeekAsana = scheduledAsana.filter(
+      s => s.scheduledDate >= weekStart && s.scheduledDate <= weekEnd
+    );
+    for (const s of dedupeByEventId(inWeekAsana, s => s.googleEventId)) {
       const info = asanaTypeMap.get(s.asanaTaskId);
       blocks.push({
         typeSignals: info?.typeValue ? [info.typeValue] : [],
