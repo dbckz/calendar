@@ -12,6 +12,11 @@ export const SCOPES = [
   // the daily digest. The app itself does not send mail; this scope rides along
   // so a reconnected integration's token can be reused by that local job.
   'https://www.googleapis.com/auth/gmail.send',
+  // Per-file Drive access, used by the morning meeting-briefings job's gdoc
+  // helper to create and update briefing Google Docs in place. The app itself
+  // does not touch Drive; this scope rides along so a reconnected integration's
+  // token can be reused by that local job.
+  'https://www.googleapis.com/auth/drive.file',
 ];
 
 export function createOAuth2Client(clientId: string, clientSecret: string, redirectUri?: string) {
