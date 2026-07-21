@@ -977,3 +977,103 @@ describe('proposeBlocks - determinism', () => {
     expect(build()).toEqual(build());
   });
 });
+
+describe('proposeBlocks - evening overflow', () => {
+  const OVERFLOW = { start: '21:00', end: '23:00' };
+  // A single working day with only one free hour forces a second task to overflow.
+  const tightScheduling = (extra: Partial<WorkflowConfig['scheduling']> = {}) => ({
+    workingDays: ['Monday'],
+    workingHours: { start: '09:00', end: '10:00' },
+    ...extra,
+  });
+
+  it('places an overflow block for a real task that did not fit in working hours', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 2, targetLength: '1h', preferredTimes: [] } },
+          scheduling: tightScheduling({ overflow: OVERFLOW }),
+        }),
+        candidateTasks: [task({ gid: 'a' }), task({ gid: 'b' })],
+      })
+    );
+    const overflow = proposals.filter(p => p.overflow);
+    const normal = proposals.filter(p => !p.overflow);
+    // One task fits the single working hour; the other overflows to the evening.
+    expect(normal).toHaveLength(1);
+    expect(overflow).toHaveLength(1);
+    const o = overflow[0];
+    expect(o.overflow).toBe(true);
+    expect(o.kind).toBe('task');
+    expect(o.task?.gid).toBeDefined();
+    expect(o.date).toBe(dateStr(WEEK_START));
+    expect(o.durationMinutes).toBe(60);
+    // Slot sits inside the 21:00–23:00 window (60-min block → start 21:00–22:00).
+    expect(o.start >= '21:00' && o.start <= '22:00').toBe(true);
+    // The two blocks together cover both distinct tasks.
+    expect(new Set([...normal, ...overflow].map(p => p.task?.gid))).toEqual(new Set(['a', 'b']));
+  });
+
+  it('does not create overflow blocks for reserved (task-less) filler', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 2, targetLength: '1h', preferredTimes: [] } },
+          scheduling: tightScheduling({ overflow: OVERFLOW }),
+        }),
+        candidateTasks: [], // no real tasks → only reserved filler, which never overflows
+      })
+    );
+    expect(proposals.some(p => p.overflow)).toBe(false);
+  });
+
+  it('respects the work-run rule inside the overflow window', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 3, targetLength: '1h', preferredTimes: [] } },
+          scheduling: tightScheduling({
+            workRun: { maxMinutes: 60, bufferMinutes: 15 },
+            overflow: OVERFLOW,
+          }),
+        }),
+        candidateTasks: [task({ gid: 'a' }), task({ gid: 'b' }), task({ gid: 'c' })],
+      })
+    );
+    const overflow = proposals.filter(p => p.overflow);
+    // Max run 60 → after the first 60-min overflow block (a maxed run) a 15-min
+    // gap is required, leaving no room for a second 60-min block before 23:00.
+    expect(overflow).toHaveLength(1);
+    expect(overflow[0].start).toBe('21:00');
+  });
+
+  it('emits no overflow blocks when the window is not configured', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 2, targetLength: '1h', preferredTimes: [] } },
+          scheduling: tightScheduling(),
+        }),
+        candidateTasks: [task({ gid: 'a' }), task({ gid: 'b' })],
+      })
+    );
+    expect(proposals.some(p => p.overflow)).toBe(false);
+  });
+
+  it('overflow-window time is not counted in spare capacity', () => {
+    const MON = new Date(2026, 6, 13);
+    const at = (d: Date, h: number, m = 0) =>
+      new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m).getTime();
+    const wd: WorkingDay = {
+      date: MON,
+      dateStr: dateStr(MON),
+      whStartMs: at(MON, 9),
+      whEndMs: at(MON, 19),
+    };
+    // A busy block in the evening overflow window (21:00–22:00) must not reduce
+    // the spare capacity measured across the 09:00–19:00 working window.
+    const busy: BusyMs[] = [{ start: at(MON, 21), end: at(MON, 22) }];
+    const cap = computeSpareCapacity([wd], busy, { maxMinutes: 120, bufferMinutes: 15 }, at(MON, 9));
+    expect(cap.byDate).toEqual([{ date: dateStr(MON), freeMinutes: 600 }]);
+  });
+});

@@ -10,7 +10,6 @@ import { AsanaSidebar, TaskDetailDialog } from '@/components/AsanaSidebar';
 import { DelegateModal } from '@/components/DelegateModal';
 import { AddTaskModal } from '@/components/AddTaskModal';
 import { AllDayEventsBar } from '@/components/AllDayEventsBar';
-import { Reminders } from '@/components/Reminders';
 import { RitualsContent } from '@/components/RitualsContent';
 import { DashboardContent } from '@/components/dashboard/DashboardContent';
 import { useTasks } from '@/hooks/useTasks';
@@ -1038,12 +1037,6 @@ export default function Home() {
               )}
             </div>
 
-            <Reminders
-              asanaIntegrations={asanaIntegrations}
-              asanaProjects={asanaProjects}
-              asanaTypeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
-              onCreateAsanaTask={handleSidebarAsanaCreate}
-            />
           </div>
         </main>
 

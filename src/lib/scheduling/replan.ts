@@ -62,10 +62,11 @@ export interface ReplanBlock {
   // before its meeting starts (absolute ms). If the meeting is already past, or
   // no slot fits before it, the block is returned as `stale` instead of moved.
   mustEndBeforeMs?: number;
-  // Ritual blocks (lunch/emails). A ritual is NEVER "missed" (a skipped lunch is
-  // not rescheduled); only a future ritual that now conflicts with a meeting is
-  // moved, re-slotted into its ritual window. `isBreak` (lunch) splits work runs.
-  ritualKind?: 'lunch' | 'emails';
+  // Ritual blocks (lunch/exercise/emails). A ritual is NEVER "missed" (a skipped
+  // ritual is not rescheduled); only a future ritual that now conflicts with a
+  // meeting is moved, re-slotted into its ritual window. `isBreak` (lunch /
+  // exercise) splits work runs.
+  ritualKind?: 'lunch' | 'exercise' | 'emails';
   isBreak?: boolean;
 }
 
@@ -233,8 +234,8 @@ export function planReplan(input: ReplanInput): ReplanResult {
     }
 
     // Ritual movers re-slot into their ritual window (lunch prefers 11:30–13:00,
-    // emails the end of the working day); everything else uses its category's
-    // preferred/afternoon-default windows.
+    // exercise near 15:00, emails the end of the working day); everything else
+    // uses its category's preferred/afternoon-default windows.
     let windows = block.ritualKind
       ? ritualWindows(block.ritualKind, workingDays)
       : buildWindowsForTask(
@@ -291,9 +292,10 @@ export function planReplan(input: ReplanInput): ReplanResult {
 }
 
 // Build ritual re-slot windows across the remaining working days. Lunch prefers
-// 11:30–13:00 (falling back to 11:00–14:00); emails prefers the final two hours
-// of the working day (falling back to the wider afternoon from 12:00).
-function ritualWindows(kind: 'lunch' | 'emails', workingDays: WorkingDay[]): Window[] {
+// 11:30–13:00 (falling back to 11:00–14:00); exercise prefers a 15:00 start,
+// widening outward toward 13:00–18:00; emails prefers the final two hours of the
+// working day (falling back to the wider afternoon from 12:00).
+function ritualWindows(kind: 'lunch' | 'exercise' | 'emails', workingDays: WorkingDay[]): Window[] {
   const at = (day: WorkingDay, h: number, m: number): number =>
     new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), h, m, 0, 0).getTime();
 
@@ -303,7 +305,15 @@ function ritualWindows(kind: 'lunch' | 'emails', workingDays: WorkingDay[]): Win
           day => ({ startMs: at(day, 11, 30), endMs: at(day, 13, 0) }),
           day => ({ startMs: at(day, 11, 0), endMs: at(day, 14, 0) }),
         ]
-      : [
+      : kind === 'exercise'
+        ? [
+            // Tier 1 fits only a 60-min block starting at 15:00; wider tiers keep
+            // it near mid-afternoon before the full 13:00–18:00 fallback.
+            day => ({ startMs: at(day, 15, 0), endMs: at(day, 16, 0) }),
+            day => ({ startMs: at(day, 14, 0), endMs: at(day, 17, 0) }),
+            day => ({ startMs: at(day, 13, 0), endMs: at(day, 18, 0) }),
+          ]
+        : [
           day => ({ startMs: Math.max(day.whEndMs - 2 * 60 * 60 * 1000, day.whStartMs), endMs: day.whEndMs }),
           day => ({ startMs: Math.max(at(day, 12, 0), day.whStartMs), endMs: day.whEndMs }),
         ];

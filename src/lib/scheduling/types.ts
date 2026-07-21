@@ -66,9 +66,15 @@ export interface ProposedBlock {
   kind?: 'task' | 'reserved' | 'prep' | 'ritual';
   // Present only on prep blocks: the meeting this block prepares for.
   meeting?: { eventId: string; title: string; meetingStart: string /* ISO */ };
-  // Present only on ritual blocks (lunch/emails): the exact event title to
-  // create ("🍽️ Lunch" / "📧 Emails"). `category` is 'Lunch' or 'Emails'.
+  // Present only on ritual blocks (lunch/exercise/emails): the exact event title
+  // to create ("🍽️ Lunch" / "🏋️ Exercise" / "📧 Emails"). `category` is 'Lunch',
+  // 'Exercise' or 'Emails'.
   title?: string;
+  // True for an OPTIONAL evening-overflow block: a real selected task that didn't
+  // fit inside working hours, placed in the configured overflow window (e.g.
+  // 21:00–23:00). The review UI shows these in their own opt-in section
+  // (default-rejected) and spare-capacity ignores overflow-window time.
+  overflow?: boolean;
 }
 
 export interface ProposeBlocksInput {

@@ -45,15 +45,15 @@ export interface PrepBlock {
   createdAt: string;
 }
 
-// A daily-ritual block (lunch / emails) the "Plan my week" flow created on the
-// calendar. Tracked here (like PrepBlock) so the planner can dedupe against it,
-// reconcile it when the user deletes the event, reset it, and re-slot it in
-// replan. No `done` concept — a ritual is never marked done.
+// A daily-ritual block (lunch / exercise / emails) the "Plan my week" flow
+// created on the calendar. Tracked here (like PrepBlock) so the planner can
+// dedupe against it, reconcile it when the user deletes the event, reset it, and
+// re-slot it in replan. No `done` concept — a ritual is never marked done.
 export interface RitualBlock {
   id: string;
   googleEventId: string;
   googleIntegrationId: string;
-  title: string; // exact event title ("🍽️ Lunch" / "📧 Emails")
+  title: string; // exact event title ("🍽️ Lunch" / "🏋️ Exercise" / "📧 Emails")
   date: string; // yyyy-MM-dd
   start: string; // HH:mm
   durationMinutes: number;

@@ -621,6 +621,11 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
 
   const quotaByCategory = new Map(quotas.map(q => [q.category, q]));
 
+  // Real selected tasks that couldn't be placed inside working hours. After the
+  // normal pass they get an OPTIONAL evening-overflow block (see below). Reserved
+  // filler and unmet-quota blocks are never collected here — only real tasks.
+  const leftovers: Array<{ task: CandidateTask; category: string; duration: number }> = [];
+
   for (const category of orderedCategories) {
     const quota = quotaByCategory.get(category)!;
     // Category-level block length: an explicit per-category override, else the
@@ -720,7 +725,28 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
 
       const windows = buildWindowsForTask(task?.bestTime, preferredWindows, workingDays);
       const slot = findLeveledSlot(windows, duration);
-      if (!slot) break; // no more room this week for this category
+      if (!slot) {
+        // No room left this week for this category inside working hours. A real
+        // selected task becomes an evening-overflow candidate; the rest of this
+        // category's remaining budget is collected too (they won't fit either).
+        // A reserved block (no task) is never an overflow candidate.
+        if (task) {
+          let budget = remaining;
+          for (const t of categoryTasks) {
+            if (budget <= 0) break;
+            const tid = t.gid ?? t.adhocId;
+            if (tid && usedTaskIds.has(tid)) continue;
+            if (tid) usedTaskIds.add(tid);
+            leftovers.push({
+              task: t,
+              category,
+              duration: (tid && input.durationOverridesByTask?.[tid]) || categoryDuration,
+            });
+            budget -= 1;
+          }
+        }
+        break;
+      }
 
       const start = timeStr(slot.startMs);
       const blockId = `${slot.dateStr}-${start}-${category}`;
@@ -756,6 +782,57 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
       busy.push({ start: slot.startMs, end: slot.endMs });
       catCount[slot.dateStr] = (catCount[slot.dateStr] ?? 0) + 1;
       remaining -= 1;
+    }
+  }
+
+  // --- Optional evening overflow -------------------------------------------
+  // For real tasks that didn't fit inside working hours, try to place an OPTIONAL
+  // block in the configured overflow window (e.g. 21:00–23:00) on the remaining
+  // days. The overflow window sits OUTSIDE working hours, so buildWorkingDays'
+  // working-hours windows don't cover it — build sibling overflow windows for the
+  // same days explicitly. Calendar busy + already-placed blocks are respected and
+  // the work-run rule applies within the window. Blocks are marked overflow:true
+  // so the UI can offer them as opt-in (default-rejected).
+  const overflowStart = config.scheduling.overflow
+    ? parseTimeOfDay(config.scheduling.overflow.start)
+    : null;
+  const overflowEnd = config.scheduling.overflow
+    ? parseTimeOfDay(config.scheduling.overflow.end)
+    : null;
+  if (overflowStart && overflowEnd && leftovers.length > 0) {
+    const overflowWindows: Window[] = workingDays
+      .map(day => ({
+        date: day.date,
+        dateStr: day.dateStr,
+        startMs: msAt(day.date, overflowStart),
+        endMs: msAt(day.date, overflowEnd),
+        preferred: false,
+        bestTimeMatch: false,
+      }))
+      .filter(w => w.endMs > w.startMs)
+      .sort((a, b) => a.startMs - b.startMs);
+
+    for (const lo of leftovers) {
+      const slot = findSlot(overflowWindows, lo.duration, workRun, busy, nowMs);
+      if (!slot) continue; // no room in the overflow window this week
+      const start = timeStr(slot.startMs);
+      proposals.push({
+        id: `${slot.dateStr}-${start}-overflow-${lo.category}`,
+        category: lo.category,
+        kind: 'task',
+        task: {
+          gid: lo.task.gid,
+          adhocId: lo.task.adhocId,
+          title: lo.task.title,
+          integrationId: lo.task.integrationId,
+        },
+        date: slot.dateStr,
+        start,
+        durationMinutes: lo.duration,
+        reason: `${lo.category} — didn't fit in working hours; optional evening overflow.`,
+        overflow: true,
+      });
+      busy.push({ start: slot.startMs, end: slot.endMs });
     }
   }
 

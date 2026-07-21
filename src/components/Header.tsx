@@ -1,7 +1,7 @@
 'use client';
 
 import { format, addDays, subDays, isSameDay } from 'date-fns';
-import { Settings, RefreshCw, Star, ChevronLeft, ChevronRight, LucideIcon } from 'lucide-react';
+import { Settings, RefreshCw, Star, Bell, ChevronLeft, ChevronRight, LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 import { CalendarEvent } from '@/types';
 import { NotificationBell } from './NotificationBell';
@@ -181,6 +181,13 @@ export function Header({ selectedDate, onDateChange, onRefresh, isLoading, color
             >
               <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
+            <Link
+              href="/reminders"
+              className={`p-2 ${colorScheme ? 'hover:bg-white/20 text-white' : 'hover:bg-gray-100 text-blue-600'} rounded-lg transition-colors`}
+              aria-label="Reminders"
+            >
+              <Bell className="w-5 h-5" />
+            </Link>
             <Link
               href="/frequent-tasks"
               className={`p-2 ${colorScheme ? 'hover:bg-white/20 text-white' : 'hover:bg-gray-100 text-amber-500'} rounded-lg transition-colors`}

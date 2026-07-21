@@ -36,6 +36,26 @@ export interface WorkRunConfig {
 
 export const DEFAULT_WORK_RUN: WorkRunConfig = { maxMinutes: 120, bufferMinutes: 15 };
 
+// Optional evening-overflow window. When set, "Plan my week" offers optional
+// blocks in this window (outside working hours) for real tasks that didn't fit
+// inside working hours. Times are "HH:MM" local.
+export interface OverflowConfig {
+  start: string;
+  end: string;
+}
+
+// Parse+validate an overflow config from untrusted JSON. Keep it only when both
+// ends are valid "HH:MM" times and the window is non-empty (start < end).
+function parseOverflow(raw: unknown): OverflowConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const { start, end } = raw as { start?: unknown; end?: unknown };
+  const hhmm = /^([01]?\d|2[0-3]):[0-5]\d$/;
+  if (typeof start !== 'string' || typeof end !== 'string') return undefined;
+  if (!hhmm.test(start.trim()) || !hhmm.test(end.trim())) return undefined;
+  if (start.trim() >= end.trim()) return undefined;
+  return { start: start.trim(), end: end.trim() };
+}
+
 export interface SchedulingConfig {
   // Legacy flat buffer between tasks. No longer read (superseded by workRun);
   // tolerated on load so old config files still parse.
@@ -47,10 +67,12 @@ export interface SchedulingConfig {
     start: string;
     end: string;
   };
-  // Optional Google integration id that daily ritual events (Lunch / Emails) are
-  // created on. When unset, rituals fall back to the default Google integration.
-  // Lets rituals live on a specific calendar (e.g. the OM work calendar).
+  // Optional Google integration id that daily ritual events (Lunch / Exercise /
+  // Emails) are created on. When unset, rituals fall back to the default Google
+  // integration. Lets rituals live on a specific calendar (e.g. the OM work calendar).
   ritualGoogleIntegrationId?: string;
+  // Optional evening-overflow window for tasks that don't fit inside working hours.
+  overflow?: OverflowConfig;
 }
 
 // Budget policy for the delegation pacer (drains the queue at a sustainable
@@ -232,6 +254,8 @@ export async function getWorkflowConfig(): Promise<WorkflowConfig> {
             parsed.scheduling.ritualGoogleIntegrationId.trim()
               ? parsed.scheduling.ritualGoogleIntegrationId
               : undefined,
+          // Tolerant load: keep the overflow window only when both ends parse.
+          overflow: parseOverflow(parsed.scheduling.overflow),
         }
       : DEFAULT_CONFIG.scheduling;
 

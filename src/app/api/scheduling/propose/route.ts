@@ -5,21 +5,21 @@ import { gatherWeekContext } from '@/lib/scheduling/gather';
 import { proposeBlocks, localDateStr, computeSpareCapacity, resolveWorkingWindow } from '@/lib/scheduling/engine';
 import {
   proposeRitualBlocks,
-  LUNCH_TITLE,
-  EMAILS_TITLE,
-  isLunchTitle,
+  RITUAL_TITLES,
+  isBreakTitle,
 } from '@/lib/scheduling/rituals';
 import type { BusyInterval, CandidateTask, ProposedBlock } from '@/lib/scheduling/types';
 
 // Convert a proposed block's date + HH:mm + duration into a busy interval so the
-// engine treats accepted prep/ritual blocks as occupied time. A lunch ritual is
-// tagged as a break (splits work runs); everything else counts as work.
+// engine treats accepted prep/ritual blocks as occupied time. A break ritual
+// (lunch / exercise) is tagged as a break (splits work runs); everything else
+// counts as work.
 function blockToInterval(block: ProposedBlock): BusyInterval {
   const [y, mo, d] = block.date.split('-').map(Number);
   const [h, m] = block.start.split(':').map(Number);
   const start = new Date(y, mo - 1, d, h, m, 0, 0);
   const end = new Date(start.getTime() + block.durationMinutes * 60 * 1000);
-  const isBreak = block.kind === 'ritual' && !!block.title && isLunchTitle(block.title);
+  const isBreak = block.kind === 'ritual' && !!block.title && isBreakTitle(block.title);
   return { start, end, ...(isBreak ? { isBreak: true } : {}) };
 }
 
@@ -58,15 +58,16 @@ export async function POST(request: NextRequest) {
 
     const ctx = await gatherWeekContext(typeof body?.weekStart === 'string' ? body.weekStart : undefined);
 
-    // Daily lunch/emails rituals are placed FIRST (before task allocation), around
-    // the calendar's existing busy time + any accepted prep blocks, so tasks flow
-    // around them. A day that already has a "🍽️ Lunch"/"📧 Emails" event is skipped
+    // Daily lunch/exercise/emails rituals are placed FIRST (before task
+    // allocation), around the calendar's existing busy time + any accepted prep
+    // blocks, so tasks flow around them. A day that already has a ritual event
+    // ("🍽️ Lunch" / "🏋️ Exercise" / "📧 Emails") is skipped for that ritual
     // (dedupe by exact title from the week's events).
     const existingRitualTitlesByDate: Record<string, Set<string>> = {};
     for (const e of ctx.weekEvents) {
       if (e.allDay) continue;
       const title = e.title?.trim();
-      if (title !== LUNCH_TITLE && title !== EMAILS_TITLE) continue;
+      if (!title || !RITUAL_TITLES.includes(title)) continue;
       const dateStr = localDateStr(e.startTime);
       (existingRitualTitlesByDate[dateStr] ??= new Set()).add(title);
     }
@@ -159,8 +160,12 @@ export async function POST(request: NextRequest) {
     const spareCapacity = computeSpareCapacity(workingDays, spareBusyMs, workRun, ctx.now.getTime());
 
     // --- Unmet-quota summary (task categories only; prep isn't a quota) ---
+    // Optional evening-overflow blocks are default-rejected, so they don't count
+    // toward a category's met quota (a category short on working-hours time still
+    // reads as unmet even if overflow blocks were offered).
     const proposedByCategory: Record<string, number> = {};
     for (const p of taskBlocks) {
+      if (p.overflow) continue;
       proposedByCategory[p.category] = (proposedByCategory[p.category] ?? 0) + 1;
     }
     const quotaSummary = ctx.quotas

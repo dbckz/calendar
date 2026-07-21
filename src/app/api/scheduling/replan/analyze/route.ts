@@ -12,7 +12,7 @@ import {
   getRitualBlocks,
   getBlockDoneOverrides,
 } from '@/lib/user-data-storage';
-import { isLunchTitle } from '@/lib/scheduling/rituals';
+import { ritualKindForTitle } from '@/lib/scheduling/rituals';
 import { prepTitle } from '@/lib/scheduling/event-titles';
 import type { ScheduledAsanaTask } from '@/types';
 
@@ -152,17 +152,19 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Daily ritual blocks (lunch/emails). Never "missed" — only a future ritual
-    // that now conflicts with a meeting is moved (lunch re-slotted to its window).
+    // Daily ritual blocks (lunch/exercise/emails). Never "missed" — only a future
+    // ritual that now conflicts with a meeting is moved (re-slotted to its window).
+    const RITUAL_CATEGORY = { lunch: 'Lunch', exercise: 'Exercise', emails: 'Emails' } as const;
     for (const r of ritualBlocks) {
       if (!inWeek(r.date)) continue;
       appEventIds.add(r.googleEventId);
-      const lunch = isLunchTitle(r.title);
+      const kind = ritualKindForTitle(r.title);
+      const isBreak = kind !== 'emails'; // lunch + exercise split work runs
       const { startMs, endMs } = intervalFor(r.googleEventId, r.date, r.start, r.durationMinutes);
       blocks.push({
         googleEventId: r.googleEventId,
         googleIntegrationId: r.googleIntegrationId,
-        category: lunch ? 'Lunch' : 'Emails',
+        category: RITUAL_CATEGORY[kind],
         date: r.date,
         start: r.start,
         durationMinutes: r.durationMinutes,
@@ -170,8 +172,8 @@ export async function POST(request: NextRequest) {
         done: false, // rituals are never "done"
         startMs,
         endMs,
-        ritualKind: lunch ? 'lunch' : 'emails',
-        isBreak: lunch,
+        ritualKind: kind,
+        isBreak,
       });
     }
 

@@ -13,6 +13,7 @@ import {
   Star,
   Flag,
   ExternalLink,
+  Moon,
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
@@ -524,7 +525,8 @@ export function PlanWeekModal({
       if (Object.keys(taskDurations).length) body.durationOverrides = taskDurations;
       if (Object.keys(taskDurationOverrides).length) body.taskDurationOverrides = taskDurationOverrides;
       const data: ProposeWeekResponse = await api.proposeWeeklyPlan(body);
-      setProposals(data.proposals.map(p => ({ ...p, accepted: true })));
+      // Overflow blocks are OPTIONAL — default them to rejected so the user opts in.
+      setProposals(data.proposals.map(p => ({ ...p, accepted: !p.overflow })));
       setQuotaSummary(data.quotaSummary);
       setSpareCapacity(data.spareCapacity ?? null);
       setWeekLabel(
@@ -754,9 +756,12 @@ export function PlanWeekModal({
 
   // --- Step 4 actions ---
 
+  // Normal (working-hours) proposals, grouped by date. Overflow proposals are
+  // rendered in their own opt-in section, so they're excluded here.
   const grouped = useMemo(() => {
     const map = new Map<string, EditableProposal[]>();
     for (const p of proposals) {
+      if (p.overflow) continue;
       const list = map.get(p.date) ?? [];
       list.push(p);
       map.set(p.date, list);
@@ -768,6 +773,15 @@ export function PlanWeekModal({
         items: items.sort((a, b) => (a.start < b.start ? -1 : 1)),
       }));
   }, [proposals]);
+
+  // Optional evening-overflow proposals, sorted by date then start.
+  const overflowProposals = useMemo(
+    () =>
+      proposals
+        .filter(p => p.overflow)
+        .sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : a.start < b.start ? -1 : 1)),
+    [proposals]
+  );
 
   const acceptedCount = proposals.filter(p => p.accepted).length;
   const hasResults = Object.keys(results).length > 0;
@@ -1687,18 +1701,29 @@ export function PlanWeekModal({
       );
     }
     // Which must-do tasks made it into the plan, and which didn't (for a warning).
+    // A must-do that fit only in the optional evening overflow gets a softer,
+    // actionable notice ("tick it to schedule") rather than the hard red warning.
     const idOf = (t: { gid?: string; adhocId?: string }) => t.gid ?? t.adhocId ?? '';
     const blockIsMustDo = (p: EditableProposal): boolean =>
       (!!p.task && mustDoIds.has(idOf(p.task))) ||
       (Array.isArray(p.tasks) && p.tasks.some(t => mustDoIds.has(idOf(t))));
-    const placedMustDo = new Set<string>();
+    const placedInWorkingHours = new Set<string>();
+    const placedInOverflow = new Set<string>();
     for (const p of proposals) {
-      if (p.task && mustDoIds.has(idOf(p.task))) placedMustDo.add(idOf(p.task));
-      if (p.tasks) for (const t of p.tasks) if (mustDoIds.has(idOf(t))) placedMustDo.add(idOf(t));
+      const target = p.overflow ? placedInOverflow : placedInWorkingHours;
+      if (p.task && mustDoIds.has(idOf(p.task))) target.add(idOf(p.task));
+      if (p.tasks) for (const t of p.tasks) if (mustDoIds.has(idOf(t))) target.add(idOf(t));
     }
     const titleById = new Map<string, string>();
     for (const cat of taskCats ?? []) for (const c of cat.candidates) titleById.set(c.id, c.title);
-    const unplacedMustDo = [...mustDoIds].filter(id => !placedMustDo.has(id));
+    // Must-dos with no slot at all → hard warning; must-dos only in overflow →
+    // soft "tick it" notice; anything in working hours is fine.
+    const unplacedMustDo = [...mustDoIds].filter(
+      id => !placedInWorkingHours.has(id) && !placedInOverflow.has(id)
+    );
+    const overflowOnlyMustDo = [...mustDoIds].filter(
+      id => !placedInWorkingHours.has(id) && placedInOverflow.has(id)
+    );
 
     return (
       <>
@@ -1712,6 +1737,24 @@ export function PlanWeekModal({
               </p>
               <ul className="space-y-0.5">
                 {unplacedMustDo.map(id => (
+                  <li key={id}>{titleById.get(id) ?? id}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+        {overflowOnlyMustDo.length > 0 && (
+          <div className="mb-4 flex items-start gap-2 rounded-lg bg-indigo-50 border border-indigo-200 p-3">
+            <Moon className="w-4 h-4 mt-0.5 flex-shrink-0 text-indigo-500" />
+            <div className="text-xs text-indigo-700">
+              <p className="font-medium mb-1">
+                {overflowOnlyMustDo.length} must-do task
+                {overflowOnlyMustDo.length === 1 ? '' : 's'} only fit
+                {overflowOnlyMustDo.length === 1 ? 's' : ''} in the evening overflow — tick
+                {overflowOnlyMustDo.length === 1 ? ' it' : ' them'} below to schedule:
+              </p>
+              <ul className="space-y-0.5">
+                {overflowOnlyMustDo.map(id => (
                   <li key={id}>{titleById.get(id) ?? id}</li>
                 ))}
               </ul>
@@ -1838,6 +1881,83 @@ export function PlanWeekModal({
             </div>
           ))}
         </div>
+
+        {/* Evening overflow — optional blocks for tasks that didn't fit inside
+            working hours. Default-rejected (opt-in): tick a block to schedule it. */}
+        {overflowProposals.length > 0 && (
+          <div className="mt-5">
+            <div className="flex items-center gap-1.5 mb-2">
+              <Moon className="w-3.5 h-3.5 text-indigo-500" />
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-indigo-500">
+                Evening overflow (optional)
+              </h3>
+            </div>
+            <p className="text-[11px] text-gray-400 mb-2">
+              These didn&apos;t fit in your working hours. Tick any you want to schedule in the evening.
+            </p>
+            <ul className="space-y-2">
+              {overflowProposals.map(p => {
+                const result = results[p.id];
+                const label = p.task ? p.task.title : p.category;
+                return (
+                  <li
+                    key={p.id}
+                    className={`flex items-center gap-3 rounded-lg border p-3 ${
+                      p.accepted
+                        ? 'border-indigo-200 bg-indigo-50/50'
+                        : 'border-gray-100 bg-gray-50 opacity-70'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={p.accepted}
+                      onChange={() => toggleAccept(p.id)}
+                      disabled={hasResults}
+                      className="w-4 h-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-100 text-indigo-700">
+                          <Moon className="w-2.5 h-2.5" />
+                          {format(parseISO(p.date), 'EEE')}
+                        </span>
+                        <span
+                          className="text-sm font-medium text-gray-800 truncate"
+                          title={p.reason}
+                        >
+                          {label}
+                        </span>
+                        {blockIsMustDo(p) && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700 flex-shrink-0">
+                            <Flag className="w-2.5 h-2.5 fill-amber-500" />
+                            Must do
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <input
+                      type="time"
+                      value={p.start}
+                      onChange={e => editStart(p.id, e.target.value)}
+                      disabled={hasResults}
+                      className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                      title={timeRange(p.start, p.durationMinutes)}
+                    />
+                    {result &&
+                      (result.success ? (
+                        <Check className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                      ) : (
+                        <AlertTriangle
+                          className="w-4 h-4 text-red-500 flex-shrink-0"
+                          aria-label={result.error}
+                        />
+                      ))}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
 
         {/* Spare capacity — how much usable free work time is left this week, with
             an affordance to go back and pick more tasks when there's room. Hidden

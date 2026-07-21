@@ -5,6 +5,7 @@
 import {
   proposeRitualBlocks,
   LUNCH_TITLE,
+  EXERCISE_TITLE,
   EMAILS_TITLE,
 } from '@/lib/scheduling/rituals';
 import type { BusyInterval } from '@/lib/scheduling/types';
@@ -111,5 +112,47 @@ describe('proposeRitualBlocks', () => {
     const lunches = blocks.filter(b => b.title === LUNCH_TITLE);
     expect(lunches).toHaveLength(5);
     expect(new Set(lunches.map(l => l.date)).size).toBe(5);
+  });
+
+  it('places a 60-min exercise block starting at exactly 15:00 when free', () => {
+    const blocks = run({ scheduling: { workingHours: { start: '08:30', end: '19:00' } } });
+    const exercise = blocks.find(b => b.title === EXERCISE_TITLE);
+    expect(exercise).toBeDefined();
+    expect(exercise!.kind).toBe('ritual');
+    expect(exercise!.category).toBe('Exercise');
+    expect(exercise!.durationMinutes).toBe(60);
+    expect(exercise!.start).toBe('15:00');
+    expect(exercise!.date).toBe('2026-07-13');
+  });
+
+  it('places exercise at the free 60-min slot closest to 15:00 (earlier on a tie)', () => {
+    // Block 15:00–16:00, so a 15:00 start is impossible. The two nearest free
+    // 60-min slots are 14:00 and 16:00 (both 60 min away); the earlier wins.
+    const blocks = run({
+      scheduling: { workingHours: { start: '08:30', end: '19:00' } },
+      busyIntervals: [busy(15, 0, 16, 0)],
+    });
+    const exercise = blocks.find(b => b.title === EXERCISE_TITLE);
+    expect(exercise).toBeDefined();
+    expect(exercise!.start).toBe('14:00');
+  });
+
+  it('skips exercise when nothing fits in 13:00–18:00', () => {
+    const blocks = run({
+      scheduling: { workingHours: { start: '08:30', end: '19:00' } },
+      busyIntervals: [busy(13, 0, 18, 0)],
+    });
+    expect(blocks.find(b => b.title === EXERCISE_TITLE)).toBeUndefined();
+  });
+
+  it('dedupes exercise against an existing exercise event that day', () => {
+    const blocks = run({
+      scheduling: { workingHours: { start: '08:30', end: '19:00' } },
+      existingRitualTitlesByDate: { '2026-07-13': new Set([EXERCISE_TITLE]) },
+    });
+    expect(blocks.find(b => b.title === EXERCISE_TITLE)).toBeUndefined();
+    // Lunch + emails still proposed.
+    expect(blocks.find(b => b.title === LUNCH_TITLE)).toBeDefined();
+    expect(blocks.find(b => b.title === EMAILS_TITLE)).toBeDefined();
   });
 });

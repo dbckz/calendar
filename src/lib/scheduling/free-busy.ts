@@ -6,7 +6,7 @@
 // not block auto-scheduling of focus blocks that day. Only timed events count.
 
 import type { BusyInterval } from './types';
-import { isLunchTitle } from './rituals';
+import { isBreakTitle } from './rituals';
 
 // Minimal shape we need from a calendar event. Compatible with CalendarEvent
 // (startTime/endTime as Date) but accepts strings/Dates defensively.
@@ -46,9 +46,10 @@ export function mergeIntervals(intervals: BusyInterval[]): BusyInterval[] {
 }
 
 // Build merged busy intervals from calendar events, dropping all-day events.
-// Events titled exactly like the lunch ritual ("🍽️ Lunch") are tagged as BREAK
-// intervals and merged separately from work intervals, so a lunch never merges
-// into an adjacent meeting and keeps splitting work runs. (Emails counts as work.)
+// Events titled exactly like a break ritual ("🍽️ Lunch" / "🏋️ Exercise") are
+// tagged as BREAK intervals and merged separately from work intervals, so a break
+// never merges into an adjacent meeting and keeps splitting work runs. (Emails
+// counts as work.)
 export function eventsToBusyIntervals(events: EventLike[]): BusyInterval[] {
   const work: BusyInterval[] = [];
   const breaks: BusyInterval[] = [];
@@ -59,7 +60,7 @@ export function eventsToBusyIntervals(events: EventLike[]): BusyInterval[] {
     const end = toDate(event.endTime);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) continue;
     if (end.getTime() <= start.getTime()) continue;
-    (event.title && isLunchTitle(event.title) ? breaks : work).push({ start, end });
+    (event.title && isBreakTitle(event.title) ? breaks : work).push({ start, end });
   }
   const mergedBreaks = mergeIntervals(breaks).map(i => ({ ...i, isBreak: true }));
   return [...mergeIntervals(work), ...mergedBreaks];

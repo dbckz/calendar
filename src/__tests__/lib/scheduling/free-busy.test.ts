@@ -114,6 +114,20 @@ describe('eventsToBusyIntervals', () => {
     expect(meeting?.isBreak).toBeFalsy();
   });
 
+  it('tags an exercise-ritual event as a break and keeps it separate from an adjacent meeting', () => {
+    const busy = eventsToBusyIntervals([
+      { title: '🏋️ Exercise', startTime: d('2026-07-13T15:00:00'), endTime: d('2026-07-13T16:00:00') },
+      { title: 'Review', startTime: d('2026-07-13T16:00:00'), endTime: d('2026-07-13T16:30:00') },
+    ]);
+    // The break is NOT merged into the touching meeting: two intervals remain,
+    // so a work run interrupted by exercise stays split into two runs.
+    expect(busy).toHaveLength(2);
+    const exercise = busy.find(b => b.start.getTime() === d('2026-07-13T15:00:00').getTime());
+    const meeting = busy.find(b => b.start.getTime() === d('2026-07-13T16:00:00').getTime());
+    expect(exercise?.isBreak).toBe(true);
+    expect(meeting?.isBreak).toBeFalsy();
+  });
+
   it('treats an emails-ritual event as ordinary work (not a break)', () => {
     const busy = eventsToBusyIntervals([
       { title: '📧 Emails', startTime: d('2026-07-13T16:00:00'), endTime: d('2026-07-13T16:30:00') },

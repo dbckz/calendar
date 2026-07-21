@@ -26,6 +26,10 @@ interface SchedulingConfig {
     end: string;
   };
   ritualGoogleIntegrationId?: string;
+  overflow?: {
+    start: string;
+    end: string;
+  };
 }
 
 interface WorkflowConfig {
@@ -515,9 +519,52 @@ export default function WorkflowConfig() {
           </div>
         </div>
 
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Evening Overflow Start
+            </label>
+            <input
+              type="time"
+              value={config.scheduling.overflow?.start ?? ''}
+              onChange={(e) =>
+                updateScheduling(
+                  'overflow',
+                  e.target.value
+                    ? { start: e.target.value, end: config.scheduling.overflow?.end ?? '23:00' }
+                    : undefined
+                )
+              }
+              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Evening Overflow End
+            </label>
+            <input
+              type="time"
+              value={config.scheduling.overflow?.end ?? ''}
+              onChange={(e) =>
+                updateScheduling(
+                  'overflow',
+                  e.target.value
+                    ? { start: config.scheduling.overflow?.start ?? '21:00', end: e.target.value }
+                    : undefined
+                )
+              }
+              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+            />
+          </div>
+        </div>
+        <p className="text-xs text-gray-400 mt-1">
+          Optional window (outside working hours) where Plan my week can offer opt-in blocks for tasks
+          that don&apos;t fit. Leave both blank to disable.
+        </p>
+
         <div className="mt-4">
           <label className="block text-sm font-medium text-gray-700 mb-1">
-            Ritual calendar (Lunch &amp; Emails)
+            Ritual calendar (Lunch, Exercise &amp; Emails)
           </label>
           <select
             value={config.scheduling.ritualGoogleIntegrationId ?? ''}
@@ -534,7 +581,7 @@ export default function WorkflowConfig() {
             ))}
           </select>
           <p className="text-xs text-gray-400 mt-1">
-            Which Google calendar daily Lunch / Emails events are created on. Defaults to the primary calendar.
+            Which Google calendar daily Lunch / Exercise / Emails events are created on. Defaults to the primary calendar.
           </p>
         </div>
       </div>

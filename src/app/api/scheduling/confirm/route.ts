@@ -71,9 +71,9 @@ export async function POST(request: NextRequest) {
     // integration's primary calendar, with the integration's `eventTransparency`
     // (e.g. OM tasks → OM Google calendar, marked Free). Everything else uses the
     // default integration and opaque (busy) availability.
-    // Ritual events (Lunch / Emails) go on the configured ritual Google
+    // Ritual events (Lunch / Exercise / Emails) go on the configured ritual Google
     // integration (e.g. the OM work calendar) when set, else the default. They
-    // stay opaque/busy so lunch blocks bookings.
+    // stay opaque/busy so the blocks reserve time.
     const config = await getWorkflowConfig();
     const ritualGoogleIntegrationId = config.scheduling.ritualGoogleIntegrationId;
 
