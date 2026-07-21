@@ -1,7 +1,18 @@
-# Delegation workflow redesign (proposal)
+# Delegation workflow redesign
 
-Status: advised 2026-07-12, revised 2026-07-13 after discussing what the queue
-is actually for. Not yet built. Build when Dave says go.
+Status: advised 2026-07-12, revised 2026-07-13, **implemented 2026-07** — the
+design below shipped. The app owns the delegation queue (in `user-data.json`),
+a budget-aware launchd pacer drains it (`workers/orchestrator/`), and runs
+execute via `claude -p` with `stream-json` traces the UI renders. This document
+is kept as the design record; the sections below describe what was built.
+
+Shipped: app-owned queue (`DelegationState` in `src/types/index.ts`), compose
+modal (`src/components/DelegateModal.tsx`), detached "Run now" path
+(`src/app/api/orchestrator/run-now/`), pacer with per-hour caps plus
+active/sleep-hours windows and usage-limit backoff (`pausedUntil` in
+`workers/orchestrator/status.ts`), `stream-json` per-run traces in `agent-runs/`
+rendered by `src/components/TraceTimeline.tsx`, and a no-Bash tool allowlist
+(`workers/orchestrator/config.ts`).
 
 ## Problems with the current flow
 

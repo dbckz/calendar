@@ -5,3 +5,11 @@
   - Weekly time dedicated to progressing consulting (DBC) work
   - Dedicated weekly slots for AI-built side projects
   - (Implemented as rituals: daily Kindle notes, weekly backlog grooming, weekly retrospective)
+- Retrospective → planning feedback loop: surface quota-adjustment suggestions from retro data (e.g. repeatedly missing a category quota suggests lowering it, or protecting the slot).
+- Delegation stats: success rate, avg turnaround, cost per run — computed from the existing agent-runs/ JSONL traces — shown in the Delegation widget.
+- Plan-my-week wizard: scheduling time for L&D.
+- Plan-my-week wizard: scheduling time for reading.
+- During planning, get Claude to list out what I've been working on with it over the past week. And also review projects in /Users/dave/working_dir/github/dbckz to understand what's been active. Add corresponding tasks / projects if they don't exist
+- During planning, if there's any daily reminders in my calendar, potentially convert them to tasks and schedule that week
+- Add cross-tab sync using BroadcastChannel API so changes in one browser tab are reflected in other tabs in near real-time (broadcast mutations, other tabs refetch)
+- Schedule a "new bookies" slot each week
