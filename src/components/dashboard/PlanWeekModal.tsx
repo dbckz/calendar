@@ -5,15 +5,9 @@ import {
   X,
   CalendarClock,
   Loader2,
-  Check,
-  CheckCircle2,
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
-  Star,
-  Flag,
-  ExternalLink,
-  Moon,
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
@@ -23,15 +17,28 @@ import {
   type ProposeWeekRequest,
   type QuotaSummaryRow,
   type ConfirmWeekResult,
-  type PriorityMatchRow,
   type PrepCandidatesResponse,
   type WeekCandidateCategory,
-  type WeekCandidate,
   type SpareCapacity,
 } from '@/lib/api';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { AsanaProject, CalendarEvent } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
+
+import {
+  type Step,
+  STEP_LABELS,
+  type UntypedTask,
+  type TypeRow,
+  type EditableProposal,
+  type MatchRow,
+  type MatchMeta,
+} from './plan-week/types';
+import { TypeStep } from './plan-week/TypeStep';
+import { PrioritiesStep } from './plan-week/PrioritiesStep';
+import { PrepStep } from './plan-week/PrepStep';
+import { TasksStep } from './plan-week/TasksStep';
+import { ReviewStep } from './plan-week/ReviewStep';
 
 interface PlanWeekModalProps {
   isOpen: boolean;
@@ -41,161 +48,6 @@ interface PlanWeekModalProps {
   // unclassified tasks" pre-step to find untyped tasks and write labels back.
   asanaTasks?: CalendarEvent[];
   typeFieldInfoByIntegration?: Map<string, AsanaTypeFieldInfo>;
-}
-
-type Step = 'type' | 'priorities' | 'prep' | 'tasks' | 'review' | 'done';
-
-const STEP_LABELS: Record<Exclude<Step, 'done'>, string> = {
-  type: 'Type',
-  priorities: 'Priorities',
-  prep: 'Prep',
-  tasks: 'Tasks',
-  review: 'Review',
-};
-
-// A single untyped task, resolved with its integration's writable Type labels.
-interface UntypedTask {
-  gid: string;
-  integrationId: string;
-  title: string;
-  description?: string;
-  integrationName?: string;
-  allowedTypes: string[]; // exact Asana enum labels we can write for this integration
-}
-
-// Row state for the type-review step: an untyped task plus the currently chosen
-// label ('' = leave untyped, i.e. don't write).
-interface TypeRow extends UntypedTask {
-  chosen: string;
-}
-
-// Deterministic pastel-ish colour per category, so a category always reads the
-// same across the modal.
-const CATEGORY_COLORS = [
-  { bg: 'bg-orange-100', text: 'text-orange-700', dot: 'bg-orange-400' },
-  { bg: 'bg-blue-100', text: 'text-blue-700', dot: 'bg-blue-400' },
-  { bg: 'bg-emerald-100', text: 'text-emerald-700', dot: 'bg-emerald-400' },
-  { bg: 'bg-purple-100', text: 'text-purple-700', dot: 'bg-purple-400' },
-  { bg: 'bg-pink-100', text: 'text-pink-700', dot: 'bg-pink-400' },
-  { bg: 'bg-amber-100', text: 'text-amber-700', dot: 'bg-amber-400' },
-];
-
-function categoryColor(category: string) {
-  let hash = 0;
-  for (let i = 0; i < category.length; i++) hash = (hash * 31 + category.charCodeAt(i)) | 0;
-  return CATEGORY_COLORS[Math.abs(hash) % CATEGORY_COLORS.length];
-}
-
-function timeRange(start: string, durationMinutes: number): string {
-  const [h, m] = start.split(':').map(Number);
-  const startDate = new Date(2000, 0, 1, h, m);
-  const endDate = new Date(startDate.getTime() + durationMinutes * 60 * 1000);
-  return `${start}–${format(endDate, 'HH:mm')}`;
-}
-
-// Ideas deliberately NOT yet automated in the planner — surfaced as a quiet
-// reminder on the tasks step so they aren't forgotten while the rest is
-// auto-scheduled. Source of truth: TODO.md ("Future week-planning additions").
-const PARKED_IDEAS_NOTE =
-  'Parked for later: daily walk + podcast · consulting work slots · AI-project slots';
-
-// Standard block-length options (minutes) for the tasks step.
-const BLOCK_LENGTH_OPTIONS = [15, 30, 45, 60, 90, 120, 180];
-
-// Human label for a block length in minutes: "15 mins", "1 hour", "1.5 hours".
-function blockLengthLabel(mins: number): string {
-  if (mins < 60) return `${mins} mins`;
-  if (mins % 60 === 0) {
-    const hours = mins / 60;
-    return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
-  }
-  // Clean half-hour multiples read as "1.5 hours"; anything else as "1h 20m".
-  if (mins % 30 === 0) return `${mins / 60} hours`;
-  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
-}
-
-// Build the ordered option list for a category, always including its default so
-// a non-standard configured length stays selectable (labelled "… (default)").
-function blockLengthOptions(defaultMins: number): Array<{ value: number; label: string }> {
-  const values = BLOCK_LENGTH_OPTIONS.includes(defaultMins)
-    ? BLOCK_LENGTH_OPTIONS
-    : [...BLOCK_LENGTH_OPTIONS, defaultMins].sort((a, b) => a - b);
-  return values.map(v => ({
-    value: v,
-    label: v === defaultMins && !BLOCK_LENGTH_OPTIONS.includes(defaultMins)
-      ? `${blockLengthLabel(v)} (default)`
-      : blockLengthLabel(v),
-  }));
-}
-
-// Rough, human-friendly duration for the spare-capacity line: minutes under an
-// hour read as "45m"; an hour or more rounds to the nearest half hour ("2h",
-// "4.5h").
-function roughDuration(mins: number): string {
-  if (mins < 60) return `${mins}m`;
-  const halves = Math.round(mins / 30) / 2;
-  return `${Number.isInteger(halves) ? halves : halves.toFixed(1)}h`;
-}
-
-// Compact <select> shared by the per-row dropdowns (prep length, prep day, task
-// block length). Those rows are themselves clickable (checkbox / expand), so
-// clicks and changes stop propagation to keep a pick from toggling the row.
-// Option values are strings over the wire; the caller converts as needed.
-function RowSelect({
-  value,
-  options,
-  onChange,
-  ariaLabel,
-  disabled = false,
-  className = '',
-}: {
-  value: string | number;
-  options: Array<{ value: string | number; label: string }>;
-  onChange: (value: string) => void;
-  ariaLabel: string;
-  disabled?: boolean;
-  className?: string;
-}) {
-  return (
-    <select
-      value={value}
-      onClick={e => e.stopPropagation()}
-      onChange={e => {
-        e.stopPropagation();
-        onChange(e.target.value);
-      }}
-      disabled={disabled}
-      aria-label={ariaLabel}
-      className={`shrink-0 text-xs border border-gray-300 rounded px-1.5 py-1 outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 disabled:opacity-50 ${className}`}
-    >
-      {options.map(o => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-// The 15/30/60-minute prep-length options, shared by every prep row.
-const PREP_LENGTH_OPTIONS: Array<{ value: number; label: string }> = [
-  { value: 15, label: '15 mins' },
-  { value: 30, label: '30 mins' },
-  { value: 60, label: '1 hour' },
-];
-
-interface EditableProposal extends ProposedBlock {
-  accepted: boolean;
-}
-
-// Step-1 row state: one per typed priority line.
-interface MatchRow {
-  text: string;
-  match: PriorityMatchRow['match'];
-  createIntegrationId: string; // unmatched rows: which Asana integration to create in
-  createProjectGid: string; // unmatched rows: which Asana project to create in (required)
-  category: string; // unmatched, or matched-without-category: chosen quota category
-  include: boolean; // unmatched rows: create + pin this one
 }
 
 export function PlanWeekModal({
@@ -253,12 +105,12 @@ export function PlanWeekModal({
   // Step 1 — priorities
   const [priorityText, setPriorityText] = useState('');
   const [matchRows, setMatchRows] = useState<MatchRow[] | null>(null); // null = input phase
-  const [matchMeta, setMatchMeta] = useState<{
-    asanaIntegrations: Array<{ id: string; name: string }>;
-    categories: string[];
-    projects: AsanaProject[];
-    aiUnavailable: boolean;
-  }>({ asanaIntegrations: [], categories: [], projects: [], aiUnavailable: false });
+  const [matchMeta, setMatchMeta] = useState<MatchMeta>({
+    asanaIntegrations: [],
+    categories: [],
+    projects: [],
+    aiUnavailable: false,
+  });
   const [createdTasks, setCreatedTasks] = useState<
     Array<{ text: string; gid: string; title: string; integrationId: string }>
   >([]);
@@ -978,11 +830,73 @@ export function PlanWeekModal({
             </div>
           ) : (
             <>
-              {step === 'type' && renderTypes()}
-              {step === 'priorities' && renderPriorities()}
-              {step === 'prep' && renderPrep()}
-              {step === 'tasks' && renderTasks()}
-              {(step === 'review' || step === 'done') && renderReview()}
+              {step === 'type' && (
+                <TypeStep
+                  untypedTasks={untypedTasks}
+                  typeRows={typeRows}
+                  setTypeRows={setTypeRows}
+                  typeLoading={typeLoading}
+                  typeError={typeError}
+                />
+              )}
+              {step === 'priorities' && (
+                <PrioritiesStep
+                  matchRows={matchRows}
+                  setMatchRows={setMatchRows}
+                  priorityText={priorityText}
+                  setPriorityText={setPriorityText}
+                  matchMeta={matchMeta}
+                  createdTasks={createdTasks}
+                />
+              )}
+              {step === 'prep' && (
+                <PrepStep
+                  prepData={prepData}
+                  prepBusy={prepBusy}
+                  isLoading={isLoading}
+                  showOtherMeetings={showOtherMeetings}
+                  setShowOtherMeetings={setShowOtherMeetings}
+                  prepDurations={prepDurations}
+                  prepDays={prepDays}
+                  setPrepDecision={setPrepDecision}
+                  changePrepDuration={changePrepDuration}
+                  changePrepDay={changePrepDay}
+                />
+              )}
+              {step === 'tasks' && (
+                <TasksStep
+                  taskCats={taskCats}
+                  selections={selections}
+                  taskDurations={taskDurations}
+                  setTaskDurations={setTaskDurations}
+                  taskDurationOverrides={taskDurationOverrides}
+                  setTaskDurationOverrides={setTaskDurationOverrides}
+                  mustDoIds={mustDoIds}
+                  completingIds={completingIds}
+                  addMoreMode={addMoreMode}
+                  spareCapacity={spareCapacity}
+                  toggleSelection={toggleSelection}
+                  toggleMustDo={toggleMustDo}
+                  completeAsana={completeAsana}
+                />
+              )}
+              {(step === 'review' || step === 'done') && (
+                <ReviewStep
+                  proposals={proposals}
+                  grouped={grouped}
+                  overflowProposals={overflowProposals}
+                  mustDoIds={mustDoIds}
+                  taskCats={taskCats}
+                  exerciseMissingDays={exerciseMissingDays}
+                  quotaSummary={quotaSummary}
+                  results={results}
+                  hasResults={hasResults}
+                  spareCapacity={spareCapacity}
+                  toggleAccept={toggleAccept}
+                  editStart={editStart}
+                  addMoreTasks={addMoreTasks}
+                />
+              )}
             </>
           )}
         </div>
@@ -1053,987 +967,4 @@ export function PlanWeekModal({
       </div>
     </div>
   );
-
-  // --- Step renderers (closures over state) ---
-
-  function renderTypes() {
-    if (typeLoading || typeRows === null) {
-      return (
-        <div className="flex flex-col items-center justify-center py-16 gap-3">
-          <Loader2 className="w-6 h-6 animate-spin text-orange-500" />
-          <p className="text-sm text-gray-500">
-            Suggesting a Type for {untypedTasks.length} untyped task
-            {untypedTasks.length === 1 ? '' : 's'}…
-          </p>
-        </div>
-      );
-    }
-
-    const setChosen = (gid: string, value: string) =>
-      setTypeRows(prev => (prev ? prev.map(r => (r.gid === gid ? { ...r, chosen: value } : r)) : prev));
-
-    const keptCount = typeRows.filter(r => r.chosen).length;
-
-    // Light grouping by integration keeps a long list scannable when more than
-    // one Asana workspace is involved.
-    const byIntegration = new Map<string, TypeRow[]>();
-    for (const r of typeRows) {
-      const key = r.integrationName || 'Asana';
-      const list = byIntegration.get(key) ?? [];
-      list.push(r);
-      byIntegration.set(key, list);
-    }
-    const groups = [...byIntegration.entries()];
-    const showGroupHeaders = groups.length > 1;
-
-    return (
-      <div className="space-y-3">
-        <p className="text-sm text-gray-600">
-          {typeRows.length} task{typeRows.length === 1 ? '' : 's'} have no Type yet, so they&apos;re
-          invisible to your weekly allocation. Review the suggested Type for each — override or leave
-          untyped as needed — then apply.
-        </p>
-        {typeError && (
-          <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
-            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-            <span>Couldn&apos;t auto-suggest types ({typeError}). Set them manually below.</span>
-          </div>
-        )}
-
-        <div className="space-y-4">
-          {groups.map(([name, rows]) => (
-            <div key={name}>
-              {showGroupHeaders && (
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
-                  {name}
-                </h3>
-              )}
-              <ul className="space-y-1.5">
-                {rows.map(r => (
-                  <li key={r.gid} className="flex items-center gap-3">
-                    <span className="text-sm text-gray-700 truncate flex-1" title={r.title}>
-                      {r.title}
-                    </span>
-                    <select
-                      value={r.chosen}
-                      onChange={e => setChosen(r.gid, e.target.value)}
-                      className={`text-xs border rounded px-1.5 py-1 outline-none focus:ring-2 focus:ring-orange-500 flex-shrink-0 max-w-[45%] ${
-                        r.chosen ? 'border-gray-300 text-gray-700' : 'border-gray-200 text-gray-400'
-                      }`}
-                    >
-                      <option value="">— leave untyped —</option>
-                      {r.allowedTypes.map(t => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                    </select>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-
-        <p className="text-xs text-gray-400">
-          {keptCount} of {typeRows.length} will be written to Asana; the rest stay untyped. Skip to
-          continue without typing.
-        </p>
-      </div>
-    );
-  }
-
-  function renderPriorities() {
-    if (matchRows === null) {
-      return (
-        <div>
-          <p className="text-sm text-gray-600 mb-3">
-            What matters most this week? These get matched against your Asana tasks (or created as
-            new ones) and scheduled first.
-          </p>
-          <textarea
-            value={priorityText}
-            onChange={e => setPriorityText(e.target.value)}
-            rows={6}
-            placeholder={'One priority per line…\ne.g. Finish grant report\nPrep board deck'}
-            className="w-full text-sm border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none resize-none"
-          />
-          <p className="mt-2 text-xs text-gray-400">
-            Leave blank and press Skip (or Next) to plan without pinned priorities.
-          </p>
-        </div>
-      );
-    }
-
-    return (
-      <div className="space-y-3">
-        {matchMeta.aiUnavailable && (
-          <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
-            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-            <span>
-              AI matching is unavailable right now — every line will be created as a new Asana task.
-            </span>
-          </div>
-        )}
-        {matchRows.map((row, i) => {
-          const color = row.category ? categoryColor(row.category) : null;
-          return (
-            <div key={i} className="rounded-lg border border-gray-200 p-3">
-              <div className="flex items-start gap-2">
-                {!row.match && (
-                  <input
-                    type="checkbox"
-                    checked={row.include}
-                    onChange={() =>
-                      setMatchRows(prev =>
-                        prev!.map((r, j) => (j === i ? { ...r, include: !r.include } : r))
-                      )
-                    }
-                    className="mt-1 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                  />
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-800">{row.text}</p>
-                  {row.match ? (
-                    <div className="mt-1 flex flex-wrap items-center gap-2">
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
-                        <Check className="w-3 h-3" />
-                        Matched: {row.match.title}
-                      </span>
-                      {(() => {
-                        const name = matchMeta.asanaIntegrations.find(
-                          i => i.id === row.match!.integrationId
-                        )?.name;
-                        return name ? (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide bg-gray-100 text-gray-500 flex-shrink-0">
-                            {name}
-                          </span>
-                        ) : null;
-                      })()}
-                      {row.match.category ? (
-                        <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color!.bg} ${color!.text}`}
-                        >
-                          <span className={`w-1.5 h-1.5 rounded-full ${color!.dot}`} />
-                          {row.match.category}
-                        </span>
-                      ) : (
-                        <label className="flex items-center gap-1 text-[11px] text-gray-500">
-                          Category
-                          {renderCategorySelect(row.category, val =>
-                            setMatchRows(prev =>
-                              prev!.map((r, j) => (j === i ? { ...r, category: val } : r))
-                            )
-                          )}
-                        </label>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] text-gray-400">New Asana task</span>
-                      {matchMeta.asanaIntegrations.length > 1 && (
-                        <select
-                          value={row.createIntegrationId}
-                          onChange={e =>
-                            setMatchRows(prev =>
-                              prev!.map((r, j) =>
-                                // Integration change invalidates the chosen project.
-                                j === i
-                                  ? { ...r, createIntegrationId: e.target.value, createProjectGid: '' }
-                                  : r
-                              )
-                            )
-                          }
-                          className="text-xs border border-gray-300 rounded px-1.5 py-1 outline-none focus:ring-2 focus:ring-orange-500"
-                        >
-                          {matchMeta.asanaIntegrations.map(intg => (
-                            <option key={intg.id} value={intg.id}>
-                              {intg.name}
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                      {(() => {
-                        const rowProjects = projectsForIntegration(row.createIntegrationId);
-                        if (rowProjects.length === 0) return null;
-                        const needsProject = row.include && !row.createProjectGid;
-                        return (
-                          <label className="flex items-center gap-1 text-[11px] text-gray-500">
-                            Project
-                            <select
-                              value={row.createProjectGid}
-                              onChange={e =>
-                                setMatchRows(prev =>
-                                  prev!.map((r, j) =>
-                                    j === i ? { ...r, createProjectGid: e.target.value } : r
-                                  )
-                                )
-                              }
-                              className={`text-xs border rounded px-1.5 py-1 outline-none focus:ring-2 focus:ring-orange-500 ${
-                                needsProject ? 'border-red-400' : 'border-gray-300'
-                              }`}
-                            >
-                              <option value="">Select project…</option>
-                              {rowProjects.map(p => (
-                                <option key={p.gid} value={p.gid}>
-                                  {p.name}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        );
-                      })()}
-                      <label className="flex items-center gap-1 text-[11px] text-gray-500">
-                        Category
-                        {renderCategorySelect(row.category, val =>
-                          setMatchRows(prev =>
-                            prev!.map((r, j) => (j === i ? { ...r, category: val } : r))
-                          )
-                        )}
-                      </label>
-                      {row.include &&
-                        projectsForIntegration(row.createIntegrationId).length > 0 &&
-                        !row.createProjectGid && (
-                          <p className="w-full text-[11px] text-red-500">
-                            Choose a project for this new task.
-                          </p>
-                        )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-        {createdTasks.length > 0 && (
-          <p className="text-xs text-gray-400">
-            {createdTasks.length} new task{createdTasks.length === 1 ? '' : 's'} already created in
-            Asana — they won&apos;t be recreated.
-          </p>
-        )}
-      </div>
-    );
-  }
-
-  function renderCategorySelect(value: string, onChange: (v: string) => void) {
-    return (
-      <select
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        className="text-xs border border-gray-300 rounded px-1.5 py-1 outline-none focus:ring-2 focus:ring-orange-500"
-      >
-        {matchMeta.categories.map(c => (
-          <option key={c} value={c}>
-            {c}
-          </option>
-        ))}
-      </select>
-    );
-  }
-
-  function renderPrep() {
-    if (!prepData) {
-      return (
-        <p className="text-sm text-gray-400 italic py-8 text-center">No meeting data available.</p>
-      );
-    }
-    const suggested = prepData.meetings.filter(m => m.needsPrep && m.block);
-    const others = prepData.meetings.filter(m => !m.needsPrep);
-    const workingDays = prepData.workingDays ?? [];
-
-    // Per-meeting prep-day options: every working day from now up to and
-    // including the meeting's day. Labels: the meeting day is "Day of", the day
-    // immediately before is "Day before", the rest are "EEE d" (e.g. "Mon 20").
-    const dayOptionsFor = (meetingDate: string): Array<{ value: string; label: string }> => {
-      const md = parseISO(meetingDate);
-      const dayBefore = format(new Date(md.getFullYear(), md.getMonth(), md.getDate() - 1), 'yyyy-MM-dd');
-      return workingDays
-        .filter(d => d <= meetingDate)
-        .map(d => ({
-          value: d,
-          label:
-            d === meetingDate ? 'Day of' : d === dayBefore ? 'Day before' : format(parseISO(d), 'EEE d'),
-        }));
-    };
-
-    return (
-      <div className={`space-y-5 ${prepBusy ? 'opacity-60 pointer-events-none' : ''}`}>
-        <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
-            Suggested prep
-          </h3>
-          {suggested.length === 0 ? (
-            <p className="text-sm text-gray-400 italic">
-              No meetings this week look like they need prep.
-            </p>
-          ) : (
-            <ul className="space-y-2">
-              {suggested.map(m => {
-                const b = m.block!;
-                return (
-                  <li
-                    key={m.eventId}
-                    className="flex items-start gap-3 rounded-lg border border-gray-200 p-3"
-                  >
-                    <input
-                      type="checkbox"
-                      checked
-                      onChange={() => setPrepDecision(m.title, false)}
-                      className="mt-0.5 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-800">{m.title}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        <span className="font-medium text-slate-600">
-                          {format(parseISO(b.date), 'EEE')} {timeRange(b.start, b.durationMinutes)}
-                        </span>{' '}
-                        · {m.reason}
-                      </p>
-                    </div>
-                    <RowSelect
-                      value={prepDurations[m.eventId] ?? 15}
-                      options={PREP_LENGTH_OPTIONS}
-                      onChange={v => changePrepDuration(m.eventId, Number(v))}
-                      disabled={prepBusy || isLoading}
-                      ariaLabel={`Prep length for ${m.title}`}
-                      className="mt-0.5"
-                    />
-                    <RowSelect
-                      value={prepDays[m.eventId] ?? b.date}
-                      options={dayOptionsFor(m.date)}
-                      onChange={v => changePrepDay(m.eventId, v)}
-                      disabled={prepBusy || isLoading}
-                      ariaLabel={`Prep day for ${m.title}`}
-                      className="mt-0.5"
-                    />
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          {suggested.length > 0 && (
-            <p className="mt-2 text-[11px] text-gray-400">
-              Slots finalize when you press Next.
-            </p>
-          )}
-        </div>
-
-        {prepData.unplaced.length > 0 && (
-          <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
-            <p className="text-xs font-medium text-amber-800 mb-1">Couldn&apos;t fit prep for:</p>
-            <ul className="text-xs text-amber-700 space-y-0.5">
-              {prepData.unplaced.map(u => (
-                <li key={u.key}>{u.title}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {others.length > 0 && (
-          <div>
-            <button
-              onClick={() => setShowOtherMeetings(v => !v)}
-              className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-gray-400 hover:text-gray-600"
-            >
-              <ChevronRight
-                className={`w-3.5 h-3.5 transition-transform ${showOtherMeetings ? 'rotate-90' : ''}`}
-              />
-              Other meetings ({others.length})
-            </button>
-            {showOtherMeetings && (
-              <ul className="mt-2 space-y-2">
-                {others.map(m => (
-                  <li
-                    key={m.eventId}
-                    className="flex items-start gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={false}
-                      onChange={() => setPrepDecision(m.title, true)}
-                      className="mt-0.5 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-gray-700">{m.title}</p>
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        {format(parseISO(m.date), 'EEE')} {m.start} · add a prep block
-                      </p>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function renderTasks() {
-    if (!taskCats) {
-      return (
-        <p className="text-sm text-gray-400 italic py-8 text-center">No candidates available.</p>
-      );
-    }
-    if (taskCats.length === 0) {
-      return (
-        <p className="text-sm text-gray-400 italic py-8 text-center">
-          No quota categories to fill this week.
-        </p>
-      );
-    }
-
-    // Open-in-Asana + mark-done controls for an Asana-backed candidate (has a
-    // gid). Both stopPropagation so they don't toggle the row's checkbox.
-    const renderAsanaControls = (c: WeekCandidate) => {
-      if (!c.gid) return null;
-      const completing = completingIds.has(c.id);
-      return (
-        <>
-          <a
-            href={`https://app.asana.com/0/0/${c.gid}/f`}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={e => e.stopPropagation()}
-            title="Open in Asana"
-            aria-label={`Open "${c.title}" in Asana`}
-            className="p-1 text-gray-400 hover:text-gray-600 flex-shrink-0"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
-          {c.integrationId && (
-            <button
-              type="button"
-              disabled={completing}
-              onClick={e => {
-                e.stopPropagation();
-                completeAsana(c.id, c.gid!, c.integrationId!);
-              }}
-              title="Mark done in Asana"
-              aria-label={`Mark "${c.title}" done in Asana`}
-              className="p-1 text-gray-400 hover:text-emerald-600 flex-shrink-0 disabled:opacity-50"
-            >
-              {completing ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <CheckCircle2 className="w-3.5 h-3.5" />
-              )}
-            </button>
-          )}
-        </>
-      );
-    };
-
-    // Tiny muted pill showing which Asana integration/workspace a task comes
-    // from (e.g. "DBC" / "OM"). Nothing rendered for ad-hoc tasks.
-    const renderIntegrationBadge = (name?: string) =>
-      name ? (
-        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide bg-gray-100 text-gray-500 flex-shrink-0">
-          {name}
-        </span>
-      ) : null;
-
-    // "Must do this week" toggle for a selectable row.
-    const renderMustDo = (category: string, id: string) => {
-      const on = mustDoIds.has(id);
-      return (
-        <button
-          type="button"
-          onClick={e => {
-            e.stopPropagation();
-            toggleMustDo(category, id);
-          }}
-          title={on ? 'Must do this week — flagged' : 'Flag as must do this week'}
-          aria-pressed={on}
-          className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border flex-shrink-0 transition-colors ${
-            on
-              ? 'bg-amber-100 text-amber-700 border-amber-300'
-              : 'text-gray-400 border-gray-200 hover:bg-gray-100'
-          }`}
-        >
-          <Flag className={`w-3 h-3 ${on ? 'fill-amber-500' : ''}`} />
-          Must do
-        </button>
-      );
-    };
-
-    // Compact per-task block-length select for single-task category rows. Default
-    // = the category's target length; only explicit picks are stored in
-    // taskDurationOverrides.
-    const renderTaskDurationSelect = (candidateId: string, defaultDuration: number) => (
-      <RowSelect
-        value={taskDurationOverrides[candidateId] ?? defaultDuration}
-        options={blockLengthOptions(defaultDuration)}
-        onChange={v =>
-          setTaskDurationOverrides(prev => ({ ...prev, [candidateId]: Number(v) }))
-        }
-        ariaLabel="Block length"
-      />
-    );
-
-    return (
-      <div className="space-y-5">
-        {addMoreMode && (
-          <div className="rounded-lg bg-orange-50 border border-orange-200 p-3 text-sm text-orange-800">
-            {spareCapacity && spareCapacity.totalMinutes > 0
-              ? `You have ~${roughDuration(spareCapacity.totalMinutes)} spare — pick extra tasks to fill it. Quota caps are lifted here, so you can select beyond a category's weekly target.`
-              : `Pick extra tasks to fill your remaining free time. Quota caps are lifted here, so you can select beyond a category's weekly target.`}
-          </div>
-        )}
-        {taskCats.map(cat => {
-          const color = categoryColor(cat.category);
-          const picked = selections[cat.category] ?? new Set<string>();
-          // No-quota categories have no cap; autoSelect never applies to them.
-          const autoN = cat.remainingQuota === null
-            ? cat.candidates.length
-            : Math.min(cat.remainingQuota, cat.candidates.length);
-          const defaultDuration = cat.targetLengthMinutes || 30;
-          // Effective selection cap: "Add more tasks" mode lifts every category's
-          // cap (null = unlimited) so the user can over-select beyond quota —
-          // EXCEPT a category with an explicit maxSelection, whose cap always
-          // holds (a shared-agenda category gains nothing from extra picks).
-          const cap = addMoreMode && !cat.hasMaxSelection ? null : cat.remainingQuota;
-          return (
-            <div key={cat.category} className="rounded-lg border border-gray-200 p-3">
-              <div className="flex items-center justify-between gap-2 mb-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
-                  >
-                    <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
-                    {cat.category}
-                  </span>
-                  {(cat.deferredCount ?? 0) > 0 && (
-                    <span className="text-[11px] text-gray-400 italic">
-                      {cat.deferredCount} deferred to next week
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-3">
-                  {cat.autoSelect ? (
-                    <span className="text-[11px] text-gray-400">
-                      Auto-picking {autoN} task{autoN === 1 ? '' : 's'}
-                    </span>
-                  ) : cap === null ? (
-                    <span className="text-[11px] text-gray-400">
-                      Pick any · {picked.size} selected
-                    </span>
-                  ) : (
-                    <span className="text-[11px] text-gray-400">
-                      Pick up to {cap} · {picked.size} selected
-                    </span>
-                  )}
-                  {/* Grouped categories are shared containers, so their length is
-                      set once at the category level. Single-task categories set
-                      length per task on each row below. */}
-                  {cat.grouped && (
-                    <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
-                      Block length
-                      <select
-                        value={taskDurations[cat.category] ?? defaultDuration}
-                        onChange={e =>
-                          setTaskDurations(prev => ({ ...prev, [cat.category]: Number(e.target.value) }))
-                        }
-                        className="text-sm border border-gray-300 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
-                      >
-                        {blockLengthOptions(defaultDuration).map(o => (
-                          <option key={o.value} value={o.value}>
-                            {o.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                </div>
-              </div>
-
-              {cat.candidates.length === 0 ? (
-                <p className="text-xs text-gray-400 italic">No candidate tasks.</p>
-              ) : cat.autoSelect ? (
-                <ul className="space-y-1.5">
-                  {cat.candidates.slice(0, autoN).map(c => (
-                    <li key={c.id} className="flex items-center gap-2">
-                      <span className="text-sm text-gray-500 truncate flex-1">{c.title}</span>
-                      {renderIntegrationBadge(c.integrationName)}
-                      {renderAsanaControls(c)}
-                      {!cat.grouped && renderTaskDurationSelect(c.id, defaultDuration)}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <>
-                  <ul className="space-y-1.5">
-                    {cat.candidates.map(c => {
-                      const isMustDo = mustDoIds.has(c.id);
-                      const checked = picked.has(c.id) || isMustDo;
-                      const atCap = cap !== null && picked.size >= cap;
-                      return (
-                        <li key={c.id} className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            // Must-do rows are force-selected; unflag to deselect.
-                            disabled={isMustDo || (!checked && atCap)}
-                            onChange={() => toggleSelection(cat.category, c.id, cap)}
-                            className="w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500 disabled:opacity-40"
-                          />
-                          {c.isPriority && (
-                            <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400 flex-shrink-0" />
-                          )}
-                          <span className="text-sm text-gray-700 truncate flex-1">{c.title}</span>
-                          {renderIntegrationBadge(c.integrationName)}
-                          {c.dueDate && (
-                            <span className="text-[11px] text-gray-400 flex-shrink-0">
-                              {format(parseISO(c.dueDate), 'MMM d')}
-                            </span>
-                          )}
-                          {renderMustDo(cat.category, c.id)}
-                          {renderAsanaControls(c)}
-                          {!cat.grouped && renderTaskDurationSelect(c.id, defaultDuration)}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  {cap !== null && picked.size < cap && (
-                    <p className="mt-2 text-[11px] text-gray-400">
-                      {cap - picked.size} unpicked slot
-                      {cap - picked.size === 1 ? '' : 's'} will be kept as reserved
-                      time.
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
-          );
-        })}
-        <p className="text-xs text-gray-400 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-          {PARKED_IDEAS_NOTE}
-        </p>
-      </div>
-    );
-  }
-
-  function renderReview() {
-    if (proposals.length === 0) {
-      return (
-        <p className="text-sm text-gray-400 italic py-8 text-center">
-          Nothing to schedule — quotas are already met or no free time is available this week.
-        </p>
-      );
-    }
-    // Which must-do tasks made it into the plan, and which didn't (for a warning).
-    // A must-do that fit only in the optional evening overflow gets a softer,
-    // actionable notice ("tick it to schedule") rather than the hard red warning.
-    const idOf = (t: { gid?: string; adhocId?: string }) => t.gid ?? t.adhocId ?? '';
-    const blockIsMustDo = (p: EditableProposal): boolean =>
-      (!!p.task && mustDoIds.has(idOf(p.task))) ||
-      (Array.isArray(p.tasks) && p.tasks.some(t => mustDoIds.has(idOf(t))));
-    const placedInWorkingHours = new Set<string>();
-    const placedInOverflow = new Set<string>();
-    for (const p of proposals) {
-      const target = p.overflow ? placedInOverflow : placedInWorkingHours;
-      if (p.task && mustDoIds.has(idOf(p.task))) target.add(idOf(p.task));
-      if (p.tasks) for (const t of p.tasks) if (mustDoIds.has(idOf(t))) target.add(idOf(t));
-    }
-    const titleById = new Map<string, string>();
-    for (const cat of taskCats ?? []) for (const c of cat.candidates) titleById.set(c.id, c.title);
-    // Must-dos with no slot at all → hard warning; must-dos only in overflow →
-    // soft "tick it" notice; anything in working hours is fine.
-    const unplacedMustDo = [...mustDoIds].filter(
-      id => !placedInWorkingHours.has(id) && !placedInOverflow.has(id)
-    );
-    const overflowOnlyMustDo = [...mustDoIds].filter(
-      id => !placedInWorkingHours.has(id) && placedInOverflow.has(id)
-    );
-
-    return (
-      <>
-        {unplacedMustDo.length > 0 && (
-          <div className="mb-4 flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-3">
-            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-red-500" />
-            <div className="text-xs text-red-700">
-              <p className="font-medium mb-1">
-                {unplacedMustDo.length} must-do task{unplacedMustDo.length === 1 ? '' : 's'} could not
-                be scheduled:
-              </p>
-              <ul className="space-y-0.5">
-                {unplacedMustDo.map(id => (
-                  <li key={id}>{titleById.get(id) ?? id}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        )}
-        {overflowOnlyMustDo.length > 0 && (
-          <div className="mb-4 flex items-start gap-2 rounded-lg bg-indigo-50 border border-indigo-200 p-3">
-            <Moon className="w-4 h-4 mt-0.5 flex-shrink-0 text-indigo-500" />
-            <div className="text-xs text-indigo-700">
-              <p className="font-medium mb-1">
-                {overflowOnlyMustDo.length} must-do task
-                {overflowOnlyMustDo.length === 1 ? '' : 's'} only fit
-                {overflowOnlyMustDo.length === 1 ? 's' : ''} in the evening overflow — tick
-                {overflowOnlyMustDo.length === 1 ? ' it' : ' them'} below to schedule:
-              </p>
-              <ul className="space-y-0.5">
-                {overflowOnlyMustDo.map(id => (
-                  <li key={id}>{titleById.get(id) ?? id}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        )}
-        {exerciseMissingDays.length > 0 && (
-          <div className="mb-4 flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-3">
-            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-red-500" />
-            <div className="text-xs text-red-700">
-              <p className="font-medium mb-1">
-                Exercise couldn&apos;t be scheduled on{' '}
-                {exerciseMissingDays.length === 1 ? 'a day' : `${exerciseMissingDays.length} days`} — no free
-                hour:
-              </p>
-              <ul className="space-y-0.5">
-                {exerciseMissingDays.map(d => (
-                  <li key={d}>{format(parseISO(d), 'EEEE, MMM d')}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        )}
-        {quotaSummary.some(q => q.unmet > 0) && (
-          <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 p-3">
-            <p className="text-xs font-medium text-amber-800 mb-1">Quota not fully met</p>
-            <ul className="text-xs text-amber-700 space-y-0.5">
-              {quotaSummary
-                .filter(q => q.unmet > 0)
-                .map(q => (
-                  <li key={q.category}>
-                    {q.category}: {q.existing + q.proposed}/{q.weeklyCount} scheduled ({q.unmet}{' '}
-                    short)
-                  </li>
-                ))}
-            </ul>
-          </div>
-        )}
-
-        <div className="space-y-4">
-          {grouped.map(group => (
-            <div key={group.date}>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
-                {format(parseISO(group.date), 'EEEE, MMM d')}
-              </h3>
-              <ul className="space-y-2">
-                {group.items.map(p => {
-                  const isPrep = p.kind === 'prep';
-                  const isRitual = p.kind === 'ritual';
-                  const isBreak = p.kind === 'break';
-                  const isGrouped = Array.isArray(p.tasks);
-                  const color = categoryColor(p.category);
-                  const result = results[p.id];
-                  const label = isPrep
-                    ? p.meeting?.title ?? 'Prep'
-                    : isRitual || isBreak
-                      ? p.title ?? p.category
-                      : isGrouped
-                        ? `${p.tasks!.length} task${p.tasks!.length === 1 ? '' : 's'}`
-                        : p.task
-                          ? p.task.title
-                          : 'Reserved';
-                  return (
-                    <li
-                      key={p.id}
-                      className={`flex items-center gap-3 rounded-lg border p-3 ${
-                        p.accepted ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={p.accepted}
-                        onChange={() => toggleAccept(p.id)}
-                        disabled={hasResults}
-                        className="w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          {isPrep ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-600">
-                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                              Prep
-                            </span>
-                          ) : isRitual ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-teal-100 text-teal-700">
-                              <span className="w-1.5 h-1.5 rounded-full bg-teal-400" />
-                              Ritual
-                            </span>
-                          ) : isBreak ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                              Break
-                            </span>
-                          ) : (
-                            <span
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
-                            >
-                              <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
-                              {p.category}
-                            </span>
-                          )}
-                          <span
-                            className="text-sm font-medium text-gray-800 truncate"
-                            title={p.reason}
-                          >
-                            {label}
-                          </span>
-                          {blockIsMustDo(p) && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700 flex-shrink-0">
-                              <Flag className="w-2.5 h-2.5 fill-amber-500" />
-                              Must do
-                            </span>
-                          )}
-                        </div>
-                        {/* Grouped block: list its assigned tasks as an agenda. */}
-                        {isGrouped && p.tasks!.length > 0 && (
-                          <ul className="mt-1.5 space-y-0.5 pl-1">
-                            {p.tasks!.map((t, i) => (
-                              <li key={t.gid ?? t.adhocId ?? i} className="text-xs text-gray-500 truncate">
-                                • {t.title}
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                      <input
-                        type="time"
-                        value={p.start}
-                        onChange={e => editStart(p.id, e.target.value)}
-                        disabled={hasResults}
-                        className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
-                        title={timeRange(p.start, p.durationMinutes)}
-                      />
-                      {result &&
-                        (result.success ? (
-                          <Check className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-                        ) : (
-                          <AlertTriangle
-                            className="w-4 h-4 text-red-500 flex-shrink-0"
-                            aria-label={result.error}
-                          />
-                        ))}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ))}
-        </div>
-
-        {/* Evening overflow — optional blocks for tasks that didn't fit inside
-            working hours. Default-rejected (opt-in): tick a block to schedule it. */}
-        {overflowProposals.length > 0 && (
-          <div className="mt-5">
-            <div className="flex items-center gap-1.5 mb-2">
-              <Moon className="w-3.5 h-3.5 text-indigo-500" />
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-indigo-500">
-                Evening overflow (optional)
-              </h3>
-            </div>
-            <p className="text-[11px] text-gray-400 mb-2">
-              These didn&apos;t fit in your working hours. Tick any you want to schedule in the evening.
-            </p>
-            <ul className="space-y-2">
-              {overflowProposals.map(p => {
-                const result = results[p.id];
-                const label = p.task ? p.task.title : p.category;
-                return (
-                  <li
-                    key={p.id}
-                    className={`flex items-center gap-3 rounded-lg border p-3 ${
-                      p.accepted
-                        ? 'border-indigo-200 bg-indigo-50/50'
-                        : 'border-gray-100 bg-gray-50 opacity-70'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={p.accepted}
-                      onChange={() => toggleAccept(p.id)}
-                      disabled={hasResults}
-                      className="w-4 h-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-500"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-100 text-indigo-700">
-                          <Moon className="w-2.5 h-2.5" />
-                          {format(parseISO(p.date), 'EEE')}
-                        </span>
-                        <span
-                          className="text-sm font-medium text-gray-800 truncate"
-                          title={p.reason}
-                        >
-                          {label}
-                        </span>
-                        {blockIsMustDo(p) && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700 flex-shrink-0">
-                            <Flag className="w-2.5 h-2.5 fill-amber-500" />
-                            Must do
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <input
-                      type="time"
-                      value={p.start}
-                      onChange={e => editStart(p.id, e.target.value)}
-                      disabled={hasResults}
-                      className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                      title={timeRange(p.start, p.durationMinutes)}
-                    />
-                    {result &&
-                      (result.success ? (
-                        <Check className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-                      ) : (
-                        <AlertTriangle
-                          className="w-4 h-4 text-red-500 flex-shrink-0"
-                          aria-label={result.error}
-                        />
-                      ))}
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        )}
-
-        {/* Spare capacity — how much usable free work time is left this week, with
-            an affordance to go back and pick more tasks when there's room. Hidden
-            once the plan has been confirmed (results shown). */}
-        {spareCapacity && !hasResults && (
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-gray-50 border border-gray-200 p-3">
-            <p className="text-sm text-gray-600">
-              {spareCapacity.totalMinutes > 0 ? (
-                <>
-                  You still have ~<span className="font-medium text-gray-800">{roughDuration(spareCapacity.totalMinutes)}</span>{' '}
-                  of usable free time this week
-                  {spareCapacity.largestGapMinutes > 0 && (
-                    <> (largest gap {roughDuration(spareCapacity.largestGapMinutes)})</>
-                  )}
-                  .
-                </>
-              ) : (
-                <>No usable free time left this week — your plan fills the working hours.</>
-              )}
-            </p>
-            {spareCapacity.totalMinutes >= 60 && (
-              <button
-                onClick={addMoreTasks}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-orange-600 border border-orange-300 rounded-lg hover:bg-orange-50 transition-colors"
-              >
-                <ChevronLeft className="w-4 h-4" />
-                Add more tasks
-              </button>
-            )}
-          </div>
-        )}
-      </>
-    );
-  }
 }

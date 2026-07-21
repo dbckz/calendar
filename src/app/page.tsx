@@ -4,23 +4,24 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { format } from 'date-fns';
 import { Calendar, Repeat, LayoutDashboard, Bell } from 'lucide-react';
 import { Header } from '@/components/Header';
-import { Timeline } from '@/components/Timeline';
-import { IntegrationStatus } from '@/components/IntegrationStatus';
-import { AsanaSidebar, TaskDetailDialog } from '@/components/AsanaSidebar';
+import { TaskDetailDialog } from '@/components/AsanaSidebar';
 import { DelegateModal } from '@/components/DelegateModal';
 import { AddTaskModal } from '@/components/AddTaskModal';
-import { AllDayEventsBar } from '@/components/AllDayEventsBar';
 import { RitualsContent } from '@/components/RitualsContent';
 import { Reminders } from '@/components/Reminders';
 import { DashboardContent } from '@/components/dashboard/DashboardContent';
+import { CalendarTab } from '@/components/home/CalendarTab';
+import { CalendarSelectionModal } from '@/components/home/CalendarSelectionModal';
+import { DeleteConfirmModal } from '@/components/home/DeleteConfirmModal';
+import { GoogleEventModal } from '@/components/home/GoogleEventModal';
 import { useTasks } from '@/hooks/useTasks';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { useTaskMetadata } from '@/hooks/useTaskMetadata';
 import { useDelegationQueue } from '@/hooks/useDelegationQueue';
 import { useToast } from '@/hooks/useToast';
+import { useGoogleEventModal } from '@/hooks/useGoogleEventModal';
 import { CalendarEvent, DragItem, TaskType, SettingsResponse, AsanaFilterState } from '@/types';
 import { api } from '@/lib/api';
-import { containsHtml, htmlToReadableText } from '@/lib/html-utils';
 import { DEFAULT_ROLLOVER_HOUR, logicalToday, logicalTodayDate, formatLocalDate } from '@/lib/date-utils';
 
 function formatMinutes(minutes: number): string {
@@ -167,11 +168,13 @@ export default function Home() {
   const [highlightedAsanaTaskId, setHighlightedAsanaTaskId] = useState<string | null>(null);
   const [openTaskDialogId, setOpenTaskDialogId] = useState<string | null>(null);
   const [staleModalOpen, setStaleModalOpen] = useState(false);
-  const [selectedGoogleEvent, setSelectedGoogleEvent] = useState<CalendarEvent | null>(null);
-  const [isEditingGoogleEvent, setIsEditingGoogleEvent] = useState(false);
-  const [editingGoogleEventTitle, setEditingGoogleEventTitle] = useState('');
-  const [editingGoogleEventDescription, setEditingGoogleEventDescription] = useState('');
-  const [isSavingGoogleEvent, setIsSavingGoogleEvent] = useState(false);
+  const googleEventModal = useGoogleEventModal();
+  const {
+    selectedGoogleEvent,
+    setSelectedGoogleEvent,
+    isEditing: isEditingGoogleEvent,
+    setIsEditing: setIsEditingGoogleEvent,
+  } = googleEventModal;
 
   // Google event attributions for time tracking
   const [googleEventAttributions, setGoogleEventAttributions] = useState<
@@ -983,189 +986,66 @@ export default function Home() {
           </div>
         </div>
       ) : (
-      <div className="flex flex-1 min-h-0">
-        {/* Left sidebar: OM Asana workspace */}
-        <aside className="w-72 flex-shrink-0 overflow-hidden">
-          <AsanaSidebar
-            tasks={filteredAsanaTasks}
-            isLoading={isLoading}
-            scheduledAsanaTasks={scheduledAsanaTasks}
-            onUnschedule={handleUnscheduleAsana}
-            colorScheme={colorScheme}
-            lockedIntegrationId={OM_INTEGRATION_ID}
-            projects={asanaProjects}
-            typeValues={asanaTypeValues}
-            typeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
-            integrations={asanaIntegrations}
-            filters={omFilters}
-            onFiltersChange={handleOmFiltersChange}
-            onClearFilters={handleOmClearFilters}
-            onToggleComplete={handleSidebarAsanaComplete}
-            onAddComment={handleSidebarAsanaComment}
-            onCreateTask={handleSidebarAsanaCreate}
-            onUpdateTask={handleSidebarAsanaUpdate}
-            onDeleteTask={handleSidebarAsanaDelete}
-            highlightedTaskId={highlightedAsanaTaskId}
-            onClearHighlight={handleClearHighlight}
-            openTaskDialogId={openTaskDialogId}
-            onClearOpenTaskDialog={handleClearOpenTaskDialog}
-            taskMetadata={metadataByGid}
-            onSaveTaskMetadata={saveMetadata}
-            delegation={delegationByGid}
-            onDelegated={refreshDelegation}
-          />
-        </aside>
-
-        <main className={`flex-1 overflow-y-auto px-4 py-6 ${colorScheme.mainBg}`}>
-          <div className="max-w-5xl mx-auto">
-            {settings && <IntegrationStatus settings={settings} />}
-
-            <AllDayEventsBar
-              events={allDayEvents}
-              onEventClick={handleEventClick}
-              onEventDoubleClick={handleEventDoubleClick}
-            />
-
-            <div className="bg-white rounded-lg border shadow-sm p-4">
-              {isLoading ? (
-                <div className="flex items-center justify-center py-12">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
-                </div>
-              ) : (
-                <Timeline
-                  events={timedEvents}
-                  selectedDate={selectedDate}
-                  onDropTask={handleDropTask}
-                  onEventMove={handleEventMove}
-                  onDeleteEvent={handleDeleteEventRequest}
-                  onCreateTask={handleTimelineCreateTask}
-                  onEventClick={handleEventClick}
-                  onEventDoubleClick={handleEventDoubleClick}
-                  googleEventAttributions={googleEventAttributions}
-                  asanaIntegrations={asanaIntegrations}
-                  onSetAttribution={async (googleEventId, googleIntegrationId, asanaIntegrationId) => {
-                    try {
-                      await api.setGoogleEventAttribution(googleEventId, googleIntegrationId, asanaIntegrationId);
-                      setGoogleEventAttributions(prev => ({
-                        ...prev,
-                        [googleEventId]: { asanaIntegrationId, googleIntegrationId },
-                      }));
-                      const integration = asanaIntegrations.find(i => i.id === asanaIntegrationId);
-                      toast.success(`Event counts toward ${integration?.name || 'workspace'}`);
-                    } catch (err) {
-                      console.error('Failed to set attribution:', err);
-                      toast.error('Failed to set attribution');
-                    }
-                  }}
-                  onRemoveAttribution={async (googleEventId) => {
-                    try {
-                      await api.removeGoogleEventAttribution(googleEventId);
-                      setGoogleEventAttributions(prev => {
-                        const next = { ...prev };
-                        delete next[googleEventId];
-                        return next;
-                      });
-                      toast.success('Attribution removed');
-                    } catch (err) {
-                      console.error('Failed to remove attribution:', err);
-                      toast.error('Failed to remove attribution');
-                    }
-                  }}
-                />
-              )}
-            </div>
-
-          </div>
-        </main>
-
-        {/* Right sidebar: DBC Asana workspace */}
-        <aside className="w-72 flex-shrink-0 overflow-hidden">
-          <AsanaSidebar
-            tasks={filteredAsanaTasks}
-            isLoading={isLoading}
-            scheduledAsanaTasks={scheduledAsanaTasks}
-            onUnschedule={handleUnscheduleAsana}
-            colorScheme={colorScheme}
-            lockedIntegrationId={DBC_INTEGRATION_ID}
-            projects={asanaProjects}
-            typeValues={asanaTypeValues}
-            typeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
-            integrations={asanaIntegrations}
-            filters={dbcFilters}
-            onFiltersChange={handleDbcFiltersChange}
-            onClearFilters={handleDbcClearFilters}
-            onToggleComplete={handleSidebarAsanaComplete}
-            onAddComment={handleSidebarAsanaComment}
-            onCreateTask={handleSidebarAsanaCreate}
-            onUpdateTask={handleSidebarAsanaUpdate}
-            onDeleteTask={handleSidebarAsanaDelete}
-            highlightedTaskId={highlightedAsanaTaskId}
-            onClearHighlight={handleClearHighlight}
-            openTaskDialogId={openTaskDialogId}
-            onClearOpenTaskDialog={handleClearOpenTaskDialog}
-            taskMetadata={metadataByGid}
-            onSaveTaskMetadata={saveMetadata}
-            delegation={delegationByGid}
-            onDelegated={refreshDelegation}
-          />
-        </aside>
-      </div>
+        <CalendarTab
+          colorScheme={colorScheme}
+          isLoading={isLoading}
+          settings={settings}
+          filteredAsanaTasks={filteredAsanaTasks}
+          scheduledAsanaTasks={scheduledAsanaTasks}
+          asanaProjects={asanaProjects}
+          asanaTypeValues={asanaTypeValues}
+          asanaTypeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
+          asanaIntegrations={asanaIntegrations}
+          metadataByGid={metadataByGid}
+          delegationByGid={delegationByGid}
+          onUnschedule={handleUnscheduleAsana}
+          onToggleComplete={handleSidebarAsanaComplete}
+          onAddComment={handleSidebarAsanaComment}
+          onCreateAsanaTask={handleSidebarAsanaCreate}
+          onUpdateTask={handleSidebarAsanaUpdate}
+          onDeleteTask={handleSidebarAsanaDelete}
+          onSaveTaskMetadata={saveMetadata}
+          onDelegated={refreshDelegation}
+          highlightedAsanaTaskId={highlightedAsanaTaskId}
+          onClearHighlight={handleClearHighlight}
+          openTaskDialogId={openTaskDialogId}
+          onClearOpenTaskDialog={handleClearOpenTaskDialog}
+          omIntegrationId={OM_INTEGRATION_ID}
+          dbcIntegrationId={DBC_INTEGRATION_ID}
+          omFilters={omFilters}
+          dbcFilters={dbcFilters}
+          onOmFiltersChange={handleOmFiltersChange}
+          onDbcFiltersChange={handleDbcFiltersChange}
+          onOmClearFilters={handleOmClearFilters}
+          onDbcClearFilters={handleDbcClearFilters}
+          allDayEvents={allDayEvents}
+          timedEvents={timedEvents}
+          selectedDate={selectedDate}
+          onEventClick={handleEventClick}
+          onEventDoubleClick={handleEventDoubleClick}
+          onDropTask={handleDropTask}
+          onEventMove={handleEventMove}
+          onDeleteEvent={handleDeleteEventRequest}
+          onCreateTask={handleTimelineCreateTask}
+          googleEventAttributions={googleEventAttributions}
+          setGoogleEventAttributions={setGoogleEventAttributions}
+        />
       )}
 
       {calendarSelectionModal.show && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm w-full mx-4">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Select Calendar</h3>
-            <p className="text-sm text-gray-600 mb-4">Choose which Google Calendar to add this event to:</p>
-            <div className="space-y-2">
-              {connectedGoogleIntegrations.map(integration => (
-                <button
-                  key={integration.id}
-                  onClick={() => handleCalendarSelection(integration.id)}
-                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-colors"
-                >
-                  <span className="font-medium text-gray-900">{integration.name}</span>
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={() => setCalendarSelectionModal({ show: false, pendingDrop: null })}
-              className="mt-4 w-full px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <CalendarSelectionModal
+          integrations={connectedGoogleIntegrations}
+          onSelect={handleCalendarSelection}
+          onCancel={() => setCalendarSelectionModal({ show: false, pendingDrop: null })}
+        />
       )}
 
       {deleteConfirmModal.show && deleteConfirmModal.event && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm w-full mx-4">
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Delete Event</h3>
-            <p className="text-sm text-gray-600 mb-4">
-              Are you sure you want to delete &quot;{deleteConfirmModal.event.title}&quot;?
-              {deleteConfirmModal.event.source === 'google' && (
-                <span className="block mt-2 text-amber-600">
-                  This will also delete the event from Google Calendar.
-                </span>
-              )}
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setDeleteConfirmModal({ show: false, event: null })}
-                className="flex-1 px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmDelete}
-                className="flex-1 px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
+        <DeleteConfirmModal
+          event={deleteConfirmModal.event}
+          onCancel={() => setDeleteConfirmModal({ show: false, event: null })}
+          onConfirm={handleConfirmDelete}
+        />
       )}
 
       <AddTaskModal
@@ -1180,264 +1060,26 @@ export default function Home() {
       />
 
       {selectedGoogleEvent && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col">
-            <div className="flex items-start justify-between p-4 border-b">
-              <div className="flex-1 min-w-0">
-                {isEditingGoogleEvent ? (
-                  <input
-                    type="text"
-                    value={editingGoogleEventTitle}
-                    onChange={(e) => setEditingGoogleEventTitle(e.target.value)}
-                    className="w-full text-lg font-semibold text-gray-900 border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Event title"
-                    autoFocus
-                  />
-                ) : (
-                  <h2 className="text-lg font-semibold text-gray-900 truncate">
-                    {selectedGoogleEvent.title}
-                  </h2>
-                )}
-                <p className="text-sm text-gray-500 mt-1">
-                  {format(selectedGoogleEvent.startTime, 'EEEE, MMMM d, yyyy')}
-                </p>
-                <p className="text-sm text-gray-500">
-                  {format(selectedGoogleEvent.startTime, 'h:mm a')} - {format(selectedGoogleEvent.endTime, 'h:mm a')}
-                </p>
-                {selectedGoogleEvent.integrationName && (
-                  <p className="text-xs text-blue-600 mt-1">
-                    {selectedGoogleEvent.integrationName}
-                  </p>
-                )}
-              </div>
-              <button
-                onClick={() => {
-                  setSelectedGoogleEvent(null);
-                  setIsEditingGoogleEvent(false);
-                }}
-                className="p-1 hover:bg-gray-100 rounded-full transition-colors ml-2"
-              >
-                <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="p-4 overflow-y-auto flex-1">
-              {selectedGoogleEvent.location && (
-                <div className="mb-4">
-                  <h3 className="text-sm font-medium text-gray-700 mb-1">Location</h3>
-                  <p className="text-sm text-gray-600">{selectedGoogleEvent.location}</p>
-                </div>
-              )}
-
-              {isEditingGoogleEvent ? (
-                <div>
-                  <h3 className="text-sm font-medium text-gray-700 mb-1">Description</h3>
-                  <textarea
-                    value={editingGoogleEventDescription}
-                    onChange={(e) => setEditingGoogleEventDescription(e.target.value)}
-                    className="w-full h-40 text-sm text-gray-600 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                    placeholder="Add a description..."
-                  />
-                </div>
-              ) : (
-                <>
-                  {selectedGoogleEvent.description ? (
-                    <div>
-                      <h3 className="text-sm font-medium text-gray-700 mb-1">Description</h3>
-                      <div className="text-sm text-gray-600 whitespace-pre-wrap break-words">
-                        {(() => {
-                          const displayText = containsHtml(selectedGoogleEvent.description)
-                            ? htmlToReadableText(selectedGoogleEvent.description)
-                            : selectedGoogleEvent.description;
-
-                          return displayText.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
-                            part.match(/^https?:\/\//) ? (
-                              <a
-                                key={i}
-                                href={part}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-600 hover:text-blue-800 hover:underline break-all"
-                              >
-                                {part}
-                              </a>
-                            ) : (
-                              <span key={i}>{part}</span>
-                            )
-                          );
-                        })()}
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-gray-400 italic">No description</p>
-                  )}
-                </>
-              )}
-
-              {/* Time tracking attribution - only show for Google events not linked to Asana */}
-              {!isEditingGoogleEvent && !selectedGoogleEvent.linkedAsanaTaskId && (
-                <div className="mt-4 pt-4 border-t">
-                  <h3 className="text-sm font-medium text-gray-700 mb-2">Time Tracking</h3>
-                  {(() => {
-                    const attribution = googleEventAttributions[selectedGoogleEvent.id];
-                    const currentIntegration = attribution
-                      ? asanaIntegrations.find(i => i.id === attribution.asanaIntegrationId)
-                      : null;
-
-                    if (attribution && currentIntegration) {
-                      return (
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm text-gray-600">
-                            Counts toward: <span className="font-medium">{currentIntegration.name}</span>
-                          </span>
-                          <button
-                            onClick={async () => {
-                              try {
-                                await api.removeGoogleEventAttribution(selectedGoogleEvent.id);
-                                setGoogleEventAttributions(prev => {
-                                  const next = { ...prev };
-                                  delete next[selectedGoogleEvent.id];
-                                  return next;
-                                });
-                                toast.success('Attribution removed');
-                              } catch (err) {
-                                console.error('Failed to remove attribution:', err);
-                                toast.error('Failed to remove attribution');
-                              }
-                            }}
-                            className="text-xs text-red-600 hover:text-red-800 underline"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm text-gray-500">Count toward:</span>
-                        {asanaIntegrations.map(integration => (
-                          <button
-                            key={integration.id}
-                            onClick={async () => {
-                              if (!selectedGoogleEvent.integrationId) {
-                                toast.error('Cannot attribute: missing Google integration ID');
-                                return;
-                              }
-                              try {
-                                await api.setGoogleEventAttribution(
-                                  selectedGoogleEvent.id,
-                                  selectedGoogleEvent.integrationId,
-                                  integration.id
-                                );
-                                setGoogleEventAttributions(prev => ({
-                                  ...prev,
-                                  [selectedGoogleEvent.id]: {
-                                    asanaIntegrationId: integration.id,
-                                    googleIntegrationId: selectedGoogleEvent.integrationId!,
-                                  },
-                                }));
-                                toast.success(`Event counts toward ${integration.name}`);
-                              } catch (err) {
-                                console.error('Failed to set attribution:', err);
-                                toast.error('Failed to set attribution');
-                              }
-                            }}
-                            className="px-3 py-1 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-full transition-colors"
-                          >
-                            {integration.name}
-                          </button>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                </div>
-              )}
-            </div>
-
-            <div className="p-4 border-t bg-gray-50">
-              {isEditingGoogleEvent ? (
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setIsEditingGoogleEvent(false)}
-                    disabled={isSavingGoogleEvent}
-                    className="flex-1 px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (!selectedGoogleEvent.integrationId) {
-                        toast.error('Cannot update event: missing integration ID');
-                        return;
-                      }
-                      setIsSavingGoogleEvent(true);
-                      const result = await updateGoogleEvent(
-                        selectedGoogleEvent.id,
-                        selectedGoogleEvent.integrationId,
-                        selectedGoogleEvent.startTime,
-                        selectedGoogleEvent.endTime,
-                        editingGoogleEventTitle,
-                        editingGoogleEventDescription,
-                        selectedGoogleEvent.calendarId
-                      );
-                      setIsSavingGoogleEvent(false);
-                      if (result.success) {
-                        setSelectedGoogleEvent({
-                          ...selectedGoogleEvent,
-                          title: editingGoogleEventTitle,
-                          description: editingGoogleEventDescription || undefined,
-                        });
-                        setIsEditingGoogleEvent(false);
-                        toast.success('Event updated');
-                      } else {
-                        toast.error(result.error || 'Failed to update event');
-                      }
-                    }}
-                    disabled={isSavingGoogleEvent}
-                    className="flex-1 px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
-                  >
-                    {isSavingGoogleEvent ? 'Saving...' : 'Save'}
-                  </button>
-                </div>
-              ) : (
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      setSelectedGoogleEvent(null);
-                      setIsEditingGoogleEvent(false);
-                    }}
-                    className="flex-1 px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors"
-                  >
-                    Close
-                  </button>
-                  <button
-                    onClick={() => {
-                      setEditingGoogleEventTitle(selectedGoogleEvent.title);
-                      const desc = selectedGoogleEvent.description || '';
-                      setEditingGoogleEventDescription(containsHtml(desc) ? htmlToReadableText(desc) : desc);
-                      setIsEditingGoogleEvent(true);
-                    }}
-                    className="flex-1 px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => {
-                      setDeleteConfirmModal({ show: true, event: selectedGoogleEvent });
-                      setSelectedGoogleEvent(null);
-                    }}
-                    className="px-4 py-2 text-sm text-red-600 border border-red-300 rounded-lg hover:bg-red-50 transition-colors"
-                  >
-                    Delete
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <GoogleEventModal
+          event={selectedGoogleEvent}
+          setSelectedGoogleEvent={setSelectedGoogleEvent}
+          isEditing={googleEventModal.isEditing}
+          setIsEditing={googleEventModal.setIsEditing}
+          editingTitle={googleEventModal.editingTitle}
+          setEditingTitle={googleEventModal.setEditingTitle}
+          editingDescription={googleEventModal.editingDescription}
+          setEditingDescription={googleEventModal.setEditingDescription}
+          isSaving={googleEventModal.isSaving}
+          setIsSaving={googleEventModal.setIsSaving}
+          googleEventAttributions={googleEventAttributions}
+          setGoogleEventAttributions={setGoogleEventAttributions}
+          asanaIntegrations={asanaIntegrations}
+          updateGoogleEvent={updateGoogleEvent}
+          onRequestDelete={(ev) => {
+            setDeleteConfirmModal({ show: true, event: ev });
+            setSelectedGoogleEvent(null);
+          }}
+        />
       )}
     </div>
   );
