@@ -15,8 +15,10 @@
 // route stays thin and the logic is unit-testable.
 
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
+import type { CalendarEvent } from '@/types';
 
 import {
+  localDateStr,
   resolveWorkingWindow,
   timeStr,
   type BusyMs,
@@ -155,6 +157,59 @@ function findClosestFreeSlot(
   return null;
 }
 
+// Build the per-date set of ritual titles already present on the calendar this
+// week (exact-match on the ritual titles), so an existing ritual — including one
+// added manually — is never duplicated. Keyed by yyyy-MM-dd. Shared by every
+// route that places rituals so the dedupe convention stays in one place.
+export function existingRitualTitlesByDateFromEvents(
+  weekEvents: CalendarEvent[]
+): Record<string, Set<string>> {
+  const out: Record<string, Set<string>> = {};
+  for (const e of weekEvents) {
+    if (e.allDay) continue;
+    const title = e.title?.trim();
+    if (!title || !RITUAL_TITLES.includes(title)) continue;
+    const dateStr = localDateStr(e.startTime);
+    (out[dateStr] ??= new Set<string>()).add(title);
+  }
+  return out;
+}
+
+// Assemble proposeRitualBlocks inputs from the week context and place this
+// week's rituals. Both the propose route and the prep-candidates route call this
+// with identical inputs, so a ritual placement is deterministic across the two
+// steps (given the same busy set): the prep step reserves the ritual slots (so
+// prep never steals the 15:00 exercise slot), and the propose step re-derives the
+// same slots because the accepted prep it adds to busy never overlaps them.
+export function placeWeekRituals(params: {
+  config: WorkflowConfig;
+  weekEvents: CalendarEvent[];
+  busyIntervals: BusyInterval[];
+  weekStart: Date;
+  now: Date;
+}): ProposedBlock[] {
+  return proposeRitualBlocks({
+    config: params.config,
+    busyIntervals: params.busyIntervals,
+    weekStart: params.weekStart,
+    now: params.now,
+    existingRitualTitlesByDate: existingRitualTitlesByDateFromEvents(params.weekEvents),
+  });
+}
+
+// Convert a proposed block's date + HH:mm + duration into a busy interval so
+// callers can add accepted prep/ritual blocks to the busy set. A break ritual
+// (lunch / exercise) is tagged as a break (splits work runs); everything else
+// counts as work.
+export function proposedBlockToBusyInterval(block: ProposedBlock): BusyInterval {
+  const [y, mo, d] = block.date.split('-').map(Number);
+  const [h, m] = block.start.split(':').map(Number);
+  const start = new Date(y, mo - 1, d, h, m, 0, 0);
+  const end = new Date(start.getTime() + block.durationMinutes * MS_PER_MINUTE);
+  const isBreak = block.kind === 'ritual' && !!block.title && isBreakTitle(block.title);
+  return { start, end, ...(isBreak ? { isBreak: true } : {}) };
+}
+
 export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[] {
   const { config, weekStart, now, existingRitualTitlesByDate } = input;
   const { workingDays } = resolveWorkingWindow(config.scheduling, weekStart, now);
@@ -211,10 +266,13 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
       }
     }
 
-    // --- Exercise (break) — ideally starting at 15:00, else the free 60-min slot
-    // whose start is closest to 15:00, searched outward within 13:00–18:00 ---
+    // --- Exercise (break) — NUMBER ONE priority: it must land EVERY working day.
+    // Ideally starting at 15:00, else the free 60-min slot whose start is closest
+    // to 15:00, searched outward within 13:00–18:00. When nothing fits in that
+    // core window, widen the search to the ENTIRE working day (still closest to
+    // 15:00); only skip the day when no free 60-min slot exists at all. ---
     if (!present.has(EXERCISE_TITLE)) {
-      const startMs = findClosestFreeSlot(
+      let startMs = findClosestFreeSlot(
         msAtDay(day, 15, 0),
         msAtDay(day, 13, 0),
         msAtDay(day, 18, 0),
@@ -222,6 +280,16 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
         busy,
         nowMs
       );
+      if (startMs === null) {
+        startMs = findClosestFreeSlot(
+          msAtDay(day, 15, 0),
+          day.whStartMs,
+          day.whEndMs,
+          exerciseDurationMs,
+          busy,
+          nowMs
+        );
+      }
       if (startMs !== null) {
         const start = timeStr(startMs);
         proposals.push({

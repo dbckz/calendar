@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { gatherWeekContext } from '@/lib/scheduling/gather';
 import { resolveWorkingWindow } from '@/lib/scheduling/engine';
 import { proposePrepBlocks, type PrepMeeting } from '@/lib/scheduling/prep';
+import { placeWeekRituals, proposedBlockToBusyInterval } from '@/lib/scheduling/rituals';
 import {
   classifyPrep,
   normalizePrepKey,
@@ -196,10 +197,28 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Rituals are the NUMBER ONE priority and are placed FIRST — before prep
+    // slots — so prep never steals the 15:00 exercise slot. This uses the same
+    // helper + inputs as the propose route (calendar busy only, no prep yet), so
+    // the exercise/lunch/emails slots reserved here match the ones the propose
+    // route re-derives later (the accepted prep it adds to busy never overlaps
+    // them). Rituals then join the busy set before prep is proposed.
+    const ritualBlocks = placeWeekRituals({
+      config: ctx.config,
+      weekEvents: ctx.weekEvents,
+      busyIntervals: ctx.busyIntervals,
+      weekStart: ctx.weekStart,
+      now: ctx.now,
+    });
+    const prepBusyIntervals = [
+      ...ctx.busyIntervals,
+      ...ritualBlocks.map(proposedBlockToBusyInterval),
+    ];
+
     const { placed, unplaced } = proposePrepBlocks({
       meetings: prepMeetings,
       config: ctx.config,
-      busyIntervals: ctx.busyIntervals,
+      busyIntervals: prepBusyIntervals,
       weekStart: ctx.weekStart,
       now: ctx.now,
     });

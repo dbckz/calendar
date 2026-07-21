@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { X, RefreshCw, Loader2, Check, AlertTriangle, ArrowRight, ChevronRight, Trash2 } from 'lucide-react';
+import { X, RefreshCw, Loader2, Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
-import { api, type ReplanAnalyzeResponse, type ReplanConfirmResult } from '@/lib/api';
+import { api, type ReplanAnalyzeResponse, type ReplanConfirmResult, type ReplanAdditionResult } from '@/lib/api';
 
 interface ReplanWeekModalProps {
   isOpen: boolean;
@@ -54,6 +54,10 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
   const [included, setIncluded] = useState<Set<string>>(new Set());
   const [moveMode, setMoveMode] = useState<Record<string, MoveMode>>({});
   const [staleMode, setStaleMode] = useState<Record<string, StaleMode>>({});
+  // Missing-ritual additions: which proposal ids are checked (all default-checked,
+  // exercise being priority one) + per-id creation result.
+  const [additionIncluded, setAdditionIncluded] = useState<Set<string>>(new Set());
+  const [additionResults, setAdditionResults] = useState<Record<string, ReplanAdditionResult>>({});
   const [showUnchanged, setShowUnchanged] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [results, setResults] = useState<Record<string, ReplanConfirmResult>>({});
@@ -74,6 +78,9 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
       setIncluded(new Set(res.moves.map(m => m.googleEventId)));
       setMoveMode(Object.fromEntries(res.moves.map(m => [m.googleEventId, 'reschedule' as MoveMode])));
       setStaleMode(Object.fromEntries((res.stale ?? []).map(s => [s.googleEventId, 'leave' as StaleMode])));
+      // Every missing-ritual addition is checked by default (exercise is priority one).
+      setAdditionIncluded(new Set((res.additions ?? []).map(a => a.id)));
+      setAdditionResults({});
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to analyze your week');
     } finally {
@@ -88,6 +95,8 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
     setIncluded(new Set());
     setMoveMode({});
     setStaleMode({});
+    setAdditionIncluded(new Set());
+    setAdditionResults({});
     setShowUnchanged(false);
     setIsConfirming(false);
     setResults({});
@@ -111,8 +120,10 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
     return `${format(parseISO(data.weekStart), 'MMM d')} – ${format(parseISO(data.weekEnd), 'MMM d')}`;
   }, [data]);
 
-  const hasResults = Object.keys(results).length > 0;
+  const hasResults =
+    Object.keys(results).length > 0 || Object.keys(additionResults).length > 0;
   const stale = useMemo(() => data?.stale ?? [], [data]);
+  const additions = useMemo(() => data?.additions ?? [], [data]);
 
   // Partition the confirm payload from the per-row choices.
   const payload = useMemo(() => {
@@ -140,13 +151,26 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
         else if (mode === 'dismiss') dismissIds.push(s.googleEventId);
       }
     }
-    return { moves, doneIds, dismissIds };
-  }, [data, included, moveMode, stale, staleMode]);
+    const additionBlocks = additions.filter(a => additionIncluded.has(a.id));
+    return { moves, doneIds, dismissIds, additionBlocks };
+  }, [data, included, moveMode, stale, staleMode, additions, additionIncluded]);
 
-  const actionCount = payload.moves.length + payload.doneIds.length + payload.dismissIds.length;
+  const actionCount =
+    payload.moves.length +
+    payload.doneIds.length +
+    payload.dismissIds.length +
+    payload.additionBlocks.length;
 
   const toggle = (id: string) =>
     setIncluded(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const toggleAddition = (id: string) =>
+    setAdditionIncluded(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -158,15 +182,19 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
     setIsConfirming(true);
     setError(null);
     try {
-      const { results: res, doneResults } = await api.confirmReplan(
+      const { results: res, doneResults, additionResults: addRes } = await api.confirmReplan(
         payload.moves,
         payload.doneIds,
-        payload.dismissIds
+        payload.dismissIds,
+        payload.additionBlocks
       );
       const map: Record<string, ReplanConfirmResult> = {};
       for (const r of [...res, ...doneResults]) map[r.googleEventId] = r;
       setResults(map);
-      if ([...res, ...doneResults].some(r => r.success)) onApplied?.();
+      const addMap: Record<string, ReplanAdditionResult> = {};
+      for (const r of addRes ?? []) addMap[r.id] = r;
+      setAdditionResults(addMap);
+      if ([...res, ...doneResults, ...(addRes ?? [])].some(r => r.success)) onApplied?.();
       setDone(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to apply changes');
@@ -195,7 +223,11 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
     (data?.kept.length ?? 0) + (data?.moves.length ?? 0) + stale.length + (data?.unplaceable.length ?? 0);
 
   const nothingToDo =
-    data && data.moves.length === 0 && data.unplaceable.length === 0 && stale.length === 0;
+    data &&
+    data.moves.length === 0 &&
+    data.unplaceable.length === 0 &&
+    stale.length === 0 &&
+    additions.length === 0;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -399,6 +431,67 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
                 </div>
               )}
 
+              {/* Missing rituals — add on remaining working days */}
+              {additions.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 flex items-center gap-1.5">
+                    <Dumbbell className="w-3.5 h-3.5 text-emerald-500" />
+                    Missing rituals ({additions.length})
+                  </h3>
+                  <ul className="space-y-2">
+                    {additions.map(a => {
+                      const color = categoryColor(a.category);
+                      const result = additionResults[a.id];
+                      const isIn = additionIncluded.has(a.id);
+                      return (
+                        <li
+                          key={a.id}
+                          className={`flex items-start gap-3 rounded-lg border p-3 ${
+                            isIn ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isIn}
+                            onChange={() => toggleAddition(a.id)}
+                            disabled={hasResults}
+                            className="mt-1 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
+                              >
+                                <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
+                                {a.category}
+                              </span>
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
+                                add
+                              </span>
+                              <span className="text-sm font-medium text-gray-800 truncate">
+                                {a.title ?? a.category}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-xs text-gray-500">
+                              <span className="font-medium text-slate-600">{slotLabel(a.date, a.start)}</span>
+                            </div>
+                          </div>
+                          {result &&
+                            (result.success ? (
+                              <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                            ) : (
+                              <AlertTriangle
+                                className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+                                aria-label={result.error}
+                              />
+                            ))}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+
               {/* Couldn't fit */}
               {data.unplaceable.length > 0 && (
                 <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
@@ -505,7 +598,7 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
                 >
                   Cancel
                 </button>
-                {data && (data.moves.length > 0 || stale.length > 0) && (
+                {data && (data.moves.length > 0 || stale.length > 0 || additions.length > 0) && (
                   <button
                     onClick={confirm}
                     disabled={isLoading || isConfirming || actionCount === 0}

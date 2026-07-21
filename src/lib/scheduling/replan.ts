@@ -42,7 +42,8 @@ import {
   type Window,
   type WorkingDay,
 } from './engine';
-import type { BusyInterval } from './types';
+import { proposeRitualBlocks } from './rituals';
+import type { BusyInterval, ProposedBlock } from './types';
 
 // An app-created block on this week's calendar. `startMs`/`endMs` are its actual
 // interval (matched from the calendar event where possible, else derived from
@@ -128,6 +129,12 @@ export interface ReplanInput {
   // external events). Used both for conflict detection and as the re-slotting
   // base busy set.
   otherBusy: BusyInterval[];
+  // Per-date set of ritual titles already present on the calendar this week
+  // (exact-match on "🍽️ Lunch" / "🏋️ Exercise" / "📧 Emails"), from the LIVE
+  // events so a manually-added ritual counts. When provided, every remaining
+  // working day missing a ritual gets an `additions` proposal (exercise is the
+  // number-one priority and must land every working day). Omit to skip additions.
+  existingRitualTitlesByDate?: Record<string, Set<string>>;
 }
 
 export interface ReplanResult {
@@ -135,6 +142,9 @@ export interface ReplanResult {
   moves: ReplanMove[];
   unplaceable: ReplanUnplaceable[];
   stale: ReplanStale[];
+  // Missing rituals to ADD on remaining working days (new events, no existing
+  // googleEventId). Empty when no ritual titles context was supplied.
+  additions: ProposedBlock[];
 }
 
 const MS_PER_MINUTE = 60 * 1000;
@@ -288,7 +298,29 @@ export function planReplan(input: ReplanInput): ReplanResult {
     busy.push({ start: slot.startMs, end: slot.endMs, isBreak: block.isBreak });
   }
 
-  return { kept, moves, unplaceable, stale };
+  // --- Additions: fill missing rituals on remaining working days ---
+  // Reuse the pure ritual placer against the FINAL busy set (non-app intervals +
+  // kept blocks + placed moves), deduped by the live ritual titles per date, so
+  // any remaining working day without a ritual event gets one proposed. Exercise
+  // is priority one: its whole-day fallback (in proposeRitualBlocks) applies here
+  // too, so it lands on every day with a free hour.
+  let additions: ProposedBlock[] = [];
+  if (input.existingRitualTitlesByDate) {
+    const additionBusy: BusyInterval[] = busy.map(b => ({
+      start: new Date(b.start),
+      end: new Date(b.end),
+      ...(b.isBreak ? { isBreak: true } : {}),
+    }));
+    additions = proposeRitualBlocks({
+      config,
+      busyIntervals: additionBusy,
+      weekStart,
+      now,
+      existingRitualTitlesByDate: input.existingRitualTitlesByDate,
+    });
+  }
+
+  return { kept, moves, unplaceable, stale, additions };
 }
 
 // Build ritual re-slot windows across the remaining working days. Lunch prefers

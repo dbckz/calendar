@@ -4,24 +4,11 @@ import { classifyBlockCategoryWithCatchAll } from '@/lib/capacity';
 import { gatherWeekContext } from '@/lib/scheduling/gather';
 import { proposeBlocks, localDateStr, computeSpareCapacity, resolveWorkingWindow } from '@/lib/scheduling/engine';
 import {
-  proposeRitualBlocks,
-  RITUAL_TITLES,
-  isBreakTitle,
+  placeWeekRituals,
+  proposedBlockToBusyInterval,
+  EXERCISE_TITLE,
 } from '@/lib/scheduling/rituals';
-import type { BusyInterval, CandidateTask, ProposedBlock } from '@/lib/scheduling/types';
-
-// Convert a proposed block's date + HH:mm + duration into a busy interval so the
-// engine treats accepted prep/ritual blocks as occupied time. A break ritual
-// (lunch / exercise) is tagged as a break (splits work runs); everything else
-// counts as work.
-function blockToInterval(block: ProposedBlock): BusyInterval {
-  const [y, mo, d] = block.date.split('-').map(Number);
-  const [h, m] = block.start.split(':').map(Number);
-  const start = new Date(y, mo - 1, d, h, m, 0, 0);
-  const end = new Date(start.getTime() + block.durationMinutes * 60 * 1000);
-  const isBreak = block.kind === 'ritual' && !!block.title && isBreakTitle(block.title);
-  return { start, end, ...(isBreak ? { isBreak: true } : {}) };
-}
+import type { CandidateTask, ProposedBlock } from '@/lib/scheduling/types';
 
 export async function POST(request: NextRequest) {
   try {
@@ -62,32 +49,25 @@ export async function POST(request: NextRequest) {
     // allocation), around the calendar's existing busy time + any accepted prep
     // blocks, so tasks flow around them. A day that already has a ritual event
     // ("🍽️ Lunch" / "🏋️ Exercise" / "📧 Emails") is skipped for that ritual
-    // (dedupe by exact title from the week's events).
-    const existingRitualTitlesByDate: Record<string, Set<string>> = {};
-    for (const e of ctx.weekEvents) {
-      if (e.allDay) continue;
-      const title = e.title?.trim();
-      if (!title || !RITUAL_TITLES.includes(title)) continue;
-      const dateStr = localDateStr(e.startTime);
-      (existingRitualTitlesByDate[dateStr] ??= new Set()).add(title);
-    }
-
-    // Prep blocks occupy time before rituals + tasks (as busy work intervals).
-    const prepIntervals = prepBlocks.map(blockToInterval);
-    const ritualBlocks = proposeRitualBlocks({
+    // (dedupe by exact title from the week's events). The prep-candidates route
+    // places rituals with the SAME helper + inputs BEFORE proposing prep, so prep
+    // never steals the exercise slot; the accepted prep it hands back here never
+    // overlaps the ritual slots, so this pass re-derives identical placements.
+    const prepIntervals = prepBlocks.map(proposedBlockToBusyInterval);
+    const ritualBlocks = placeWeekRituals({
       config: ctx.config,
+      weekEvents: ctx.weekEvents,
       busyIntervals: [...ctx.busyIntervals, ...prepIntervals],
       weekStart: ctx.weekStart,
       now: ctx.now,
-      existingRitualTitlesByDate,
     });
 
     // Accepted prep + placed ritual blocks occupy time before task placement
-    // (lunch tagged as a break by blockToInterval, so it splits work runs).
+    // (lunch/exercise tagged as breaks, so they split work runs).
     const busyIntervals = [
       ...ctx.busyIntervals,
       ...prepIntervals,
-      ...ritualBlocks.map(blockToInterval),
+      ...ritualBlocks.map(proposedBlockToBusyInterval),
     ];
 
     const priorityIds = new Set(priorityGids);
@@ -152,7 +132,7 @@ export async function POST(request: NextRequest) {
     // free work time left in the remaining week under the same working-window and
     // work-run model the engine used.
     const { workRun, workingDays } = resolveWorkingWindow(ctx.config.scheduling, ctx.weekStart, ctx.now);
-    const spareBusyMs = [...busyIntervals, ...taskBlocks.map(blockToInterval)].map(i => ({
+    const spareBusyMs = [...busyIntervals, ...taskBlocks.map(proposedBlockToBusyInterval)].map(i => ({
       start: i.start.getTime(),
       end: i.end.getTime(),
       isBreak: i.isBreak,
@@ -183,12 +163,26 @@ export async function POST(request: NextRequest) {
         };
       });
 
+    // --- Exercise coverage (priority-one ritual) ---
+    // Working days with no exercise placement in the final proposals OR an
+    // existing calendar exercise event. Surfaced so the review step can warn when
+    // exercise couldn't be scheduled on a day (no free hour).
+    const daysWithExercise = new Set<string>();
+    for (const b of ritualBlocks) if (b.title === EXERCISE_TITLE) daysWithExercise.add(b.date);
+    for (const e of ctx.weekEvents) {
+      if (!e.allDay && e.title?.trim() === EXERCISE_TITLE) daysWithExercise.add(localDateStr(e.startTime));
+    }
+    const exerciseMissingDays = workingDays
+      .map(d => d.dateStr)
+      .filter(dateStr => !daysWithExercise.has(dateStr));
+
     return NextResponse.json({
       weekStart: ctx.weekStartStr,
       weekEnd: ctx.weekEndStr,
       proposals,
       quotaSummary,
       spareCapacity,
+      exerciseMissingDays,
     });
   } catch (error) {
     console.error('Error proposing weekly plan:', error);

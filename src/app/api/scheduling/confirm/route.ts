@@ -11,12 +11,12 @@ import {
   updateAdHocTask,
   setGoogleEventAttribution,
   addPrepBlock,
-  addRitualBlock,
 } from '@/lib/user-data-storage';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import type { GoogleCalendarCredentials, GoogleIntegration } from '@/types';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import { eventTitleForBlock } from '@/lib/scheduling/event-titles';
+import { createRitualEvent } from '@/lib/scheduling/ritual-events';
 
 // An accepted proposal is a ProposedBlock, optionally with a user-edited date /
 // start time.
@@ -170,6 +170,14 @@ export async function POST(request: NextRequest) {
         const resolved = (await resolveGoogle(route.googleIntegrationId)) ?? googleCache.get(defaultGoogle.id)!;
         const googleIntegration = resolved.integration;
 
+        // Rituals go through the shared creator (opaque event + ritual record),
+        // reused by the replan confirm route so the two never drift.
+        if (isRitual) {
+          const eventId = await createRitualEvent(resolved, proposal);
+          results.push({ id: proposal.id, success: true, googleEventId: eventId });
+          continue;
+        }
+
         const event = await createCalendarEvent(
           resolved.credentials,
           googleIntegration.clientId,
@@ -198,17 +206,6 @@ export async function POST(request: NextRequest) {
               durationMinutes: proposal.durationMinutes,
             });
           }
-        } else if (isRitual) {
-          // Record the ritual block so the planner can dedupe against it, reconcile
-          // it if the user deletes the event, reset it, and re-slot it in replan.
-          await addRitualBlock({
-            googleEventId: event.id,
-            googleIntegrationId: googleIntegration.id,
-            title,
-            date: proposal.date,
-            start: proposal.start,
-            durationMinutes: proposal.durationMinutes,
-          });
         } else if (isGrouped) {
           // Record each listed task as scheduled to the shared container event, so
           // they show as scheduled and drop out of future candidate pools.

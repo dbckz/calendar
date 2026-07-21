@@ -6,10 +6,12 @@
 import {
   proposeBlocks,
   slotIsValid,
+  findSlot,
   computeSpareCapacity,
   type BusyMs,
   type WorkRun,
   type WorkingDay,
+  type Window,
 } from '@/lib/scheduling/engine';
 import type { CandidateTask, ProposeBlocksInput } from '@/lib/scheduling/types';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
@@ -1075,5 +1077,108 @@ describe('proposeBlocks - evening overflow', () => {
     const busy: BusyMs[] = [{ start: at(MON, 21), end: at(MON, 22) }];
     const cap = computeSpareCapacity([wd], busy, { maxMinutes: 120, bufferMinutes: 15 }, at(MON, 9));
     expect(cap.byDate).toEqual([{ date: dateStr(MON), freeMinutes: 600 }]);
+  });
+});
+
+// --- Regression: spare capacity and placement must never disagree ----------
+// Reproduces the reported screenshot bug: the review step advertised "~1h of
+// usable free time (largest gap 1h)" while a 30-min task fell to evening
+// overflow. Two independent divergences caused it:
+//   (1) the 15-min slot grid could not land in a gap whose only run-rule-valid
+//       offset sat off-grid (busy edges at :50 forced a valid start at :05); and
+//   (2) computeSpareCapacity counted usable minutes a gap could not actually
+//       hold under the work-run rule.
+describe('proposeBlocks - placement/spare agreement (screenshot regression)', () => {
+  const WR: WorkRun = { maxMinutes: 120, bufferMinutes: 15 };
+  const MON = new Date(2026, 6, 13);
+  const at = (h: number, m = 0) => new Date(2026, 6, 13, h, m).getTime();
+  const timeAt = (ms: number) => {
+    const d = new Date(ms);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+  const dstr = dateStr(MON);
+  const win = (startH: number, endH: number, endM = 0): Window => ({
+    date: MON,
+    dateStr: dstr,
+    startMs: at(startH, 0),
+    endMs: at(endH, endM),
+    preferred: false,
+    bestTimeMatch: false,
+  });
+
+  it('findSlot lands on the off-grid valid offset (11:05) a fixed 15-min grid would skip', () => {
+    // Runs 09:10-10:50 (100min) and 11:50-13:30 (100min): the 60-min gap between
+    // them admits exactly one valid 30-min placement, 11:05-11:35 (15-min buffer
+    // both sides). A :00/:15/:30 grid never tries :05.
+    const busy: BusyMs[] = [
+      { start: at(9, 10), end: at(10, 50) },
+      { start: at(11, 50), end: at(13, 30) },
+    ];
+    const slot = findSlot([win(10, 11, 50)], 30, WR, busy, at(9, 0));
+    expect(slot).not.toBeNull();
+    expect(timeAt(slot!.startMs)).toBe('11:05');
+    expect(slotIsValid(slot!.startMs, slot!.endMs, busy, WR)).toBe(true);
+  });
+
+  it('places a 30-min task in a working-hours gap instead of sending it to overflow', () => {
+    // The only free slot all day is the off-grid 11:05-11:35 window; everything
+    // else is busy. The task must be placed in working hours, not overflowed.
+    const busyIntervals = [
+      { start: new Date(at(9, 0)), end: new Date(at(10, 50)) },
+      { start: new Date(at(11, 50)), end: new Date(at(17, 0)) },
+    ];
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Blogs: { weeklyCount: 1, targetLength: '30min', preferredTimes: [] } },
+          typeMapping: { Blogs: ['blog'] },
+          scheduling: {
+            workingDays: ['Monday'],
+            workingHours: { start: '09:00', end: '17:00' },
+            overflow: { start: '21:00', end: '23:00' },
+          },
+        }),
+        candidateTasks: [
+          { gid: 'blog-1', title: 'Convert to blogpost', typeSignals: ['blog'], integrationId: 'asana-1' },
+        ],
+        busyIntervals,
+      })
+    );
+    expect(proposals.some(p => p.overflow)).toBe(false);
+    const placed = proposals.find(p => p.task?.gid === 'blog-1');
+    expect(placed).toBeDefined();
+    expect(placed!.overflow).toBeUndefined();
+    expect(placed!.date).toBe(dstr);
+    expect(placed!.start).toBe('11:05');
+  });
+
+  it('computeSpareCapacity reports zero for a gap no block can actually occupy', () => {
+    // 110-min run, a 45-min gap, then a maxed run: any 30-min offset bridges a run
+    // past 120, so the gap is unusable — spare must not advertise it.
+    const busy: BusyMs[] = [
+      { start: at(9, 0), end: at(10, 50) }, // 110-min run
+      { start: at(11, 35), end: at(17, 0) }, // fills the rest of the day
+    ];
+    const wd: WorkingDay = { date: MON, dateStr: dstr, whStartMs: at(9, 0), whEndMs: at(17, 0) };
+    const cap = computeSpareCapacity([wd], busy, WR, at(9, 0));
+    expect(cap.totalMinutes).toBe(0);
+    expect(cap.gapCount).toBe(0);
+    expect(cap.largestGapMinutes).toBe(0);
+  });
+
+  it("spare-capacity usable minutes match what the placement validator accepts", () => {
+    // The 60-min gap between two 100-min runs admits placement only from 11:05 to
+    // 11:35, so the validator accepts a 30-min span — and spare must report 30,
+    // not the raw 60.
+    const busy: BusyMs[] = [
+      { start: at(9, 10), end: at(10, 50) },
+      { start: at(11, 50), end: at(13, 30) },
+    ];
+    const wd: WorkingDay = { date: MON, dateStr: dstr, whStartMs: at(10, 50), whEndMs: at(11, 50) };
+    const cap = computeSpareCapacity([wd], busy, WR, at(9, 0));
+    // A block can be placed (validator accepts 11:05-11:35), so spare is non-zero
+    // and equals the placeable span, never more than the gap.
+    expect(cap.totalMinutes).toBe(30);
+    expect(findSlot([win(10, 11, 50)], 30, WR, busy, at(9, 0))).not.toBeNull();
   });
 });

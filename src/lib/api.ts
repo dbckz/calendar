@@ -34,6 +34,9 @@ export interface ProposeWeekResponse {
   // Absent on older responses; the review step shows a spare-capacity line and
   // an "Add more tasks" affordance when present.
   spareCapacity?: SpareCapacity;
+  // Working days (yyyy-MM-dd) with no exercise placement in the final proposals
+  // or an existing calendar exercise event. The review step warns per day.
+  exerciseMissingDays?: string[];
 }
 
 export interface ConfirmWeekResult {
@@ -149,11 +152,21 @@ export interface ReplanAnalyzeResponse {
   moves: ReplanMove[];
   unplaceable: ReplanUnplaceable[];
   stale: ReplanStale[];
+  // Missing rituals to add on remaining working days (exercise is priority one).
+  additions: ProposedBlock[];
 }
 
 export interface ReplanConfirmResult {
   googleEventId: string;
   success: boolean;
+  error?: string;
+}
+
+// A created ritual addition, reported back by its proposal id.
+export interface ReplanAdditionResult {
+  id: string;
+  success: boolean;
+  googleEventId?: string;
   error?: string;
 }
 
@@ -981,9 +994,18 @@ export const api = {
       durationMinutes: number;
     }>,
     done?: string[],
-    dismiss?: string[]
-  ): Promise<{ results: ReplanConfirmResult[]; doneResults: ReplanConfirmResult[] }> {
-    return fetchWithRetry<{ results: ReplanConfirmResult[]; doneResults: ReplanConfirmResult[] }>(
+    dismiss?: string[],
+    additions?: ProposedBlock[]
+  ): Promise<{
+    results: ReplanConfirmResult[];
+    doneResults: ReplanConfirmResult[];
+    additionResults: ReplanAdditionResult[];
+  }> {
+    return fetchWithRetry<{
+      results: ReplanConfirmResult[];
+      doneResults: ReplanConfirmResult[];
+      additionResults: ReplanAdditionResult[];
+    }>(
       '/api/scheduling/replan/confirm',
       {
         method: 'POST',
@@ -992,6 +1014,7 @@ export const api = {
           moves,
           ...(done && done.length ? { done } : {}),
           ...(dismiss && dismiss.length ? { dismiss } : {}),
+          ...(additions && additions.length ? { additions } : {}),
         }),
       }
     );

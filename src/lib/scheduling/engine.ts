@@ -39,7 +39,6 @@ import type {
   ProposedBlock,
 } from './types';
 
-const SLOT_STEP_MINUTES = 15;
 const MS_PER_MINUTE = 60 * 1000;
 
 const WEEKDAY_NAMES = [
@@ -125,12 +124,6 @@ export function timeStr(ms: number): string {
 function msAt(day: Date, time: TimeOfDay): number {
   const d = new Date(day.getFullYear(), day.getMonth(), day.getDate(), time.h, time.m, 0, 0);
   return d.getTime();
-}
-
-// Round a timestamp up to the next SLOT_STEP boundary within its day.
-function ceilToStep(ms: number): number {
-  const stepMs = SLOT_STEP_MINUTES * MS_PER_MINUTE;
-  return Math.ceil(ms / stepMs) * stepMs;
 }
 
 const BEST_TIME_RANGES: Record<BestTime, [number, number]> = {
@@ -285,8 +278,37 @@ export function buildWindowsForTask(
   return [...preferred, ...fallback];
 }
 
+// Candidate start positions for a block of `durationMs` within [lo, hi] (both
+// inclusive as *start* bounds). A fixed step grid can miss the only valid offset
+// in a gap when busy edges are off-grid (e.g. two long runs 15 minutes apart on
+// an off-grid boundary — only a start at the exact buffered offset is valid). So
+// rather than brute-stepping, we derive candidates from the busy edges: the
+// feasibility of a start (overlap + work-run rule) only changes at the busy-edge
+// boundaries `b.end`, `b.end + buffer`, `b.start - duration` and
+// `b.start - duration - buffer`, plus the window start `lo`. Testing exactly
+// those with slotIsValid finds the true earliest valid start at any minute.
+function candidateStarts(
+  lo: number,
+  hi: number,
+  durationMs: number,
+  bufferMs: number,
+  busy: BusyMs[]
+): number[] {
+  // Seed with both window bounds (`hi` matters for spare capacity's latest-valid
+  // scan; `lo` is the earliest candidate placement's flush start).
+  const starts = new Set<number>([lo, hi]);
+  for (const b of busy) {
+    for (const c of [b.end, b.end + bufferMs, b.start - durationMs, b.start - durationMs - bufferMs]) {
+      if (c >= lo && c <= hi) starts.add(c);
+    }
+  }
+  return [...starts].sort((a, z) => a - z);
+}
+
 // Find the earliest valid slot for a block of `duration` minutes across the
-// given windows, respecting the work-run rule and the now-cutoff.
+// given windows, respecting the work-run rule and the now-cutoff. The slot may
+// start at any minute (edge-derived, not step-aligned) so a gap whose only
+// run-rule-valid offset is off-grid is still used.
 export function findSlot(
   windows: Window[],
   duration: number,
@@ -296,18 +318,18 @@ export function findSlot(
   allowedDates?: Set<string>
 ): { startMs: number; endMs: number; dateStr: string; preferred: boolean } | null {
   const durationMs = duration * MS_PER_MINUTE;
-  const stepMs = SLOT_STEP_MINUTES * MS_PER_MINUTE;
+  const bufferMs = workRun.bufferMinutes * MS_PER_MINUTE;
 
   for (const win of windows) {
     if (allowedDates && !allowedDates.has(win.dateStr)) continue;
-    // Start at the window start (or now if later), aligned up to the step grid.
-    let start = ceilToStep(Math.max(win.startMs, nowMs));
-    while (start + durationMs <= win.endMs) {
+    const lo = Math.max(win.startMs, nowMs);
+    const hi = win.endMs - durationMs; // latest start that still fits the window
+    if (hi < lo) continue;
+    for (const start of candidateStarts(lo, hi, durationMs, bufferMs, busy)) {
       const end = start + durationMs;
       if (start >= nowMs && slotIsValid(start, end, busy, workRun)) {
         return { startMs: start, endMs: end, dateStr: win.dateStr, preferred: win.preferred };
       }
-      start += stepMs;
     }
   }
   return null;
@@ -445,30 +467,47 @@ function mergeIntervals(
 // Compute the usable spare capacity across the given working days, given the busy
 // timeline (calendar busy + all accepted/proposed blocks) and the work-run rule.
 // Pure and deterministic — every input is passed in.
+// Usable minutes in a single free gap [gapStart, gapEnd], measured by the SAME
+// predicate placement uses (slotIsValid). We probe whether a real block of
+// MIN_USABLE_GAP_MINUTES could be placed: the usable span runs from the earliest
+// valid block start to the latest valid block end. If no such block fits under
+// the work-run rule, the gap yields 0 — so the review line can never advertise a
+// gap that placement would reject (e.g. a 45-min gap wedged between two ~100-min
+// runs, where any offset bridges a run past its max). `busy` is the full,
+// unclipped timeline so run lengths are computed exactly as in placement.
+function usableGapMinutes(
+  gapStart: number,
+  gapEnd: number,
+  busy: BusyMs[],
+  workRun: WorkRun
+): number {
+  const blockMs = MIN_USABLE_GAP_MINUTES * MS_PER_MINUTE;
+  const bufferMs = workRun.bufferMinutes * MS_PER_MINUTE;
+  const lo = gapStart;
+  const hi = gapEnd - blockMs; // latest start that still fits the gap
+  if (hi < lo) return 0;
+  let firstValidStart: number | null = null;
+  let lastValidEnd = 0;
+  for (const start of candidateStarts(lo, hi, blockMs, bufferMs, busy)) {
+    if (slotIsValid(start, start + blockMs, busy, workRun)) {
+      if (firstValidStart === null) firstValidStart = start;
+      lastValidEnd = start + blockMs;
+    }
+  }
+  if (firstValidStart === null) return 0;
+  return Math.floor((lastValidEnd - firstValidStart) / MS_PER_MINUTE);
+}
+
 export function computeSpareCapacity(
   workingDays: WorkingDay[],
   busy: BusyMs[],
   workRun: WorkRun,
   nowMs: number
 ): SpareCapacity {
-  const bufferMs = workRun.bufferMinutes * MS_PER_MINUTE;
-  const maxMs = workRun.maxMinutes * MS_PER_MINUTE;
-  const minGapMs = MIN_USABLE_GAP_MINUTES * MS_PER_MINUTE;
-
   const byDate: Array<{ date: string; freeMinutes: number }> = [];
   let totalMinutes = 0;
   let gapCount = 0;
   let largestGapMinutes = 0;
-
-  // Work runs are measured across the full timeline (not clipped to a day) so a
-  // run's true length is known when a gap sits right after it. Non-break busy is
-  // bridged into runs using the same rule as slotIsValid: a gap strictly smaller
-  // than bufferMinutes joins two stretches (a gap of exactly bufferMinutes does
-  // not).
-  const runs = mergeIntervals(busy.filter(b => !b.isBreak), gap => gap < bufferMs);
-  const runEndingAt = (t: number) => runs.find(r => Math.abs(r.end - t) < 1);
-  const runStartingAt = (t: number) => runs.find(r => Math.abs(r.start - t) < 1);
-  const isMaxed = (r: { start: number; end: number }) => r.end - r.start >= maxMs;
 
   for (const wd of workingDays) {
     // Clip the working-hours window to the now-cutoff; a fully-past day is skipped.
@@ -490,16 +529,10 @@ export function computeSpareCapacity(
     let cursor = windowStart;
     for (const block of [...occupied, { start: windowEnd, end: windowEnd }]) {
       if (block.start > cursor) {
-        let gapStart = cursor;
-        let gapEnd = block.start;
-        // A maxed work run touching this gap eats the abutting buffer.
-        const left = runEndingAt(gapStart);
-        if (left && isMaxed(left)) gapStart += bufferMs;
-        const right = runStartingAt(gapEnd);
-        if (right && isMaxed(right)) gapEnd -= bufferMs;
-        const usableMs = gapEnd - gapStart;
-        if (usableMs >= minGapMs) {
-          const mins = Math.floor(usableMs / MS_PER_MINUTE);
+        // Usable minutes are what the placement validator would actually accept
+        // in this gap — not the raw span with a heuristic buffer deduction.
+        const mins = usableGapMinutes(cursor, block.start, busy, workRun);
+        if (mins > 0) {
           dayFree += mins;
           gapCount += 1;
           if (mins > largestGapMinutes) largestGapMinutes = mins;
@@ -785,6 +818,49 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
     }
   }
 
+  // --- Leftover retry in working hours -------------------------------------
+  // Before falling to evening overflow, give every leftover a final, unrestricted
+  // pass over the plain working-hours windows on ALL remaining days — ignoring the
+  // spread (leveled) preference and preferred-time ordering that the category loop
+  // applied. This guarantees a task only overflows if it GENUINELY cannot be
+  // placed in working hours under the run rule, not merely because the spread
+  // heuristic or preferred-window ordering skipped its day. Placed here it is a
+  // normal (non-overflow) working-hours block.
+  const workingHoursWindows: Window[] = workingDays
+    .map(day => ({
+      date: day.date,
+      dateStr: day.dateStr,
+      startMs: day.whStartMs,
+      endMs: day.whEndMs,
+      preferred: false,
+      bestTimeMatch: false,
+    }))
+    .sort((a, b) => a.startMs - b.startMs);
+  const stillLeftover: Array<{ task: CandidateTask; category: string; duration: number }> = [];
+  for (const lo of leftovers) {
+    const slot = findSlot(workingHoursWindows, lo.duration, workRun, busy, nowMs);
+    if (!slot) {
+      stillLeftover.push(lo);
+      continue;
+    }
+    const start = timeStr(slot.startMs);
+    proposals.push({
+      id: `${slot.dateStr}-${start}-${lo.category}`,
+      category: lo.category,
+      task: {
+        gid: lo.task.gid,
+        adhocId: lo.task.adhocId,
+        title: lo.task.title,
+        integrationId: lo.task.integrationId,
+      },
+      date: slot.dateStr,
+      start,
+      durationMinutes: lo.duration,
+      reason: buildReason(lo.category, false, lo.task),
+    });
+    busy.push({ start: slot.startMs, end: slot.endMs });
+  }
+
   // --- Optional evening overflow -------------------------------------------
   // For real tasks that didn't fit inside working hours, try to place an OPTIONAL
   // block in the configured overflow window (e.g. 21:00–23:00) on the remaining
@@ -799,7 +875,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
   const overflowEnd = config.scheduling.overflow
     ? parseTimeOfDay(config.scheduling.overflow.end)
     : null;
-  if (overflowStart && overflowEnd && leftovers.length > 0) {
+  if (overflowStart && overflowEnd && stillLeftover.length > 0) {
     const overflowWindows: Window[] = workingDays
       .map(day => ({
         date: day.date,
@@ -812,7 +888,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
       .filter(w => w.endMs > w.startMs)
       .sort((a, b) => a.startMs - b.startMs);
 
-    for (const lo of leftovers) {
+    for (const lo of stillLeftover) {
       const slot = findSlot(overflowWindows, lo.duration, workRun, busy, nowMs);
       if (!slot) continue; // no room in the overflow window this week
       const start = timeStr(slot.startMs);

@@ -302,6 +302,9 @@ export function PlanWeekModal({
   const [proposals, setProposals] = useState<EditableProposal[]>([]);
   const [quotaSummary, setQuotaSummary] = useState<QuotaSummaryRow[]>([]);
   const [spareCapacity, setSpareCapacity] = useState<SpareCapacity | null>(null);
+  // Working days (yyyy-MM-dd) with no exercise placement — the review step warns
+  // per day since exercise is the number-one priority ritual.
+  const [exerciseMissingDays, setExerciseMissingDays] = useState<string[]>([]);
   const [weekLabel, setWeekLabel] = useState('');
   const [isConfirming, setIsConfirming] = useState(false);
   const [results, setResults] = useState<Record<string, ConfirmWeekResult>>({});
@@ -339,6 +342,7 @@ export function PlanWeekModal({
     setProposals([]);
     setQuotaSummary([]);
     setSpareCapacity(null);
+    setExerciseMissingDays([]);
     setWeekLabel('');
     setIsConfirming(false);
     setResults({});
@@ -529,6 +533,7 @@ export function PlanWeekModal({
       setProposals(data.proposals.map(p => ({ ...p, accepted: !p.overflow })));
       setQuotaSummary(data.quotaSummary);
       setSpareCapacity(data.spareCapacity ?? null);
+      setExerciseMissingDays(data.exerciseMissingDays ?? []);
       setWeekLabel(
         `${format(parseISO(data.weekStart), 'MMM d')} – ${format(parseISO(data.weekEnd), 'MMM d')}`
       );
@@ -1756,6 +1761,23 @@ export function PlanWeekModal({
               <ul className="space-y-0.5">
                 {overflowOnlyMustDo.map(id => (
                   <li key={id}>{titleById.get(id) ?? id}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+        {exerciseMissingDays.length > 0 && (
+          <div className="mb-4 flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-3">
+            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-red-500" />
+            <div className="text-xs text-red-700">
+              <p className="font-medium mb-1">
+                Exercise couldn&apos;t be scheduled on{' '}
+                {exerciseMissingDays.length === 1 ? 'a day' : `${exerciseMissingDays.length} days`} — no free
+                hour:
+              </p>
+              <ul className="space-y-0.5">
+                {exerciseMissingDays.map(d => (
+                  <li key={d}>{format(parseISO(d), 'EEEE, MMM d')}</li>
                 ))}
               </ul>
             </div>

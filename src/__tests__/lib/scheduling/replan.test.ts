@@ -434,3 +434,56 @@ describe('planReplan - ritual blocks', () => {
     expect(moves[0].newStart).not.toBe('16:00');
   });
 });
+
+describe('planReplan - missing-ritual additions', () => {
+  it('proposes exercise/lunch/emails additions for remaining working days missing them', () => {
+    // No ritual context at all → every remaining working day (Wed–Sun, from the
+    // Wednesday 08:00 "now") is missing all three rituals, so each gets proposed.
+    const result = planReplan({
+      config: makeConfig({ scheduling: { workingHours: { start: '08:30', end: '18:00' } } }),
+      weekStart: WEEK_START,
+      now: WED_8AM,
+      blocks: [],
+      otherBusy: [],
+      existingRitualTitlesByDate: {},
+    });
+    // Wednesday should get an exercise addition at 15:00 (the ideal slot is free).
+    const wedExercise = result.additions.find(
+      a => a.date === '2026-07-15' && a.title === '🏋️ Exercise'
+    );
+    expect(wedExercise).toBeDefined();
+    expect(wedExercise!.kind).toBe('ritual');
+    expect(wedExercise!.start).toBe('15:00');
+    // Every remaining working day gets its own exercise addition.
+    const exerciseDays = new Set(
+      result.additions.filter(a => a.title === '🏋️ Exercise').map(a => a.date)
+    );
+    expect(exerciseDays.size).toBeGreaterThanOrEqual(3); // Wed, Thu, Fri (+weekend)
+    expect(exerciseDays.has('2026-07-14')).toBe(false); // Tuesday is in the past
+  });
+
+  it('skips a day that already has the ritual (dedupe by live title) and omits additions when no context is given', () => {
+    // Wednesday already has an exercise event on the live calendar → no addition.
+    const withContext = planReplan({
+      config: makeConfig({ scheduling: { workingHours: { start: '08:30', end: '18:00' } } }),
+      weekStart: WEEK_START,
+      now: WED_8AM,
+      blocks: [],
+      otherBusy: [],
+      existingRitualTitlesByDate: { '2026-07-15': new Set(['🏋️ Exercise']) },
+    });
+    expect(
+      withContext.additions.find(a => a.date === '2026-07-15' && a.title === '🏋️ Exercise')
+    ).toBeUndefined();
+
+    // No ritual-titles context supplied → additions are omitted entirely.
+    const noContext = planReplan({
+      config: makeConfig(),
+      weekStart: WEEK_START,
+      now: WED_8AM,
+      blocks: [],
+      otherBusy: [],
+    });
+    expect(noContext.additions).toEqual([]);
+  });
+});

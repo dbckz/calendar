@@ -12,7 +12,7 @@ import {
   getRitualBlocks,
   getBlockDoneOverrides,
 } from '@/lib/user-data-storage';
-import { ritualKindForTitle } from '@/lib/scheduling/rituals';
+import { ritualKindForTitle, existingRitualTitlesByDateFromEvents } from '@/lib/scheduling/rituals';
 import { prepTitle } from '@/lib/scheduling/event-titles';
 import type { ScheduledAsanaTask } from '@/types';
 
@@ -186,6 +186,9 @@ export async function POST(request: NextRequest) {
       now: ctx.now,
       blocks,
       otherBusy,
+      // Live ritual titles per date (includes manually-added ritual events) so a
+      // remaining working day missing a ritual gets an addition proposed.
+      existingRitualTitlesByDate: existingRitualTitlesByDateFromEvents(ctx.weekEvents),
     });
 
     return NextResponse.json({

@@ -5,6 +5,9 @@ import {
   getEnabledGoogleIntegrations,
   getGoogleIntegrationById,
 } from '@/lib/integration-storage';
+import { getWorkflowConfig } from '@/lib/workflow-config-storage';
+import { createRitualEvent } from '@/lib/scheduling/ritual-events';
+import type { ProposedBlock } from '@/lib/scheduling/types';
 import {
   getAdHocTasks,
   getPrepBlocks,
@@ -40,6 +43,14 @@ interface DoneResult {
   error?: string;
 }
 
+// One created ritual addition, reported back by its proposal id.
+interface AdditionResult {
+  id: string;
+  success: boolean;
+  googleEventId?: string;
+  error?: string;
+}
+
 function toStartEnd(date: string, start: string, durationMinutes: number): { start: Date; end: Date } {
   const [y, mo, d] = date.split('-').map(Number);
   const [h, m] = start.split(':').map(Number);
@@ -63,8 +74,21 @@ export async function POST(request: NextRequest) {
     const dismissEventIds: string[] = Array.isArray(body?.dismiss)
       ? body.dismiss.filter((id: unknown): id is string => typeof id === 'string')
       : [];
-    if (moves.length === 0 && doneEventIds.length === 0 && dismissEventIds.length === 0) {
-      return NextResponse.json({ error: 'No moves, done markings or dismissals provided' }, { status: 400 });
+    // Missing-ritual additions the user accepted: each creates a fresh ritual
+    // event (routed to the ritual calendar, opaque) + record.
+    const additions: ProposedBlock[] = Array.isArray(body?.additions)
+      ? body.additions.filter((a: unknown): a is ProposedBlock => !!a && typeof a === 'object')
+      : [];
+    if (
+      moves.length === 0 &&
+      doneEventIds.length === 0 &&
+      dismissEventIds.length === 0 &&
+      additions.length === 0
+    ) {
+      return NextResponse.json(
+        { error: 'No moves, done markings, dismissals or additions provided' },
+        { status: 400 }
+      );
     }
 
     const enabledGoogle = await getEnabledGoogleIntegrations();
@@ -182,7 +206,38 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results, doneResults });
+    // --- Additions: create each missing ritual on the ritual calendar ---
+    // Ritual events route to the configured ritual Google integration (else the
+    // default), opaque, via the shared creator reused by the weekly-plan confirm.
+    const additionResults: AdditionResult[] = [];
+    if (additions.length > 0) {
+      const config = await getWorkflowConfig();
+      const ritualGoogleIntegrationId = config.scheduling.ritualGoogleIntegrationId;
+      for (const block of additions) {
+        try {
+          const resolved = await resolveGoogle(ritualGoogleIntegrationId);
+          if (!resolved) {
+            additionResults.push({
+              id: block.id,
+              success: false,
+              error: 'No authenticated Google integration available',
+            });
+            continue;
+          }
+          const googleEventId = await createRitualEvent(resolved, block);
+          additionResults.push({ id: block.id, success: true, googleEventId });
+        } catch (err) {
+          console.error(`[Replan Confirm] Failed to add ritual ${block.id}:`, err);
+          additionResults.push({
+            id: block.id,
+            success: false,
+            error: err instanceof Error ? err.message : 'Failed to add ritual',
+          });
+        }
+      }
+    }
+
+    return NextResponse.json({ results, doneResults, additionResults });
   } catch (error) {
     console.error('Error confirming mid-week replan:', error);
     return NextResponse.json(
