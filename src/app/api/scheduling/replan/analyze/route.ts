@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { classifyBlockCategory } from '@/lib/capacity';
 import { adHocTypeSignals, gatherWeekContext } from '@/lib/scheduling/gather';
 import { eventsToBusyIntervals } from '@/lib/scheduling/free-busy';
-import { planReplan, type ReplanBlock } from '@/lib/scheduling/replan';
+import { planReplan, type ReplanBlock, type ReplanReviewBlock } from '@/lib/scheduling/replan';
 import {
   getScheduledAsanaTasks,
   getAdHocTasks,
@@ -64,6 +64,18 @@ export async function POST(request: NextRequest) {
     const blocks: ReplanBlock[] = [];
     const appEventIds = new Set<string>();
 
+    // Past app blocks (task/prep, never ritual) for the daily-review step. Built
+    // here where each block's task refs are still in hand; filtered to blocks that
+    // have already ended (endMs <= now).
+    const nowMs = ctx.now.getTime();
+    // eventId → backing task ids (Asana gid / ad-hoc id), so unplaceable rows can
+    // carry what to defer. Preps have no deferrable task.
+    const taskIdsByEvent = new Map<string, string[]>();
+    const reviewBlocks: ReplanReviewBlock[] = [];
+    const pushReview = (b: Omit<ReplanReviewBlock, 'endMs'> & { endMs: number }) => {
+      if (b.endMs <= nowMs) reviewBlocks.push(b);
+    };
+
     // Group scheduled Asana tasks by their Google event: a grouped block records
     // several tasks against one event.
     const asanaGroups = new Map<string, ScheduledAsanaTask[]>();
@@ -76,6 +88,7 @@ export async function POST(request: NextRequest) {
 
     for (const [eventId, entries] of asanaGroups) {
       appEventIds.add(eventId);
+      taskIdsByEvent.set(eventId, entries.map(e => e.asanaTaskId));
       const first = entries[0];
       const titles = entries.map(e => incompleteByGid.get(e.asanaTaskId)?.name ?? 'Scheduled task');
       // Done when the Asana task(s) are complete, OR the user marked this block
@@ -106,16 +119,36 @@ export async function POST(request: NextRequest) {
         startMs,
         endMs,
       });
+      pushReview({
+        googleEventId: eventId,
+        googleIntegrationId: first.googleIntegrationId,
+        kind: 'task',
+        category: category ?? 'Scheduled',
+        date: first.scheduledDate,
+        start: first.scheduledTime,
+        durationMinutes: first.duration,
+        endMs,
+        done,
+        titles,
+        tasks: entries.map((e, i) => ({
+          title: titles[i],
+          done: !incompleteByGid.has(e.asanaTaskId),
+          gid: e.asanaTaskId,
+          ...(e.integrationId ? { integrationId: e.integrationId } : {}),
+        })),
+      });
     }
 
     // Ad-hoc tasks placed on the calendar (each is its own block).
     for (const t of adHocTasks) {
       if (!t.googleEventId || !t.dueTime || !inWeek(t.dueDate)) continue;
       appEventIds.add(t.googleEventId);
+      taskIdsByEvent.set(t.googleEventId, [t.id]);
       const category =
         classifyBlockCategory(adHocTypeSignals(t.taskType, customTypes), ctx.quotas) ?? 'Scheduled';
       const duration = t.duration ?? 30;
       const { startMs, endMs } = intervalFor(t.googleEventId, t.dueDate!, t.dueTime, duration);
+      const adhocDone = t.completed || !!doneOverrides[t.googleEventId];
       blocks.push({
         googleEventId: t.googleEventId,
         googleIntegrationId: t.googleIntegrationId,
@@ -124,9 +157,22 @@ export async function POST(request: NextRequest) {
         start: t.dueTime,
         durationMinutes: duration,
         titles: [t.title],
-        done: t.completed || !!doneOverrides[t.googleEventId],
+        done: adhocDone,
         startMs,
         endMs,
+      });
+      pushReview({
+        googleEventId: t.googleEventId,
+        googleIntegrationId: t.googleIntegrationId,
+        kind: 'task',
+        category,
+        date: t.dueDate!,
+        start: t.dueTime,
+        durationMinutes: duration,
+        endMs,
+        done: adhocDone,
+        titles: [t.title],
+        tasks: [{ title: t.title, done: adhocDone, adhocId: t.id }],
       });
     }
 
@@ -137,6 +183,8 @@ export async function POST(request: NextRequest) {
       appEventIds.add(p.googleEventId);
       const { startMs, endMs } = intervalFor(p.googleEventId, p.date, p.start, p.durationMinutes);
       const meetingStartMs = new Date(p.meetingStart).getTime();
+      const prepDone = p.done || !!doneOverrides[p.googleEventId];
+      const prepTitleStr = prepTitle(p.meetingTitle);
       blocks.push({
         googleEventId: p.googleEventId,
         googleIntegrationId: p.googleIntegrationId,
@@ -144,11 +192,24 @@ export async function POST(request: NextRequest) {
         date: p.date,
         start: p.start,
         durationMinutes: p.durationMinutes,
-        titles: [prepTitle(p.meetingTitle)],
-        done: p.done || !!doneOverrides[p.googleEventId],
+        titles: [prepTitleStr],
+        done: prepDone,
         startMs,
         endMs,
         ...(Number.isNaN(meetingStartMs) ? {} : { mustEndBeforeMs: meetingStartMs }),
+      });
+      pushReview({
+        googleEventId: p.googleEventId,
+        googleIntegrationId: p.googleIntegrationId,
+        kind: 'prep',
+        category: 'Meeting prep',
+        date: p.date,
+        start: p.start,
+        durationMinutes: p.durationMinutes,
+        endMs,
+        done: prepDone,
+        titles: [prepTitleStr],
+        tasks: [{ title: prepTitleStr, done: prepDone }],
       });
     }
 
@@ -191,10 +252,21 @@ export async function POST(request: NextRequest) {
       existingRitualTitlesByDate: existingRitualTitlesByDateFromEvents(ctx.weekEvents),
     });
 
+    // Earliest-first so the review reads chronologically.
+    reviewBlocks.sort((a, b) => a.endMs - b.endMs);
+
+    // Attach the deferrable task ids to each unplaceable block.
+    const unplaceable = result.unplaceable.map(u => ({
+      ...u,
+      deferTaskIds: taskIdsByEvent.get(u.googleEventId) ?? [],
+    }));
+
     return NextResponse.json({
       weekStart: ctx.weekStartStr,
       weekEnd: ctx.weekEndStr,
       ...result,
+      unplaceable,
+      reviewBlocks,
     });
   } catch (error) {
     console.error('Error analyzing mid-week replan:', error);

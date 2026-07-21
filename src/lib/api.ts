@@ -3,7 +3,7 @@
 import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { CapacityRow } from '@/lib/capacity';
 import type { ProposedBlock } from '@/lib/scheduling/types';
-import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion } from '@/lib/scheduling/replan';
+import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanReviewBlock } from '@/lib/scheduling/replan';
 
 export interface QuotaSummaryRow {
   category: string;
@@ -127,6 +127,9 @@ export interface WeekCandidateCategory {
   // mode (the cap is never lifted), and remainingQuota carries the cap value.
   hasMaxSelection?: boolean;
   remainingQuota: number | null;
+  // Count of this category's tasks currently deferred to a later week (shown as
+  // a muted "N deferred to next week" note on the wizard's tasks step).
+  deferredCount?: number;
   autoSelect: boolean;
   // Category's configured target block length in minutes (parsed from the
   // workflow config's targetLength). Used as the default for the per-week
@@ -156,10 +159,28 @@ export interface ReplanAnalyzeResponse {
   additions: ProposedBlock[];
   // Conflicted break blocks to delete (a break has no fixed home to move to).
   deletions: ReplanDeletion[];
+  // Past app blocks (task/prep) for the daily-review step. Absent on older
+  // responses — treat as [].
+  reviewBlocks?: ReplanReviewBlock[];
 }
 
 export interface ReplanConfirmResult {
   googleEventId: string;
+  success: boolean;
+  error?: string;
+}
+
+// One Asana-completion result from the daily-review apply (keyed by task gid).
+export interface ReplanAsanaResult {
+  gid: string;
+  success: boolean;
+  error?: string;
+}
+
+// One defer / leave-unscheduled result for an unplaceable block.
+export interface ReplanDeferResult {
+  taskIds: string[];
+  googleEventId?: string;
   success: boolean;
   error?: string;
 }
@@ -998,15 +1019,29 @@ export const api = {
     done?: string[],
     dismiss?: string[],
     additions?: ProposedBlock[],
-    deletions?: Array<{ googleEventId: string; googleIntegrationId?: string }>
+    deletions?: Array<{ googleEventId: string; googleIntegrationId?: string }>,
+    // Daily-review extras: mark blocks not-done (clears done state so they
+    // re-classify as missed) and complete selected Asana tasks in Asana.
+    notDone?: string[],
+    completeAsana?: Array<{ gid: string; integrationId: string }>,
+    // Unplaceable-block choices: defer each block's tasks to next week (until is
+    // computed server-side), or leave a block unscheduled (clear its override).
+    defer?: Array<{ taskIds: string[]; googleEventId?: string }>,
+    leaveUnscheduled?: string[]
   ): Promise<{
     results: ReplanConfirmResult[];
     doneResults: ReplanConfirmResult[];
+    notDoneResults?: ReplanConfirmResult[];
+    asanaResults?: ReplanAsanaResult[];
+    deferResults?: ReplanDeferResult[];
     additionResults: ReplanAdditionResult[];
   }> {
     return fetchWithRetry<{
       results: ReplanConfirmResult[];
       doneResults: ReplanConfirmResult[];
+      notDoneResults?: ReplanConfirmResult[];
+      asanaResults?: ReplanAsanaResult[];
+      deferResults?: ReplanDeferResult[];
       additionResults: ReplanAdditionResult[];
     }>(
       '/api/scheduling/replan/confirm',
@@ -1016,6 +1051,10 @@ export const api = {
         body: JSON.stringify({
           moves,
           ...(done && done.length ? { done } : {}),
+          ...(notDone && notDone.length ? { notDone } : {}),
+          ...(completeAsana && completeAsana.length ? { completeAsana } : {}),
+          ...(defer && defer.length ? { defer } : {}),
+          ...(leaveUnscheduled && leaveUnscheduled.length ? { leaveUnscheduled } : {}),
           ...(dismiss && dismiss.length ? { dismiss } : {}),
           ...(additions && additions.length ? { additions } : {}),
           ...(deletions && deletions.length ? { deletions } : {}),

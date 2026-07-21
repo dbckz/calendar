@@ -35,6 +35,7 @@ import {
   excludeMorningWindows,
   findSlot,
   MORNING_PREP_EXCLUSION_MINUTES,
+  parseTimeOfDay,
   preferredWindowsForCategory,
   resolveWorkingWindow,
   timeStr,
@@ -105,6 +106,14 @@ export interface ReplanUnplaceable {
   oldStart: string;
   durationMinutes: number;
   reason: ReplanReason;
+  // An optional evening-overflow slot (in the configured overflow window) found
+  // for this block. When present the UI can offer "try evening overflow", which
+  // moves the block here. Absent when no overflow window is configured or no slot
+  // fits.
+  overflowOption?: { date: string; start: string; durationMinutes: number };
+  // Task ids (Asana gid / ad-hoc id) backing this block, so the confirm route can
+  // defer them. Populated by the analyze route (planReplan leaves it undefined).
+  deferTaskIds?: string[];
 }
 
 // A prep block that can no longer be usefully re-slotted: its meeting has
@@ -150,6 +159,37 @@ export interface ReplanDeletion {
   oldStart: string;
   durationMinutes: number;
   reason: ReplanReason;
+}
+
+// --- Daily review ---
+// A single unit of work under a review block. Asana tasks carry a `gid`
+// (+ `integrationId`) so they can be completed in Asana; ad-hoc tasks carry an
+// `adhocId`; a prep block has one task with neither. `done` is the task's
+// current completion state (from the live Asana fetch / stored flag).
+export interface ReplanReviewTask {
+  title: string;
+  done: boolean;
+  gid?: string;
+  integrationId?: string;
+  adhocId?: string;
+}
+
+// A PAST app block (task or prep, never ritual/break) surfaced in the daily
+// review so the user can confirm what did / didn't get done. `done` is the
+// block-level completion state; `tasks` lists each underlying task (one entry
+// for ad-hoc/prep, several for a grouped Asana block).
+export interface ReplanReviewBlock {
+  googleEventId: string;
+  googleIntegrationId?: string;
+  kind: 'task' | 'prep';
+  category: string;
+  date: string; // yyyy-MM-dd
+  start: string; // HH:mm
+  durationMinutes: number;
+  endMs: number;
+  done: boolean;
+  titles: string[];
+  tasks: ReplanReviewTask[];
 }
 
 export interface ReplanResult {
@@ -333,6 +373,20 @@ export function planReplan(input: ReplanInput): ReplanResult {
     busy.push({ start: slot.startMs, end: slot.endMs, isBreak: block.isBreak });
   }
 
+  // --- Overflow options: an optional evening slot for each unplaceable block ---
+  // For blocks that found no home in working hours, try the configured overflow
+  // window (e.g. 21:00–23:00) on the remaining days against the final busy set,
+  // reserving each so two options never overlap. Offered opt-in in the UI.
+  const ofWindows = buildOverflowWindows(config, workingDays);
+  if (ofWindows.length > 0) {
+    for (const u of unplaceable) {
+      const slot = findSlot(ofWindows, u.durationMinutes, workRun, busy, nowMs);
+      if (!slot) continue;
+      u.overflowOption = { date: slot.dateStr, start: timeStr(slot.startMs), durationMinutes: u.durationMinutes };
+      busy.push({ start: slot.startMs, end: slot.endMs });
+    }
+  }
+
   // --- Additions: fill missing rituals on remaining working days ---
   // Reuse the pure ritual placer against the FINAL busy set (non-app intervals +
   // kept blocks + placed moves), deduped by the live ritual titles per date, so
@@ -394,6 +448,26 @@ function ritualWindows(kind: 'lunch' | 'exercise' | 'emails', workingDays: Worki
     }
   }
   return windows;
+}
+
+// Build the evening-overflow windows (config.scheduling.overflow, e.g.
+// 21:00–23:00) across the remaining working days. Empty when no overflow window
+// is configured. Mirrors the overflow-window construction in engine.ts.
+function buildOverflowWindows(config: WorkflowConfig, workingDays: WorkingDay[]): Window[] {
+  const start = config.scheduling.overflow ? parseTimeOfDay(config.scheduling.overflow.start) : null;
+  const end = config.scheduling.overflow ? parseTimeOfDay(config.scheduling.overflow.end) : null;
+  if (!start || !end) return [];
+  const at = (day: WorkingDay, t: { h: number; m: number }): number =>
+    new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), t.h, t.m, 0, 0).getTime();
+  const windows: Window[] = [];
+  for (const day of workingDays) {
+    const startMs = at(day, start);
+    const endMs = at(day, end);
+    if (endMs > startMs) {
+      windows.push({ date: day.date, dateStr: day.dateStr, startMs, endMs, preferred: false, bestTimeMatch: false });
+    }
+  }
+  return windows.sort((a, b) => a.startMs - b.startMs);
 }
 
 // Cap each window's end at `capMs` (a prep block's meeting start), dropping any

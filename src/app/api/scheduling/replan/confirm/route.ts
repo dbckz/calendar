@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { addDays, format, startOfWeek } from 'date-fns';
 
 import { deleteCalendarEvent, ensureValidCredentials, updateCalendarEvent } from '@/lib/google-calendar';
+import { completeTask, refreshAsanaToken } from '@/lib/asana';
 import {
   getEnabledGoogleIntegrations,
   getGoogleIntegrationById,
+  getIntegrationById,
+  updateIntegration,
 } from '@/lib/integration-storage';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import { createRitualEvent } from '@/lib/scheduling/ritual-events';
@@ -20,9 +24,10 @@ import {
   setBlockDoneOverride,
   removeGoogleEventAttribution,
   removeBlockDoneOverride,
+  setTaskDeferrals,
   updateScheduledAsanaTasksByGoogleEvent,
 } from '@/lib/user-data-storage';
-import type { GoogleCalendarCredentials, GoogleIntegration } from '@/types';
+import type { AsanaIntegration, GoogleCalendarCredentials, GoogleIntegration } from '@/types';
 
 // One accepted move: patch the existing Google event to a new time and update
 // the stored schedule for its linked work.
@@ -42,6 +47,31 @@ interface MoveResult {
 
 interface DoneResult {
   googleEventId: string;
+  success: boolean;
+  error?: string;
+}
+
+interface AsanaCompleteInput {
+  gid: string;
+  integrationId: string;
+}
+
+interface AsanaCompleteResult {
+  gid: string;
+  success: boolean;
+  error?: string;
+}
+
+// One deferred unplaceable block: its backing task ids are parked until next
+// Monday, and any planning override on its event is cleared.
+interface DeferInput {
+  taskIds: string[];
+  googleEventId?: string;
+}
+
+interface DeferResult {
+  taskIds: string[];
+  googleEventId?: string;
   success: boolean;
   error?: string;
 }
@@ -72,6 +102,44 @@ export async function POST(request: NextRequest) {
     const doneEventIds: string[] = Array.isArray(body?.done)
       ? body.done.filter((id: unknown): id is string => typeof id === 'string')
       : [];
+    // Event ids the user marked "not done" in the daily review: reverse whatever
+    // made the block read as done — prep block → done:false, ad-hoc → completed:false,
+    // else clear the planning override — so the next analyze classifies it as missed.
+    const notDoneEventIds: string[] = Array.isArray(body?.notDone)
+      ? body.notDone.filter((id: unknown): id is string => typeof id === 'string')
+      : [];
+    // Asana tasks to complete in Asana (daily review "Complete in Asana"). Once
+    // completed they drop out of the next analyze's incomplete-task fetch.
+    const asanaCompletions: AsanaCompleteInput[] = Array.isArray(body?.completeAsana)
+      ? body.completeAsana.filter(
+          (a: unknown): a is AsanaCompleteInput =>
+            !!a &&
+            typeof a === 'object' &&
+            typeof (a as { gid?: unknown }).gid === 'string' &&
+            typeof (a as { integrationId?: unknown }).integrationId === 'string'
+        )
+      : [];
+    // Unplaceable blocks the user deferred to next week: park their tasks and
+    // clear any planning override (the past block record itself stays as history).
+    const deferInputs: DeferInput[] = Array.isArray(body?.defer)
+      ? body.defer
+          .filter(
+            (d: unknown): d is { taskIds?: unknown; googleEventId?: unknown } =>
+              !!d && typeof d === 'object'
+          )
+          .map((d: { taskIds?: unknown; googleEventId?: unknown }) => ({
+            taskIds: Array.isArray(d.taskIds)
+              ? d.taskIds.filter((t: unknown): t is string => typeof t === 'string')
+              : [],
+            googleEventId: typeof d.googleEventId === 'string' ? d.googleEventId : undefined,
+          }))
+          .filter((d: DeferInput) => d.taskIds.length > 0 || d.googleEventId)
+      : [];
+    // Unplaceable blocks the user chose to leave unscheduled: no deferral, just
+    // clear any stale planning override so the row stops reading as done.
+    const leaveEventIds: string[] = Array.isArray(body?.leaveUnscheduled)
+      ? body.leaveUnscheduled.filter((id: unknown): id is string => typeof id === 'string')
+      : [];
     // Stale prep blocks the user dismissed: the prep record is deleted (its past
     // meeting is over, so there is nothing left to prepare for).
     const dismissEventIds: string[] = Array.isArray(body?.dismiss)
@@ -95,6 +163,10 @@ export async function POST(request: NextRequest) {
     if (
       moves.length === 0 &&
       doneEventIds.length === 0 &&
+      notDoneEventIds.length === 0 &&
+      asanaCompletions.length === 0 &&
+      deferInputs.length === 0 &&
+      leaveEventIds.length === 0 &&
       dismissEventIds.length === 0 &&
       additions.length === 0 &&
       deletions.length === 0
@@ -155,6 +227,109 @@ export async function POST(request: NextRequest) {
           googleEventId,
           success: false,
           error: err instanceof Error ? err.message : 'Failed to mark done',
+        });
+      }
+    }
+
+    // --- Not-done markings: reverse of done[] so the block re-reads as missed ---
+    const notDoneResults: DoneResult[] = [];
+    for (const googleEventId of notDoneEventIds) {
+      try {
+        const prep = prepBlocks.find(p => p.googleEventId === googleEventId);
+        if (prep) {
+          await updatePrepBlock(prep.id, { done: false });
+        } else {
+          const adhoc = adHocTasks.find(t => t.googleEventId === googleEventId);
+          if (adhoc) {
+            await updateAdHocTask(adhoc.id, { completed: false });
+          }
+        }
+        // Always clear any planning override (Asana-backed or otherwise).
+        await removeBlockDoneOverride(googleEventId);
+        notDoneResults.push({ googleEventId, success: true });
+      } catch (err) {
+        console.error(`[Replan Confirm] Failed to mark not done ${googleEventId}:`, err);
+        notDoneResults.push({
+          googleEventId,
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to mark not done',
+        });
+      }
+    }
+
+    // --- Asana completions: mark selected tasks complete in Asana directly ---
+    // Cache + refresh each Asana integration's credentials at most once per run.
+    const asanaResults: AsanaCompleteResult[] = [];
+    const asanaCredCache = new Map<string, string>(); // integrationId -> accessToken
+    for (const { gid, integrationId } of asanaCompletions) {
+      try {
+        let accessToken = asanaCredCache.get(integrationId);
+        if (!accessToken) {
+          const integration = (await getIntegrationById(integrationId)) as AsanaIntegration | null;
+          if (!integration || integration.type !== 'asana' || !integration.credentials) {
+            throw new Error('Asana integration not found or not authenticated');
+          }
+          let credentials = integration.credentials;
+          if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
+            credentials = await refreshAsanaToken(
+              credentials.refreshToken!,
+              integration.clientId,
+              integration.clientSecret
+            );
+            await updateIntegration(integration.id, { credentials });
+          }
+          accessToken = credentials.accessToken;
+          asanaCredCache.set(integrationId, accessToken);
+        }
+        await completeTask(accessToken, gid, true);
+        asanaResults.push({ gid, success: true });
+      } catch (err) {
+        console.error(`[Replan Confirm] Failed to complete Asana task ${gid}:`, err);
+        asanaResults.push({
+          gid,
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to complete Asana task',
+        });
+      }
+    }
+
+    // --- Deferrals: park each block's tasks until next Monday (server-computed,
+    // never trusting a client date) and clear its planning override ---
+    const deferResults: DeferResult[] = [];
+    if (deferInputs.length > 0) {
+      const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+      const until = format(addDays(weekStart, 7), 'yyyy-MM-dd'); // next Monday
+      for (const d of deferInputs) {
+        try {
+          if (d.taskIds.length > 0) {
+            await setTaskDeferrals(d.taskIds.map(taskId => ({ taskId, until })));
+          }
+          if (d.googleEventId) await removeBlockDoneOverride(d.googleEventId);
+          deferResults.push({ taskIds: d.taskIds, googleEventId: d.googleEventId, success: true });
+        } catch (err) {
+          console.error(`[Replan Confirm] Failed to defer ${d.googleEventId ?? d.taskIds.join(',')}:`, err);
+          deferResults.push({
+            taskIds: d.taskIds,
+            googleEventId: d.googleEventId,
+            success: false,
+            error: err instanceof Error ? err.message : 'Failed to defer',
+          });
+        }
+      }
+    }
+
+    // --- Leave unscheduled: just clear any stale planning override ---
+    for (const googleEventId of leaveEventIds) {
+      try {
+        await removeBlockDoneOverride(googleEventId);
+        deferResults.push({ taskIds: [], googleEventId, success: true });
+      } catch (err) {
+        console.error(`[Replan Confirm] Failed to leave-unscheduled ${googleEventId}:`, err);
+        deferResults.push({
+          taskIds: [],
+          googleEventId,
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to leave unscheduled',
         });
       }
     }
@@ -291,7 +466,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results, doneResults, additionResults });
+    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, deferResults, additionResults });
   } catch (error) {
     console.error('Error confirming mid-week replan:', error);
     return NextResponse.json(

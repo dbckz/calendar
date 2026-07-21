@@ -72,6 +72,7 @@ export async function POST(request: NextRequest) {
           grouped,
           hasMaxSelection: typeof maxSelection === 'number',
           remainingQuota,
+          deferredCount: ctx.deferredCountsByCategory[q.category] ?? 0,
           autoSelect: noQuota ? false : ctx.config.taskQuotas[q.category]?.autoSelect === true,
           targetLengthMinutes: parseTargetLength(ctx.config.taskQuotas[q.category]?.targetLength) || 30,
           candidates: list.map(t => ({

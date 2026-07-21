@@ -1,0 +1,436 @@
+'use client';
+
+import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell } from 'lucide-react';
+
+import type { ReplanAnalyzeResponse } from '@/lib/api';
+import { categoryColor, formatDuration, slotLabel, titleLabel } from './replanFormat';
+import type { MoveMode, StaleMode, UnplaceableMode, ReplanActions } from './useReplanActions';
+
+// Shared render of the replan "plan view": moves / stale / missing rituals /
+// break deletions / couldn't-fit / unchanged. State + confirm live in the
+// useReplanActions hook so both ReplanWeekModal and the daily-review step 2 can
+// render exactly the same UI.
+export function ReplanSections({
+  data,
+  actions,
+}: {
+  data: ReplanAnalyzeResponse;
+  actions: ReplanActions;
+}) {
+  const {
+    included,
+    moveMode,
+    setMoveMode,
+    staleMode,
+    setStaleMode,
+    unplaceableMode,
+    setUnplaceableMode,
+    additionIncluded,
+    additionResults,
+    deletionIncluded,
+    showUnchanged,
+    setShowUnchanged,
+    toggle,
+    toggleAddition,
+    toggleDeletion,
+    results,
+    hasResults,
+  } = actions;
+
+  const stale = data.stale ?? [];
+  const additions = data.additions ?? [];
+  const deletions = data.deletions ?? [];
+
+  return (
+    <div className="space-y-6">
+      {/* Moving */}
+      {data.moves.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
+            Moving ({data.moves.length})
+          </h3>
+          <ul className="space-y-2">
+            {data.moves.map(m => {
+              const color = categoryColor(m.category);
+              const result = results[m.googleEventId];
+              const isIn = included.has(m.googleEventId);
+              const isMissed = m.reason === 'missed';
+              const mode = moveMode[m.googleEventId] ?? 'reschedule';
+              const markingDone = isMissed && mode === 'done';
+              return (
+                <li
+                  key={m.googleEventId}
+                  className={`flex items-start gap-3 rounded-lg border p-3 ${
+                    isIn ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isIn}
+                    onChange={() => toggle(m.googleEventId)}
+                    disabled={hasResults}
+                    className="mt-1 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
+                        {m.category}
+                      </span>
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                          isMissed ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                        }`}
+                      >
+                        {isMissed ? 'missed' : 'conflict'}
+                      </span>
+                      <span className="text-sm font-medium text-gray-800 truncate">
+                        {titleLabel(m.titles)}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5 text-xs text-gray-500">
+                      <span className="line-through">{slotLabel(m.oldDate, m.oldStart)}</span>
+                      <ArrowRight className="w-3.5 h-3.5 text-gray-400" />
+                      {markingDone ? (
+                        <span className="font-medium text-emerald-600">Mark done (no reschedule)</span>
+                      ) : (
+                        <span className="font-medium text-slate-600">
+                          {slotLabel(m.newDate, m.newStart)}
+                        </span>
+                      )}
+                    </div>
+                    {/* Missed rows: choose reschedule or mark done. */}
+                    {isMissed && isIn && !hasResults && (
+                      <div className="mt-2 inline-flex rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium">
+                        {(['reschedule', 'done'] as MoveMode[]).map(opt => (
+                          <button
+                            key={opt}
+                            onClick={() =>
+                              setMoveMode(prev => ({ ...prev, [m.googleEventId]: opt }))
+                            }
+                            className={`px-2.5 py-1 transition-colors ${
+                              mode === opt
+                                ? 'bg-orange-500 text-white'
+                                : 'bg-white text-gray-600 hover:bg-gray-50'
+                            }`}
+                          >
+                            {opt === 'reschedule' ? 'Reschedule' : 'Done'}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {result &&
+                    (result.success ? (
+                      <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle
+                        className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+                        aria-label={result.error}
+                      />
+                    ))}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {/* Stale prep — meeting already happened */}
+      {stale.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
+            Meeting already happened ({stale.length})
+          </h3>
+          <ul className="space-y-2">
+            {stale.map(s => {
+              const result = results[s.googleEventId];
+              const mode = staleMode[s.googleEventId] ?? 'leave';
+              return (
+                <li
+                  key={s.googleEventId}
+                  className="flex items-start gap-3 rounded-lg border border-gray-200 bg-white p-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-gray-800 truncate">
+                        {titleLabel(s.titles)}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-xs text-gray-400">
+                      No slot before the meeting — prep can no longer be rescheduled.
+                    </p>
+                    {!hasResults && (
+                      <div className="mt-2 inline-flex rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium">
+                        {(['leave', 'done', 'dismiss'] as StaleMode[]).map(opt => (
+                          <button
+                            key={opt}
+                            onClick={() =>
+                              setStaleMode(prev => ({ ...prev, [s.googleEventId]: opt }))
+                            }
+                            className={`px-2.5 py-1 transition-colors ${
+                              mode === opt
+                                ? opt === 'dismiss'
+                                  ? 'bg-red-500 text-white'
+                                  : 'bg-orange-500 text-white'
+                                : 'bg-white text-gray-600 hover:bg-gray-50'
+                            }`}
+                          >
+                            {opt === 'leave' ? 'Leave' : opt === 'done' ? 'Mark done' : 'Dismiss'}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {result &&
+                    (result.success ? (
+                      <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle
+                        className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+                        aria-label={result.error}
+                      />
+                    ))}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {/* Missing rituals — add on remaining working days */}
+      {additions.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 flex items-center gap-1.5">
+            <Dumbbell className="w-3.5 h-3.5 text-emerald-500" />
+            Missing rituals ({additions.length})
+          </h3>
+          <ul className="space-y-2">
+            {additions.map(a => {
+              const color = categoryColor(a.category);
+              const result = additionResults[a.id];
+              const isIn = additionIncluded.has(a.id);
+              return (
+                <li
+                  key={a.id}
+                  className={`flex items-start gap-3 rounded-lg border p-3 ${
+                    isIn ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isIn}
+                    onChange={() => toggleAddition(a.id)}
+                    disabled={hasResults}
+                    className="mt-1 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
+                        {a.category}
+                      </span>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
+                        add
+                      </span>
+                      <span className="text-sm font-medium text-gray-800 truncate">
+                        {a.title ?? a.category}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      <span className="font-medium text-slate-600">{slotLabel(a.date, a.start)}</span>
+                    </div>
+                  </div>
+                  {result &&
+                    (result.success ? (
+                      <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle
+                        className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+                        aria-label={result.error}
+                      />
+                    ))}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {/* Conflicted breaks — remove (a break has no fixed home) */}
+      {deletions.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 flex items-center gap-1.5">
+            <Trash2 className="w-3.5 h-3.5 text-red-500" />
+            Breaks to remove ({deletions.length})
+          </h3>
+          <ul className="space-y-2">
+            {deletions.map(d => {
+              const result = results[d.googleEventId];
+              const isIn = deletionIncluded.has(d.googleEventId);
+              return (
+                <li
+                  key={d.googleEventId}
+                  className={`flex items-start gap-3 rounded-lg border p-3 ${
+                    isIn ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isIn}
+                    onChange={() => toggleDeletion(d.googleEventId)}
+                    disabled={hasResults}
+                    className="mt-1 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-700">
+                        remove
+                      </span>
+                      <span className="text-sm font-medium text-gray-800 truncate">
+                        {titleLabel(d.titles)}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      <span className="line-through">{slotLabel(d.oldDate, d.oldStart)}</span>
+                      <span className="ml-1.5 text-gray-400">now clashes with a meeting</span>
+                    </div>
+                  </div>
+                  {result &&
+                    (result.success ? (
+                      <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle
+                        className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+                        aria-label={result.error}
+                      />
+                    ))}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {/* Couldn't fit — choose what to do with each block */}
+      {data.unplaceable.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
+            Couldn&apos;t fit ({data.unplaceable.length})
+          </h3>
+          <ul className="space-y-2">
+            {data.unplaceable.map(u => {
+              const color = categoryColor(u.category);
+              const result = results[u.googleEventId];
+              const mode = unplaceableMode[u.googleEventId] ?? 'defer';
+              const hasOverflow = !!u.overflowOption;
+              const options: Array<{ v: UnplaceableMode; label: string }> = [
+                { v: 'defer', label: 'Defer to next week' },
+                { v: 'leave', label: 'Leave unscheduled' },
+                ...(hasOverflow ? [{ v: 'overflow' as UnplaceableMode, label: 'Try evening overflow' }] : []),
+              ];
+              return (
+                <li
+                  key={u.googleEventId}
+                  className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
+                        {u.category}
+                      </span>
+                      <span className="text-sm font-medium text-gray-800 truncate">
+                        {titleLabel(u.titles)}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-xs text-amber-600">
+                      No free {formatDuration(u.durationMinutes)} slot in working hours this week.
+                    </p>
+                    {mode === 'overflow' && u.overflowOption && (
+                      <p className="mt-0.5 text-xs text-slate-600">
+                        Evening slot: {slotLabel(u.overflowOption.date, u.overflowOption.start)}
+                      </p>
+                    )}
+                    {!hasResults && (
+                      <div className="mt-2 inline-flex rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium">
+                        {options.map(opt => (
+                          <button
+                            key={opt.v}
+                            onClick={() =>
+                              setUnplaceableMode(prev => ({ ...prev, [u.googleEventId]: opt.v }))
+                            }
+                            className={`px-2.5 py-1 transition-colors ${
+                              mode === opt.v
+                                ? 'bg-orange-500 text-white'
+                                : 'bg-white text-gray-600 hover:bg-gray-50'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {result &&
+                    (result.success ? (
+                      <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle
+                        className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+                        aria-label={result.error}
+                      />
+                    ))}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {/* Unchanged (subdued, collapsed) */}
+      {data.kept.length > 0 && (
+        <div>
+          <button
+            onClick={() => setShowUnchanged(v => !v)}
+            className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-gray-400 hover:text-gray-600"
+          >
+            <ChevronRight
+              className={`w-3.5 h-3.5 transition-transform ${showUnchanged ? 'rotate-90' : ''}`}
+            />
+            Unchanged ({data.kept.length})
+          </button>
+          {showUnchanged && (
+            <ul className="mt-2 space-y-1">
+              {data.kept.map(k => (
+                <li key={k.googleEventId} className="flex items-center gap-2 text-sm text-gray-500">
+                  <span className="truncate flex-1">{titleLabel(k.titles)}</span>
+                  <span className="text-[11px] text-gray-400 flex-shrink-0">
+                    {slotLabel(k.date, k.start)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Whether an analyze result has anything to act on in the plan view.
+export function replanHasWork(data: ReplanAnalyzeResponse): boolean {
+  return (
+    data.moves.length > 0 ||
+    data.unplaceable.length > 0 ||
+    (data.stale?.length ?? 0) > 0 ||
+    (data.additions?.length ?? 0) > 0 ||
+    (data.deletions?.length ?? 0) > 0
+  );
+}

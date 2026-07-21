@@ -6,7 +6,7 @@
  * I/O (config, storage, Asana, Google) is mocked so the test is deterministic.
  */
 import { gatherWeekContext } from '@/lib/scheduling/gather';
-import { getScheduledAsanaTasks, getAdHocTasks, getCustomTaskTypes, getAllTaskMetadata, getPrepBlocks, getRitualBlocks } from '@/lib/user-data-storage';
+import { getScheduledAsanaTasks, getAdHocTasks, getCustomTaskTypes, getAllTaskMetadata, getPrepBlocks, getRitualBlocks, getTaskDeferrals, removeTaskDeferrals } from '@/lib/user-data-storage';
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations } from '@/lib/integration-storage';
 import { getIncompleteTasks } from '@/lib/asana';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
@@ -25,6 +25,8 @@ jest.mock('@/lib/user-data-storage', () => ({
   deletePrepBlock: jest.fn(),
   deleteRitualBlock: jest.fn(),
   removeGoogleEventAttribution: jest.fn(),
+  getTaskDeferrals: jest.fn().mockResolvedValue({}),
+  removeTaskDeferrals: jest.fn().mockResolvedValue(0),
 }));
 jest.mock('@/lib/integration-storage', () => ({
   getEnabledAsanaIntegrations: jest.fn(),
@@ -88,6 +90,29 @@ describe('gatherWeekContext - week-scoped rollover', () => {
     const gids = ctx.candidateTasks.map(t => t.gid);
     expect(gids).toContain('rollover'); // incomplete last-week task is selectable again
     expect(gids).not.toContain('inweek'); // already scheduled this week -> not a candidate
+  });
+
+  it('holds an actively-deferred task out of the candidate pool and counts it', async () => {
+    (getWorkflowConfig as jest.Mock).mockResolvedValue({
+      taskQuotas: { Engage: { weeklyCount: 2, targetLength: '1h' } },
+      typeMapping: { Engage: ['engage'] },
+    });
+    // 'rollover' resumes next Monday (after this week's Sunday end) -> still deferred.
+    (getTaskDeferrals as jest.Mock).mockResolvedValue({ rollover: '2026-07-20' });
+
+    const ctx = await gatherWeekContext();
+    const gids = ctx.candidateTasks.map(t => t.gid);
+    expect(gids).not.toContain('rollover');
+    expect(ctx.deferredCountsByCategory.Engage).toBe(1);
+  });
+
+  it('prunes an expired deferral and lets the task return as a candidate', async () => {
+    (getTaskDeferrals as jest.Mock).mockResolvedValue({ rollover: '2026-07-15' }); // within this week -> expired
+
+    const ctx = await gatherWeekContext();
+    const gids = ctx.candidateTasks.map(t => t.gid);
+    expect(gids).toContain('rollover');
+    expect(removeTaskDeferrals).toHaveBeenCalledWith(['rollover']);
   });
 });
 

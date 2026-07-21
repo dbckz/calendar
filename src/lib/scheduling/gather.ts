@@ -21,9 +21,12 @@ import {
   deletePrepBlock,
   deleteRitualBlock,
   removeGoogleEventAttribution,
+  getTaskDeferrals,
+  removeTaskDeferrals,
   type PrepBlock,
   type RitualBlock,
 } from '@/lib/user-data-storage';
+import { partitionDeferrals } from '@/lib/scheduling/deferrals';
 import { selectStaleRecords, type ReconcileRecord } from '@/lib/scheduling/reconcile';
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations, updateIntegration } from '@/lib/integration-storage';
 import { getIncompleteTasks, refreshAsanaToken } from '@/lib/asana';
@@ -65,6 +68,9 @@ export interface WeekContext {
   existingScheduledCounts: Record<string, number>;
   existingCategoryCountsByDate: Record<string, Record<string, number>>;
   quotas: CapacityQuota[];
+  // How many still-active deferred tasks fall in each quota category (for the
+  // wizard's "N deferred to next week" note). Keyed by category.
+  deferredCountsByCategory: Record<string, number>;
 }
 
 // Resolve the type signals for an ad-hoc task's taskType (id + human label).
@@ -280,7 +286,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   const weekStartStr = format(weekStart, 'yyyy-MM-dd');
   const weekEndStr = format(addDays(weekStart, 6), 'yyyy-MM-dd');
 
-  const [config, scheduledAsanaRaw, adHocTasksRaw, customTypes, metadata, asanaCandidates, fetched, prepBlocksRaw, ritualBlocksRaw] =
+  const [config, scheduledAsanaRaw, adHocTasksRaw, customTypes, metadata, asanaCandidates, fetched, prepBlocksRaw, ritualBlocksRaw, deferralsRaw] =
     await Promise.all([
       getWorkflowConfig(),
       getScheduledAsanaTasks(),
@@ -291,7 +297,17 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
       fetchWeekEvents(weekStart),
       getPrepBlocks(),
       getRitualBlocks(),
+      getTaskDeferrals(),
     ]);
+
+  // Task deferrals: tasks parked out of the candidate pool until their resume
+  // date. Prune any whose date has arrived (lazy cleanup); the rest suppress
+  // their task from this week's candidates.
+  const { active: activeDeferrals, expired: expiredDeferrals } = partitionDeferrals(
+    deferralsRaw,
+    weekEndStr
+  );
+  if (expiredDeferrals.length > 0) await removeTaskDeferrals(expiredDeferrals);
 
   const weekEvents = fetched.events;
 
@@ -377,9 +393,21 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   for (const r of dedupeByEventId(countRecords, r => r.googleEventId)) bump(r.category, r.date);
 
   // --- Candidate tasks (not yet scheduled this week) ---
+  // Deferred tasks are held out of the pool; count them per category so the
+  // wizard can note "N deferred to next week".
+  const deferredCountsByCategory: Record<string, number> = {};
+  const bumpDeferred = (signals: string[]) => {
+    const category = classifyBlockCategory(signals, quotas);
+    if (category) deferredCountsByCategory[category] = (deferredCountsByCategory[category] ?? 0) + 1;
+  };
+
   const candidateTasks: CandidateTask[] = [];
   for (const { task, integrationId, typeValue } of asanaCandidates) {
     if (scheduledGids.has(task.gid)) continue;
+    if (activeDeferrals.has(task.gid)) {
+      bumpDeferred(typeValue ? [typeValue] : []);
+      continue;
+    }
     const meta = metadata[task.gid];
     candidateTasks.push({
       gid: task.gid,
@@ -395,6 +423,10 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   }
   for (const t of adHocTasks) {
     if (t.completed || scheduledAdhocIds.has(t.id)) continue;
+    if (activeDeferrals.has(t.id)) {
+      bumpDeferred(adHocTypeSignals(t.taskType, customTypes));
+      continue;
+    }
     candidateTasks.push({
       adhocId: t.id,
       title: t.title,
@@ -416,5 +448,6 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     existingScheduledCounts,
     existingCategoryCountsByDate,
     quotas,
+    deferredCountsByCategory,
   };
 }

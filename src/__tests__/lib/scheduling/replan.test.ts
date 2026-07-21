@@ -197,6 +197,45 @@ describe('planReplan - re-slotting', () => {
     expect(unplaceable[0].reason).toBe('missed');
   });
 
+  it('offers an evening-overflow option for an unplaceable block when a window is configured', () => {
+    const config = makeConfig({
+      quotas: { Deep: { weeklyCount: 1, targetLength: '1h', preferredTimes: ['09:00-10:00'] } },
+      scheduling: {
+        workingDays: ['Wednesday'],
+        workingHours: { start: '09:00', end: '10:00' },
+        overflow: { start: '21:00', end: '23:00' },
+      },
+    });
+    const { moves, unplaceable } = run({
+      blocks: [block({ googleEventId: 'a', date: '2026-07-13', start: '09:00' })],
+      otherBusy: [busy(15, 9, 0, 10, 0)], // the single working-hours slot is taken
+      now: WED_8AM,
+      config,
+    });
+    expect(moves).toHaveLength(0);
+    expect(unplaceable).toHaveLength(1);
+    expect(unplaceable[0].overflowOption).toEqual({
+      date: '2026-07-15',
+      start: '21:00',
+      durationMinutes: 60,
+    });
+  });
+
+  it('leaves overflowOption undefined when no overflow window is configured', () => {
+    const config = makeConfig({
+      quotas: { Deep: { weeklyCount: 1, targetLength: '1h', preferredTimes: ['09:00-10:00'] } },
+      scheduling: { workingDays: ['Wednesday'], workingHours: { start: '09:00', end: '10:00' } },
+    });
+    const { unplaceable } = run({
+      blocks: [block({ googleEventId: 'a', date: '2026-07-13', start: '09:00' })],
+      otherBusy: [busy(15, 9, 0, 10, 0)],
+      now: WED_8AM,
+      config,
+    });
+    expect(unplaceable).toHaveLength(1);
+    expect(unplaceable[0].overflowOption).toBeUndefined();
+  });
+
   it('uses the afternoon default for a non-deep-work category with no preferred times', () => {
     const config = makeConfig({
       quotas: {

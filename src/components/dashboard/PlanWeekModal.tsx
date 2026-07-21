@@ -1590,12 +1590,19 @@ export function PlanWeekModal({
           return (
             <div key={cat.category} className="rounded-lg border border-gray-200 p-3">
               <div className="flex items-center justify-between gap-2 mb-2">
-                <span
-                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
-                >
-                  <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
-                  {cat.category}
-                </span>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
+                    {cat.category}
+                  </span>
+                  {(cat.deferredCount ?? 0) > 0 && (
+                    <span className="text-[11px] text-gray-400 italic">
+                      {cat.deferredCount} deferred to next week
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-3">
                   {cat.autoSelect ? (
                     <span className="text-[11px] text-gray-400">

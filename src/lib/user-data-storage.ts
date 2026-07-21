@@ -80,6 +80,11 @@ interface UserData {
   // Google event ids the user explicitly marked "done for planning" during a
   // replan. Used for Asana-backed blocks whose task must stay open in Asana.
   blockDoneOverrides?: Record<string, true>;
+  // Task ids (Asana gid or ad-hoc id) the user deferred out of the current
+  // week's planning during a replan, mapped to the yyyy-MM-dd date they should
+  // resume as a candidate (next Monday). Deferrals whose resume date has arrived
+  // are pruned lazily by gatherWeekContext.
+  taskDeferrals?: Record<string, string>;
 }
 
 const DEFAULT_USER_DATA: UserData = {
@@ -99,6 +104,7 @@ const DEFAULT_USER_DATA: UserData = {
   prepBlocks: [],
   ritualBlocks: [],
   blockDoneOverrides: {},
+  taskDeferrals: {},
 };
 
 async function ensureDataDir(): Promise<void> {
@@ -140,6 +146,12 @@ export async function getUserData(): Promise<UserData> {
       prepBlocks: parsed.prepBlocks || [],
       ritualBlocks: parsed.ritualBlocks || [],
       blockDoneOverrides: parsed.blockDoneOverrides || {},
+      // Tolerant load: keep only string→string entries.
+      taskDeferrals: Object.fromEntries(
+        Object.entries(parsed.taskDeferrals || {}).filter(
+          ([k, v]) => typeof k === 'string' && typeof v === 'string'
+        )
+      ),
     };
   } catch {
     // Deep clone so callers that mutate nested collections (e.g. upserting into
@@ -832,4 +844,40 @@ export async function removeBlockDoneOverride(googleEventId: string): Promise<bo
   delete data.blockDoneOverrides[googleEventId];
   await saveUserData(data);
   return true;
+}
+
+// Task deferrals (taskId → yyyy-MM-dd resume date). A deferred task is excluded
+// from the current week's candidate pool until its resume date arrives.
+export async function getTaskDeferrals(): Promise<Record<string, string>> {
+  const data = await getUserData();
+  return data.taskDeferrals || {};
+}
+
+// Upsert deferrals; a later call for the same taskId overwrites its resume date.
+export async function setTaskDeferrals(
+  entries: Array<{ taskId: string; until: string }>
+): Promise<void> {
+  if (entries.length === 0) return;
+  const data = await getUserData();
+  const next = { ...(data.taskDeferrals || {}) };
+  for (const { taskId, until } of entries) next[taskId] = until;
+  data.taskDeferrals = next;
+  await saveUserData(data);
+}
+
+// Remove deferrals by taskId (e.g. lazily pruning expired ones). Returns the
+// number removed.
+export async function removeTaskDeferrals(taskIds: string[]): Promise<number> {
+  if (taskIds.length === 0) return 0;
+  const data = await getUserData();
+  if (!data.taskDeferrals) return 0;
+  let removed = 0;
+  for (const id of taskIds) {
+    if (data.taskDeferrals[id]) {
+      delete data.taskDeferrals[id];
+      removed++;
+    }
+  }
+  if (removed > 0) await saveUserData(data);
+  return removed;
 }
