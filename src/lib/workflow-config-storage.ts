@@ -5,6 +5,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 
 import { DATA_DIR, WORKFLOW_CONFIG_FILE } from './data-paths';
+import { normalizeRolloverHour, DEFAULT_ROLLOVER_HOUR } from './date-utils';
 
 // Types for workflow config data
 export interface TaskQuota {
@@ -105,6 +106,11 @@ export interface SchedulingConfig {
   ritualCalendars?: RitualCalendars;
   // Optional evening-overflow window for tasks that don't fit inside working hours.
   overflow?: OverflowConfig;
+  // The "day rollover hour" (0–23, local). Local times before this hour count as
+  // the previous day, so the app's notion of "today" doesn't flip at midnight
+  // while a late-night session is still in flight. Always populated on load
+  // (defaults to 04:00 when absent). See src/lib/date-utils.ts.
+  dayRolloverHour?: number;
 }
 
 // Budget policy for the delegation pacer (drains the queue at a sustainable
@@ -176,6 +182,7 @@ const DEFAULT_CONFIG: WorkflowConfig = {
       start: '09:00',
       end: '17:00',
     },
+    dayRolloverHour: DEFAULT_ROLLOVER_HOUR,
   },
   agentPacing: {
     maxRunsPerHour: 2,        // daytime (active hours) — light, you're using Claude
@@ -291,6 +298,8 @@ export async function getWorkflowConfig(): Promise<WorkflowConfig> {
           ritualCalendars: parseRitualCalendars(parsed.scheduling.ritualCalendars),
           // Tolerant load: keep the overflow window only when both ends parse.
           overflow: parseOverflow(parsed.scheduling.overflow),
+          // Always populate: coerce to a valid 0–23 hour, default 04:00.
+          dayRolloverHour: normalizeRolloverHour(parsed.scheduling.dayRolloverHour),
         }
       : DEFAULT_CONFIG.scheduling;
 

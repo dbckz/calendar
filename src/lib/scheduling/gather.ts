@@ -26,6 +26,7 @@ import {
   type PrepBlock,
   type RitualBlock,
 } from '@/lib/user-data-storage';
+import { DEFAULT_ROLLOVER_HOUR, logicalTodayDate } from '@/lib/date-utils';
 import { partitionDeferrals } from '@/lib/scheduling/deferrals';
 import { selectStaleRecords, type ReconcileRecord } from '@/lib/scheduling/reconcile';
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations, updateIntegration } from '@/lib/integration-storage';
@@ -280,15 +281,21 @@ async function reconcileDeletedEvents(
 
 export async function gatherWeekContext(weekStartParam?: string): Promise<WeekContext> {
   const now = new Date();
+  // Read config first so the default week honours the day-rollover hour: in the
+  // small hours before rollover, "this week" is still the logical-today week
+  // (e.g. Monday 00:30 with a 04:00 rollover still targets the week containing
+  // the preceding Sunday). `now` itself stays the real clock time — it's used
+  // downstream to tell which blocks have actually ended.
+  const config = await getWorkflowConfig();
+  const rolloverHour = config.scheduling?.dayRolloverHour ?? DEFAULT_ROLLOVER_HOUR;
   const weekStart = weekStartParam
     ? startOfWeek(new Date(`${weekStartParam}T00:00:00`), { weekStartsOn: 1 })
-    : startOfWeek(now, { weekStartsOn: 1 });
+    : startOfWeek(logicalTodayDate(now, rolloverHour), { weekStartsOn: 1 });
   const weekStartStr = format(weekStart, 'yyyy-MM-dd');
   const weekEndStr = format(addDays(weekStart, 6), 'yyyy-MM-dd');
 
-  const [config, scheduledAsanaRaw, adHocTasksRaw, customTypes, metadata, asanaCandidates, fetched, prepBlocksRaw, ritualBlocksRaw, deferralsRaw] =
+  const [scheduledAsanaRaw, adHocTasksRaw, customTypes, metadata, asanaCandidates, fetched, prepBlocksRaw, ritualBlocksRaw, deferralsRaw] =
     await Promise.all([
-      getWorkflowConfig(),
       getScheduledAsanaTasks(),
       getAdHocTasks(),
       getCustomTaskTypes(),

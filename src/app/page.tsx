@@ -21,6 +21,7 @@ import { useToast } from '@/hooks/useToast';
 import { CalendarEvent, DragItem, TaskType, SettingsResponse, AsanaFilterState } from '@/types';
 import { api } from '@/lib/api';
 import { containsHtml, htmlToReadableText } from '@/lib/html-utils';
+import { DEFAULT_ROLLOVER_HOUR, logicalToday, logicalTodayDate, formatLocalDate } from '@/lib/date-utils';
 
 function formatMinutes(minutes: number): string {
   const hours = Math.floor(minutes / 60);
@@ -97,7 +98,10 @@ export default function Home() {
     window.location.hash = t === 'dashboard' ? '' : t;
   }, []);
 
-  const [selectedDate, setSelectedDate] = useState(new Date());
+  // The day-rollover hour (from workflow config); local times before it count as
+  // the previous day. Defaults until the config loads. See lib/date-utils.ts.
+  const [rolloverHour, setRolloverHour] = useState(DEFAULT_ROLLOVER_HOUR);
+  const [selectedDate, setSelectedDate] = useState(() => logicalTodayDate(new Date(), DEFAULT_ROLLOVER_HOUR));
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [colorSchemeIndex, setColorSchemeIndex] = useState(0);
 
@@ -203,6 +207,25 @@ export default function Home() {
       });
   }, [toast]);
 
+  // Load the configured day-rollover hour. If it differs from the default we
+  // assumed at init and the user hasn't navigated away from the auto-selected
+  // "today", re-sync the selected date to the configured logical today.
+  useEffect(() => {
+    api.getWorkflowConfig()
+      .then(config => {
+        const hour = config.scheduling.dayRolloverHour ?? DEFAULT_ROLLOVER_HOUR;
+        setRolloverHour(hour);
+        setSelectedDate(prev => {
+          const stillOnDefaultToday =
+            formatLocalDate(prev) === logicalToday(new Date(), DEFAULT_ROLLOVER_HOUR);
+          return stillOnDefaultToday ? logicalTodayDate(new Date(), hour) : prev;
+        });
+      })
+      .catch(err => {
+        console.error('Failed to load workflow config:', err);
+      });
+  }, []);
+
   // Fetch Google event attributions for time tracking
   useEffect(() => {
     api.getGoogleEventAttributions()
@@ -280,8 +303,8 @@ export default function Home() {
 
   // Today's timed events for the Command Center dashboard (independent of selectedDate)
   const todayTimedEvents = useMemo(
-    () => buildEventsForDate(format(new Date(), 'yyyy-MM-dd')).filter(e => !e.allDay),
-    [buildEventsForDate]
+    () => buildEventsForDate(logicalToday(new Date(), rolloverHour)).filter(e => !e.allDay),
+    [buildEventsForDate, rolloverHour]
   );
 
   // Resolve the Asana integration ID for an event, checking linked tasks,
@@ -316,10 +339,11 @@ export default function Home() {
   // Record time tracking data for longitudinal analysis
   // Only records for today or past dates, debounced to avoid excessive writes
   useEffect(() => {
-    const dateStr = format(selectedDate, 'yyyy-MM-dd');
-    const today = format(new Date(), 'yyyy-MM-dd');
+    const dateStr = formatLocalDate(selectedDate);
+    const today = logicalToday(new Date(), rolloverHour);
 
-    // Only record for dates that are today or in the past
+    // Only record for dates that are today or in the past (logical day, so a
+    // just-after-midnight session still records against the day it belongs to).
     if (dateStr > today) return;
 
     // Skip if no events or still loading
@@ -365,7 +389,7 @@ export default function Home() {
     }, 2000); // 2 second debounce
 
     return () => clearTimeout(timeoutId);
-  }, [selectedDate, timedEvents, timeWorkedByIntegration, asanaIntegrations, isLoading, getAsanaIntegrationIdForEvent]);
+  }, [selectedDate, timedEvents, timeWorkedByIntegration, asanaIntegrations, isLoading, getAsanaIntegrationIdForEvent, rolloverHour]);
 
   const handleRefresh = useCallback(() => {
     // Rotate to a new random color scheme on refresh

@@ -9,6 +9,8 @@ import {
   IntegrationTimeRecord,
   EventTimeRecord,
 } from '@/lib/time-tracking-storage';
+import { getWorkflowConfig } from '@/lib/workflow-config-storage';
+import { logicalToday } from '@/lib/date-utils';
 
 // GET /api/time-tracking - Retrieve historical data
 // Query params:
@@ -82,8 +84,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid date format. Use YYYY-MM-DD' }, { status: 400 });
     }
 
-    // Only record for dates that are today or in the past
-    const today = new Date().toISOString().split('T')[0];
+    // Only record for dates that are today or in the past. "Today" is the app's
+    // logical local day (honouring the day-rollover hour), NOT the UTC date — a
+    // UTC comparison rejected legitimate just-after-midnight recordings.
+    const { scheduling } = await getWorkflowConfig();
+    const today = logicalToday(new Date(), scheduling.dayRolloverHour);
     if (date > today) {
       return NextResponse.json({ error: 'Cannot record time for future dates' }, { status: 400 });
     }

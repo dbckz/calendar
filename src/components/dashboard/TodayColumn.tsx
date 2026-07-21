@@ -29,15 +29,23 @@ export function TodayColumn({ events }: TodayColumnProps) {
   );
 
   // Re-render the now-line every minute so it stays accurate without a reload.
-  const [now, setNow] = useState(() => new Date());
+  // `now` stays null until after mount: the server and client can't agree on the
+  // current time (SSR happens seconds before hydration, and can straddle a
+  // minute/day boundary), so rendering it during SSR causes a hydration text
+  // mismatch. Gating on mount keeps the first client render identical to the SSR
+  // HTML, then fills in the live time.
+  const [now, setNow] = useState<Date | null>(null);
   useEffect(() => {
+    setNow(new Date());
     const id = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(id);
   }, []);
 
   // Index of the first event that starts after now — where the now-line goes.
-  // -1 (all events already started) means the line sits at the very end.
-  const nowIndex = sorted.findIndex(e => e.startTime.getTime() > now.getTime());
+  // -1 (all events already started) means the line sits at the very end; -2 (not
+  // yet mounted) suppresses the line entirely so SSR and first client render match.
+  const nowMs = now?.getTime();
+  const nowIndex = nowMs === undefined ? -2 : sorted.findIndex(e => e.startTime.getTime() > nowMs);
 
   // Scroll the now-line into view once the day's events have loaded, so the
   // current moment is visible without manual scrolling.
@@ -57,7 +65,7 @@ export function TodayColumn({ events }: TodayColumnProps) {
     <div className="bg-white rounded-xl border border-gray-200 p-5 h-full flex flex-col min-h-0">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-gray-900">Today</h2>
-        <span className="text-sm text-gray-500">{format(now, 'EEEE, MMM d')}</span>
+        <span className="text-sm text-gray-500">{now ? format(now, 'EEEE, MMM d') : ''}</span>
       </div>
 
       {sorted.length === 0 ? (
@@ -65,11 +73,11 @@ export function TodayColumn({ events }: TodayColumnProps) {
       ) : (
         <ul className="space-y-2 overflow-y-auto flex-1 min-h-0">
           {sorted.map((event, i) => {
-            const isPast = event.endTime.getTime() < now.getTime();
-            const isNow = event.startTime.getTime() <= now.getTime() && event.endTime.getTime() >= now.getTime();
+            const isPast = nowMs !== undefined && event.endTime.getTime() < nowMs;
+            const isNow = nowMs !== undefined && event.startTime.getTime() <= nowMs && event.endTime.getTime() >= nowMs;
             return (
               <Fragment key={event.id}>
-                {i === nowIndex && <NowLine now={now} ref={nowRef} />}
+                {now && i === nowIndex && <NowLine now={now} ref={nowRef} />}
                 <li
                   className={`flex items-start gap-3 p-2 rounded-lg border ${
                     isNow ? 'border-orange-300 bg-orange-50' : 'border-gray-100'
@@ -90,7 +98,7 @@ export function TodayColumn({ events }: TodayColumnProps) {
               </Fragment>
             );
           })}
-          {nowIndex === -1 && <NowLine now={now} ref={nowRef} />}
+          {now && nowIndex === -1 && <NowLine now={now} ref={nowRef} />}
         </ul>
       )}
     </div>

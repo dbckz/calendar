@@ -4,6 +4,7 @@ import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaT
 import type { CapacityRow } from '@/lib/capacity';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanReviewBlock } from '@/lib/scheduling/replan';
+import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 
 export interface QuotaSummaryRow {
   category: string;
@@ -605,6 +606,11 @@ export const api = {
 
   async getSettings(): Promise<SettingsResponse> {
     return fetchWithRetry<SettingsResponse>('/api/settings');
+  },
+
+  async getWorkflowConfig(): Promise<WorkflowConfig> {
+    const { config } = await fetchWithRetry<{ config: WorkflowConfig }>('/api/workflow-config');
+    return config;
   },
 
   async getTaskTemplates(): Promise<{ templates: TaskTemplate[] }> {
