@@ -153,6 +153,14 @@ describe('colorIdForBlock', () => {
     expect(colorIdForBlock({ ...base })).toBe(WORK_COLOR_ID); // reserved
     expect(colorIdForBlock({ ...base, kind: 'prep' })).toBe(WORK_COLOR_ID);
     expect(colorIdForBlock({ ...base, kind: 'ritual', title: '📧 Emails' })).toBe(WORK_COLOR_ID);
+    // The new WORK-type rituals are yellow too (they count toward work runs).
+    expect(colorIdForBlock({ ...base, kind: 'ritual', title: '📚 Kindle notes' })).toBe(WORK_COLOR_ID);
+    expect(colorIdForBlock({ ...base, kind: 'ritual', title: '🧹 Backlog grooming' })).toBe(
+      WORK_COLOR_ID
+    );
+    expect(colorIdForBlock({ ...base, kind: 'ritual', title: '🔄 Retrospective' })).toBe(
+      WORK_COLOR_ID
+    );
     expect(colorIdForBlock({ ...base, kind: 'task', overflow: true, task: { title: 'T' } })).toBe(
       WORK_COLOR_ID
     );

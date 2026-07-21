@@ -26,7 +26,14 @@ interface SchedulingConfig {
     end: string;
   };
   ritualGoogleIntegrationId?: string;
-  ritualCalendars?: { lunch?: string; emails?: string; exercise?: string };
+  ritualCalendars?: {
+    lunch?: string;
+    emails?: string;
+    exercise?: string;
+    kindleNotes?: string;
+    grooming?: string;
+    retro?: string;
+  };
   overflow?: {
     start: string;
     end: string;
@@ -572,13 +579,24 @@ export default function WorkflowConfig() {
               { kind: 'lunch', label: 'Lunch' },
               { kind: 'emails', label: 'Emails' },
               { kind: 'exercise', label: 'Exercise' },
+              { kind: 'kindleNotes', label: 'Kindle notes' },
+              { kind: 'grooming', label: 'Grooming' },
+              { kind: 'retro', label: 'Retro' },
             ] as const).map(({ kind, label }) => {
               // Lunch/emails fall back to the legacy single id so an existing
-              // config keeps showing the right calendar until it's re-saved.
+              // config keeps showing the right calendar until it's re-saved. The
+              // WORK rituals (kindle/grooming/retro) default to the emails
+              // calendar setting (→ OM) until explicitly overridden.
               const legacy = config.scheduling.ritualGoogleIntegrationId;
+              const cals = config.scheduling.ritualCalendars;
+              const emailsDefault = cals?.emails ?? legacy ?? '';
               const value =
-                config.scheduling.ritualCalendars?.[kind] ??
-                (kind === 'exercise' ? '' : legacy ?? '');
+                cals?.[kind] ??
+                (kind === 'exercise'
+                  ? ''
+                  : kind === 'lunch' || kind === 'emails'
+                    ? legacy ?? ''
+                    : emailsDefault);
               return (
                 <div key={kind} className="flex items-center gap-3">
                   <span className="w-20 text-sm text-gray-600">{label}</span>

@@ -56,16 +56,25 @@ function parseOverflow(raw: unknown): OverflowConfig | undefined {
   return { start: start.trim(), end: end.trim() };
 }
 
+// The per-kind ritual-calendar routing map: which Google integration each
+// ritual kind's events are created on.
+export interface RitualCalendars {
+  lunch?: string;
+  emails?: string;
+  exercise?: string;
+  kindleNotes?: string;
+  grooming?: string;
+  retro?: string;
+}
+
 // Parse+validate per-kind ritual calendars from untrusted JSON. Keep only the
-// lunch/emails/exercise entries whose value is a non-empty string; return
-// undefined when nothing valid survives so the field stays absent.
-function parseRitualCalendars(
-  raw: unknown
-): { lunch?: string; emails?: string; exercise?: string } | undefined {
+// entries whose value is a non-empty string; return undefined when nothing valid
+// survives so the field stays absent.
+function parseRitualCalendars(raw: unknown): RitualCalendars | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const src = raw as Record<string, unknown>;
-  const out: { lunch?: string; emails?: string; exercise?: string } = {};
-  for (const kind of ['lunch', 'emails', 'exercise'] as const) {
+  const out: RitualCalendars = {};
+  for (const kind of ['lunch', 'emails', 'exercise', 'kindleNotes', 'grooming', 'retro'] as const) {
     const v = src[kind];
     if (typeof v === 'string' && v.trim()) out[kind] = v.trim();
   }
@@ -90,8 +99,10 @@ export interface SchedulingConfig {
   // Per-ritual-kind Google integration routing. Lets each ritual live on its own
   // calendar (e.g. lunch/emails on the OM work calendar, exercise on personal).
   // Any unset kind falls back: lunch/emails → `ritualGoogleIntegrationId`,
-  // exercise → default Google integration. Break events follow the exercise calendar.
-  ritualCalendars?: { lunch?: string; emails?: string; exercise?: string };
+  // exercise → default Google integration; the WORK rituals (kindleNotes /
+  // grooming / retro) → the emails calendar setting, then the legacy id. Break
+  // events follow the exercise calendar.
+  ritualCalendars?: RitualCalendars;
   // Optional evening-overflow window for tasks that don't fit inside working hours.
   overflow?: OverflowConfig;
 }

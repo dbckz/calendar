@@ -12,7 +12,7 @@ import {
   getRitualBlocks,
   getBlockDoneOverrides,
 } from '@/lib/user-data-storage';
-import { ritualKindForTitle, existingRitualTitlesByDateFromEvents } from '@/lib/scheduling/rituals';
+import { ritualKindForTitle, isBreakTitle, existingRitualTitlesByDateFromEvents } from '@/lib/scheduling/rituals';
 import { prepTitle } from '@/lib/scheduling/event-titles';
 import type { ScheduledAsanaTask } from '@/types';
 
@@ -215,12 +215,22 @@ export async function POST(request: NextRequest) {
 
     // Daily ritual blocks (lunch/exercise/emails). Never "missed" — only a future
     // ritual that now conflicts with a meeting is moved (re-slotted to its window).
-    const RITUAL_CATEGORY = { lunch: 'Lunch', exercise: 'Exercise', emails: 'Emails', break: 'Break' } as const;
+    const RITUAL_CATEGORY = {
+      lunch: 'Lunch',
+      exercise: 'Exercise',
+      emails: 'Emails',
+      kindleNotes: 'Kindle notes',
+      grooming: 'Backlog grooming',
+      retro: 'Retrospective',
+      break: 'Break',
+    } as const;
     for (const r of ritualBlocks) {
       if (!inWeek(r.date)) continue;
       appEventIds.add(r.googleEventId);
       const kind = ritualKindForTitle(r.title);
-      const isBreak = kind !== 'emails'; // lunch + exercise split work runs
+      // Only lunch / exercise / break split work runs; emails + the WORK rituals
+      // (kindle / grooming / retro) count as work.
+      const isBreak = isBreakTitle(r.title);
       const { startMs, endMs } = intervalFor(r.googleEventId, r.date, r.start, r.durationMinutes);
       blocks.push({
         googleEventId: r.googleEventId,

@@ -93,6 +93,12 @@ function timeRange(start: string, durationMinutes: number): string {
   return `${start}–${format(endDate, 'HH:mm')}`;
 }
 
+// Ideas deliberately NOT yet automated in the planner — surfaced as a quiet
+// reminder on the tasks step so they aren't forgotten while the rest is
+// auto-scheduled. Source of truth: TODO.md ("Future week-planning additions").
+const PARKED_IDEAS_NOTE =
+  'Parked for later: daily walk + podcast · consulting work slots · AI-project slots';
+
 // Standard block-length options (minutes) for the tasks step.
 const BLOCK_LENGTH_OPTIONS = [15, 30, 45, 60, 90, 120, 180];
 
@@ -1700,6 +1706,9 @@ export function PlanWeekModal({
             </div>
           );
         })}
+        <p className="text-xs text-gray-400 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+          {PARKED_IDEAS_NOTE}
+        </p>
       </div>
     );
   }

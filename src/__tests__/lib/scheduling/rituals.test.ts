@@ -7,6 +7,7 @@ import {
   placeWeekRituals,
   proposedBlockToBusyInterval,
   ritualKindForTitle,
+  ritualCadenceForTitle,
   isBreakTitle,
   isRitualTitle,
   ritualIntegrationIdForKind,
@@ -14,6 +15,9 @@ import {
   LUNCH_TITLE,
   EXERCISE_TITLE,
   EMAILS_TITLE,
+  KINDLE_TITLE,
+  GROOMING_TITLE,
+  RETRO_TITLE,
   BREAK_TITLE,
 } from '@/lib/scheduling/rituals';
 import { proposePrepBlocks } from '@/lib/scheduling/prep';
@@ -82,6 +86,28 @@ describe('break title helpers', () => {
   });
 });
 
+describe('ritual kind + cadence helpers', () => {
+  it('resolves the WORK ritual titles to their kinds', () => {
+    expect(ritualKindForTitle(KINDLE_TITLE)).toBe('kindleNotes');
+    expect(ritualKindForTitle(GROOMING_TITLE)).toBe('grooming');
+    expect(ritualKindForTitle(RETRO_TITLE)).toBe('retro');
+  });
+
+  it('classifies cadence: kindle daily, grooming/retro weekly', () => {
+    expect(ritualCadenceForTitle(KINDLE_TITLE)).toBe('daily');
+    expect(ritualCadenceForTitle(LUNCH_TITLE)).toBe('daily');
+    expect(ritualCadenceForTitle(GROOMING_TITLE)).toBe('weekly');
+    expect(ritualCadenceForTitle(RETRO_TITLE)).toBe('weekly');
+  });
+
+  it('treats the WORK rituals as rituals but NOT breaks', () => {
+    for (const t of [KINDLE_TITLE, GROOMING_TITLE, RETRO_TITLE]) {
+      expect(isRitualTitle(t)).toBe(true);
+      expect(isBreakTitle(t)).toBe(false);
+    }
+  });
+});
+
 describe('ritualIntegrationIdForKind', () => {
   const scheduling = {
     ritualCalendars: { lunch: 'om', emails: 'om', exercise: 'personal' },
@@ -96,12 +122,30 @@ describe('ritualIntegrationIdForKind', () => {
     expect(ritualIntegrationIdForBlock(scheduling, LUNCH_TITLE)).toBe('om');
   });
 
+  it('defaults kindle/grooming/retro to the emails calendar setting, still per-kind overridable', () => {
+    // Unset → follow the emails calendar (→ OM).
+    expect(ritualIntegrationIdForKind(scheduling, 'kindleNotes')).toBe('om');
+    expect(ritualIntegrationIdForKind(scheduling, 'grooming')).toBe('om');
+    expect(ritualIntegrationIdForKind(scheduling, 'retro')).toBe('om');
+    expect(ritualIntegrationIdForBlock(scheduling, KINDLE_TITLE)).toBe('om');
+    // An explicit per-kind override wins over the emails default.
+    const overridden = {
+      ritualCalendars: { emails: 'om', retro: 'retro-cal' },
+    } as WorkflowConfig['scheduling'];
+    expect(ritualIntegrationIdForKind(overridden, 'retro')).toBe('retro-cal');
+    expect(ritualIntegrationIdForKind(overridden, 'grooming')).toBe('om');
+  });
+
   it('falls back to the legacy single id for lunch/emails, but not exercise/break', () => {
     const legacy = { ritualGoogleIntegrationId: 'om-legacy' } as WorkflowConfig['scheduling'];
     expect(ritualIntegrationIdForKind(legacy, 'lunch')).toBe('om-legacy');
     expect(ritualIntegrationIdForKind(legacy, 'emails')).toBe('om-legacy');
     expect(ritualIntegrationIdForKind(legacy, 'exercise')).toBeUndefined();
     expect(ritualIntegrationIdForKind(legacy, 'break')).toBeUndefined();
+    // The WORK rituals fall through emails → legacy when nothing per-kind is set.
+    expect(ritualIntegrationIdForKind(legacy, 'kindleNotes')).toBe('om-legacy');
+    expect(ritualIntegrationIdForKind(legacy, 'grooming')).toBe('om-legacy');
+    expect(ritualIntegrationIdForKind(legacy, 'retro')).toBe('om-legacy');
   });
 });
 
@@ -226,6 +270,87 @@ describe('proposeRitualBlocks', () => {
     const exercise = blocks.find(b => b.title === EXERCISE_TITLE);
     expect(exercise).toBeDefined();
     expect(exercise!.start).toBe('12:00');
+  });
+});
+
+describe('proposeRitualBlocks — Kindle notes (daily, work)', () => {
+  it('places a 30-min Kindle block in the afternoon on every working day', () => {
+    const blocks = run({
+      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+    });
+    const kindles = blocks.filter(b => b.title === KINDLE_TITLE);
+    expect(kindles).toHaveLength(5);
+    expect(new Set(kindles.map(k => k.date)).size).toBe(5);
+    for (const k of kindles) {
+      expect(k.kind).toBe('ritual');
+      expect(k.category).toBe('Kindle notes');
+      expect(k.durationMinutes).toBe(30);
+      // Afternoon preference: 12:00 onward.
+      expect(k.start >= '12:00').toBe(true);
+    }
+  });
+
+  it('falls back to the whole day and skips only when nothing fits', () => {
+    // Whole afternoon (12:00 onward) busy → Kindle falls back into the morning.
+    const morningFallback = run({ busyIntervals: [busy(12, 0, 17, 0)] });
+    const kFallback = morningFallback.find(b => b.title === KINDLE_TITLE);
+    expect(kFallback).toBeDefined();
+    expect(kFallback!.start < '12:00').toBe(true);
+
+    // The entire working day busy → Kindle is skipped.
+    const full = run({ busyIntervals: [busy(9, 0, 17, 0)] });
+    expect(full.find(b => b.title === KINDLE_TITLE)).toBeUndefined();
+  });
+});
+
+describe('proposeRitualBlocks — weekly rituals (grooming + retro)', () => {
+  const week = { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] };
+
+  it('places backlog grooming ONCE for the week, on the earliest working day, in the afternoon', () => {
+    const blocks = run({ scheduling: week });
+    const grooming = blocks.filter(b => b.title === GROOMING_TITLE);
+    expect(grooming).toHaveLength(1);
+    expect(grooming[0].kind).toBe('ritual');
+    expect(grooming[0].category).toBe('Backlog grooming');
+    expect(grooming[0].durationMinutes).toBe(60);
+    expect(grooming[0].date).toBe('2026-07-13'); // Monday, earliest-day-first
+    expect(grooming[0].start >= '12:00').toBe(true);
+  });
+
+  it('places the retrospective ONCE, preferring the LAST working day, late in the day', () => {
+    const blocks = run({ scheduling: week });
+    const retro = blocks.filter(b => b.title === RETRO_TITLE);
+    expect(retro).toHaveLength(1);
+    expect(retro[0].category).toBe('Retrospective');
+    expect(retro[0].durationMinutes).toBe(60);
+    expect(retro[0].date).toBe('2026-07-17'); // Friday, last working day
+  });
+
+  it('falls the retrospective back to an earlier day when the last day is full', () => {
+    // Friday entirely busy → retro cannot land there, so it falls back to Thursday.
+    const fridayFull: BusyInterval = {
+      start: new Date(2026, 6, 17, 0, 0),
+      end: new Date(2026, 6, 17, 23, 59),
+    };
+    const blocks = run({ scheduling: week, busyIntervals: [fridayFull] });
+    const retro = blocks.filter(b => b.title === RETRO_TITLE);
+    expect(retro).toHaveLength(1);
+    expect(retro[0].date).toBe('2026-07-16'); // Thursday
+  });
+
+  it('dedupes a weekly ritual by title across the WHOLE week (present any day → skip)', () => {
+    const blocks = run({
+      scheduling: week,
+      // Grooming present on Wednesday, retro present on Tuesday → neither re-proposed.
+      existingRitualTitlesByDate: {
+        '2026-07-15': new Set([GROOMING_TITLE]),
+        '2026-07-14': new Set([RETRO_TITLE]),
+      },
+    });
+    expect(blocks.find(b => b.title === GROOMING_TITLE)).toBeUndefined();
+    expect(blocks.find(b => b.title === RETRO_TITLE)).toBeUndefined();
+    // Daily Kindle is unaffected by the weekly dedupe.
+    expect(blocks.filter(b => b.title === KINDLE_TITLE).length).toBeGreaterThan(0);
   });
 });
 

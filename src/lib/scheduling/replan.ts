@@ -64,12 +64,13 @@ export interface ReplanBlock {
   // before its meeting starts (absolute ms). If the meeting is already past, or
   // no slot fits before it, the block is returned as `stale` instead of moved.
   mustEndBeforeMs?: number;
-  // Ritual/break blocks (lunch/exercise/emails/break). A ritual is NEVER "missed"
-  // (a skipped ritual is not rescheduled); only a future ritual that now conflicts
-  // with a meeting is moved, re-slotted into its ritual window. A future 'break'
-  // that conflicts is DELETED instead of moved — a break has no fixed home.
-  // `isBreak` (lunch / exercise / break) splits work runs.
-  ritualKind?: 'lunch' | 'exercise' | 'emails' | 'break';
+  // Ritual/break blocks (lunch/exercise/emails/kindle/grooming/retro/break). A
+  // ritual is NEVER "missed" (a skipped ritual is not rescheduled); only a future
+  // ritual that now conflicts with a meeting is moved, re-slotted into its ritual
+  // window (or its category's afternoon window for the WORK rituals). A future
+  // 'break' that conflicts is DELETED instead of moved — a break has no fixed
+  // home. `isBreak` (lunch / exercise / break) splits work runs.
+  ritualKind?: 'lunch' | 'exercise' | 'emails' | 'kindleNotes' | 'grooming' | 'retro' | 'break';
   isBreak?: boolean;
 }
 
@@ -317,12 +318,16 @@ export function planReplan(input: ReplanInput): ReplanResult {
     }
 
     // Ritual movers re-slot into their ritual window (lunch prefers 11:30–13:00,
-    // exercise near 15:00, emails the end of the working day); everything else
-    // uses its category's preferred/afternoon-default windows.
-    // Breaks are never re-slotted (they're deleted on conflict), so a mover with a
-    // ritualKind here is always lunch/exercise/emails.
-    let windows = block.ritualKind && block.ritualKind !== 'break'
-      ? ritualWindows(block.ritualKind, workingDays)
+    // exercise near 15:00, emails the end of the working day); the WORK rituals
+    // (kindle / grooming / retro) and every non-ritual block use their category's
+    // preferred/afternoon-default windows. Breaks are never re-slotted (they're
+    // deleted on conflict), so a mover here is never a break.
+    const usesRitualWindow =
+      block.ritualKind === 'lunch' ||
+      block.ritualKind === 'exercise' ||
+      block.ritualKind === 'emails';
+    let windows = usesRitualWindow
+      ? ritualWindows(block.ritualKind as 'lunch' | 'exercise' | 'emails', workingDays)
       : buildWindowsForTask(
           undefined,
           preferredWindowsForCategory(config, block.category, workingHoursEnd),

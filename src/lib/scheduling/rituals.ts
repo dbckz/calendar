@@ -18,11 +18,17 @@ import type { SchedulingConfig, WorkflowConfig } from '@/lib/workflow-config-sto
 import type { CalendarEvent } from '@/types';
 
 import {
+  buildWindowsForTask,
+  findSlot,
   localDateStr,
   resolveWorkingWindow,
+  slotIsValid,
   timeStr,
   type BusyMs,
+  type TimeOfDay,
+  type Window,
   type WorkingDay,
+  type WorkRun,
 } from './engine';
 import type { BusyInterval, ProposedBlock } from './types';
 
@@ -31,6 +37,12 @@ import type { BusyInterval, ProposedBlock } from './types';
 export const LUNCH_TITLE = '🍽️ Lunch';
 export const EXERCISE_TITLE = '🏋️ Exercise';
 export const EMAILS_TITLE = '📧 Emails';
+// WORK-type rituals (they count toward work runs, coloured yellow like tasks).
+// Kindle notes is a DAILY ritual; grooming + retro are WEEKLY (placed once per
+// week, deduped by title across the whole week).
+export const KINDLE_TITLE = '📚 Kindle notes';
+export const GROOMING_TITLE = '🧹 Backlog grooming';
+export const RETRO_TITLE = '🔄 Retrospective';
 // Explicit break events placed after each ~2h work run (see breaks.ts). Tracked
 // in the ritualBlocks store like the daily rituals so reconcile / reset / replan
 // sweeps cover them.
@@ -39,12 +51,31 @@ export const RITUAL_TITLES: readonly string[] = [
   LUNCH_TITLE,
   EXERCISE_TITLE,
   EMAILS_TITLE,
+  KINDLE_TITLE,
+  GROOMING_TITLE,
+  RETRO_TITLE,
   BREAK_TITLE,
 ];
 
 // The ritual/break kinds. Lunch + exercise + break are BREAKS (split work runs);
-// emails counts as WORK.
-export type RitualKind = 'lunch' | 'exercise' | 'emails' | 'break';
+// emails + kindle + grooming + retro count as WORK.
+export type RitualKind =
+  | 'lunch'
+  | 'exercise'
+  | 'emails'
+  | 'kindleNotes'
+  | 'grooming'
+  | 'retro'
+  | 'break';
+
+// Ritual cadence. Daily rituals are placed on (and deduped per) each working day;
+// weekly rituals are placed ONCE for the whole week and deduped by title across
+// every day (skip if the title is present on any day).
+export type RitualCadence = 'daily' | 'weekly';
+export function ritualCadenceForTitle(title: string): RitualCadence {
+  const t = title.trim();
+  return t === GROOMING_TITLE || t === RETRO_TITLE ? 'weekly' : 'daily';
+}
 
 // Lunch + exercise + break are breaks (split work runs); emails counts as work.
 // A calendar event titled exactly like any of them is treated as a break by the
@@ -69,6 +100,9 @@ export function ritualKindForTitle(title: string): RitualKind {
   if (t === EXERCISE_TITLE) return 'exercise';
   if (t === LUNCH_TITLE) return 'lunch';
   if (t === BREAK_TITLE) return 'break';
+  if (t === KINDLE_TITLE) return 'kindleNotes';
+  if (t === GROOMING_TITLE) return 'grooming';
+  if (t === RETRO_TITLE) return 'retro';
   return 'emails';
 }
 
@@ -86,7 +120,10 @@ export function ritualIntegrationIdForKind(
   const legacy = scheduling.ritualGoogleIntegrationId;
   if (kind === 'exercise' || kind === 'break') return cals?.exercise;
   if (kind === 'lunch') return cals?.lunch ?? legacy;
-  return cals?.emails ?? legacy; // emails
+  if (kind === 'emails') return cals?.emails ?? legacy;
+  // The WORK-type rituals (kindle / grooming / retro) default to the emails
+  // calendar setting (→ OM), still per-kind configurable.
+  return cals?.[kind] ?? cals?.emails ?? legacy;
 }
 
 // The ritual calendar for a proposed ritual/break block (by its exact title).
@@ -101,6 +138,11 @@ const MS_PER_MINUTE = 60 * 1000;
 const SLOT_STEP_MINUTES = 15;
 const RITUAL_DURATION_MINUTES = 30;
 const EXERCISE_DURATION_MINUTES = 60;
+const KINDLE_DURATION_MINUTES = 30;
+const GROOMING_DURATION_MINUTES = 60;
+const RETRO_DURATION_MINUTES = 60;
+// WORK rituals prefer the afternoon (from this hour) before spilling earlier.
+const WORK_RITUAL_AFTERNOON_HOUR = 12;
 
 export interface ProposeRitualsInput {
   config: WorkflowConfig;
@@ -247,12 +289,58 @@ export function proposedBlockToBusyInterval(block: ProposedBlock): BusyInterval 
   return { start, end, ...(isBreak ? { isBreak: true } : {}) };
 }
 
+// Afternoon-preferred (12:00 → working-hours end) + whole-working-day fallback
+// windows across the given days, for the WORK-type rituals (Kindle notes /
+// backlog grooming / retrospective). Mirrors the engine's afternoon default so
+// these land in the afternoon before spilling into the morning; the fallback
+// tier keeps them landing SOMEWHERE on a busy day.
+function afternoonWorkWindows(days: WorkingDay[], workingHoursEnd: TimeOfDay): Window[] {
+  return buildWindowsForTask(
+    undefined,
+    [[{ h: WORK_RITUAL_AFTERNOON_HOUR, m: 0 }, workingHoursEnd]],
+    days
+  );
+}
+
+// The LATEST run-rule-valid start for a work block of `durationMs` within
+// [winStartMs, winEndMs) on the 15-min grid (>= now). Returns null when none
+// fits. Used to place the retrospective as late as possible in a day.
+function findLatestValidStart(
+  winStartMs: number,
+  winEndMs: number,
+  durationMs: number,
+  busy: BusyMs[],
+  nowMs: number,
+  workRun: WorkRun
+): number | null {
+  const stepMs = SLOT_STEP_MINUTES * MS_PER_MINUTE;
+  let start = ceilToStep(Math.max(winStartMs, nowMs));
+  let last: number | null = null;
+  while (start + durationMs <= winEndMs) {
+    if (start >= nowMs && slotIsValid(start, start + durationMs, busy, workRun)) last = start;
+    start += stepMs;
+  }
+  return last;
+}
+
 export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[] {
   const { config, weekStart, now, existingRitualTitlesByDate } = input;
-  const { workingDays } = resolveWorkingWindow(config.scheduling, weekStart, now);
+  const { workingDays, workRun, workingHoursEnd } = resolveWorkingWindow(
+    config.scheduling,
+    weekStart,
+    now
+  );
   const nowMs = now.getTime();
   const durationMs = RITUAL_DURATION_MINUTES * MS_PER_MINUTE;
   const exerciseDurationMs = EXERCISE_DURATION_MINUTES * MS_PER_MINUTE;
+
+  // Titles present on ANY day this week (for weekly-ritual dedupe: a weekly
+  // ritual is skipped when its title already exists — or already happened —
+  // somewhere in the week).
+  const presentAnyDay = new Set<string>();
+  for (const set of Object.values(existingRitualTitlesByDate)) {
+    for (const t of set) presentAnyDay.add(t);
+  }
 
   // Mutable run state so lunch/emails never collide with each other or meetings.
   const busy: BusyMs[] = input.busyIntervals.map(i => ({
@@ -381,6 +469,94 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
         // Emails counts as work — no isBreak flag, so it forms/extends runs.
         busy.push({ start: startMs, end: startMs + durationMs });
       }
+    }
+
+    // --- Kindle notes (work) — DAILY, 30 min, afternoon preference (12:00
+    // onward), any free run-rule-valid slot, whole-day fallback. Skip the day
+    // only when nothing fits. ---
+    if (!present.has(KINDLE_TITLE)) {
+      const slot = findSlot(
+        afternoonWorkWindows([day], workingHoursEnd),
+        KINDLE_DURATION_MINUTES,
+        workRun,
+        busy,
+        nowMs
+      );
+      if (slot) {
+        const start = timeStr(slot.startMs);
+        proposals.push({
+          id: `${day.dateStr}-${start}-ritual-kindle`,
+          category: 'Kindle notes',
+          kind: 'ritual',
+          title: KINDLE_TITLE,
+          date: day.dateStr,
+          start,
+          durationMinutes: KINDLE_DURATION_MINUTES,
+          reason: 'Daily Kindle notes processing.',
+        });
+        busy.push({ start: slot.startMs, end: slot.endMs }); // work — forms runs
+      }
+    }
+  }
+
+  // --- Weekly rituals (placed once for the whole week, deduped by title across
+  // every day). Placed after the daily rituals so they flow around them. ---
+
+  // Backlog grooming (work) — WEEKLY, 60 min: any working day with a free
+  // run-valid hour, earliest-day-first, afternoon preference.
+  if (!presentAnyDay.has(GROOMING_TITLE)) {
+    const slot = findSlot(
+      afternoonWorkWindows(workingDays, workingHoursEnd),
+      GROOMING_DURATION_MINUTES,
+      workRun,
+      busy,
+      nowMs
+    );
+    if (slot) {
+      const start = timeStr(slot.startMs);
+      proposals.push({
+        id: `${slot.dateStr}-${start}-ritual-grooming`,
+        category: 'Backlog grooming',
+        kind: 'ritual',
+        title: GROOMING_TITLE,
+        date: slot.dateStr,
+        start,
+        durationMinutes: GROOMING_DURATION_MINUTES,
+        reason: 'Weekly backlog grooming.',
+      });
+      busy.push({ start: slot.startMs, end: slot.endMs }); // work — forms runs
+    }
+  }
+
+  // Retrospective (work) — WEEKLY, 60 min: the LAST working day preferred (as
+  // late in that day as fits), falling back to earlier days (still late in the
+  // day) when the last day is full.
+  if (!presentAnyDay.has(RETRO_TITLE)) {
+    const retroDurationMs = RETRO_DURATION_MINUTES * MS_PER_MINUTE;
+    for (let i = workingDays.length - 1; i >= 0; i--) {
+      const day = workingDays[i];
+      const startMs = findLatestValidStart(
+        day.whStartMs,
+        day.whEndMs,
+        retroDurationMs,
+        busy,
+        nowMs,
+        workRun
+      );
+      if (startMs === null) continue;
+      const start = timeStr(startMs);
+      proposals.push({
+        id: `${day.dateStr}-${start}-ritual-retro`,
+        category: 'Retrospective',
+        kind: 'ritual',
+        title: RETRO_TITLE,
+        date: day.dateStr,
+        start,
+        durationMinutes: RETRO_DURATION_MINUTES,
+        reason: 'Weekly retrospective.',
+      });
+      busy.push({ start: startMs, end: startMs + retroDurationMs }); // work
+      break;
     }
   }
 
