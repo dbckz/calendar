@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { format } from 'date-fns';
-import { Calendar, Repeat, LayoutDashboard } from 'lucide-react';
+import { Calendar, Repeat, LayoutDashboard, Bell } from 'lucide-react';
 import { Header } from '@/components/Header';
 import { Timeline } from '@/components/Timeline';
 import { IntegrationStatus } from '@/components/IntegrationStatus';
@@ -11,6 +11,7 @@ import { DelegateModal } from '@/components/DelegateModal';
 import { AddTaskModal } from '@/components/AddTaskModal';
 import { AllDayEventsBar } from '@/components/AllDayEventsBar';
 import { RitualsContent } from '@/components/RitualsContent';
+import { Reminders } from '@/components/Reminders';
 import { DashboardContent } from '@/components/dashboard/DashboardContent';
 import { useTasks } from '@/hooks/useTasks';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
@@ -81,16 +82,17 @@ const COLOR_SCHEMES = [
 ];
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'rituals'>(() => {
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'rituals' | 'reminders'>(() => {
     if (typeof window !== 'undefined') {
       if (window.location.hash === '#rituals') return 'rituals';
+      if (window.location.hash === '#reminders') return 'reminders';
       if (window.location.hash === '#calendar') return 'calendar';
     }
     return 'dashboard';
   });
 
   const handleTabChange = useCallback((tab: string) => {
-    const t = tab as 'dashboard' | 'calendar' | 'rituals';
+    const t = tab as 'dashboard' | 'calendar' | 'rituals' | 'reminders';
     setActiveTab(t);
     window.location.hash = t === 'dashboard' ? '' : t;
   }, []);
@@ -849,6 +851,7 @@ export default function Home() {
     { id: 'dashboard' as const, label: 'Command Center', icon: LayoutDashboard },
     { id: 'calendar' as const, label: 'Daily Calendar', icon: Calendar },
     { id: 'rituals' as const, label: 'Rituals', icon: Repeat },
+    { id: 'reminders' as const, label: 'Reminders', icon: Bell },
   ];
 
   const handleOpenAsanaTask = useCallback((taskId: string) => {
@@ -943,6 +946,17 @@ export default function Home() {
       ) : activeTab === 'rituals' ? (
         <div className="flex-1 overflow-y-auto">
           <RitualsContent />
+        </div>
+      ) : activeTab === 'reminders' ? (
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-4xl mx-auto p-6">
+            <Reminders
+              asanaIntegrations={asanaIntegrations}
+              asanaProjects={asanaProjects}
+              asanaTypeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
+              onCreateAsanaTask={handleSidebarAsanaCreate}
+            />
+          </div>
         </div>
       ) : (
       <div className="flex flex-1 min-h-0">
