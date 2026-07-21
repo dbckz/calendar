@@ -1,38 +1,12 @@
 /**
  * Round-trip tests for task metadata storage in user-data-storage.ts
  */
-import { promises as fs } from 'fs';
 import { getAllTaskMetadata, upsertTaskMetadata } from '@/lib/user-data-storage';
-
-jest.mock('fs', () => ({
-  promises: {
-    access: jest.fn(),
-    mkdir: jest.fn(),
-    readFile: jest.fn(),
-    writeFile: jest.fn(),
-  },
-}));
-
-const mockedFs = fs as jest.Mocked<typeof fs>;
+import { __resetDbForTests } from '@/lib/storage/db';
 
 describe('task metadata storage', () => {
-  let backingFile: string | null;
-
   beforeEach(() => {
-    backingFile = null;
-    (mockedFs.access as jest.Mock).mockResolvedValue(undefined);
-    (mockedFs.mkdir as jest.Mock).mockResolvedValue(undefined);
-    (mockedFs.readFile as jest.Mock).mockImplementation(async () => {
-      if (backingFile === null) {
-        const err = new Error('ENOENT') as NodeJS.ErrnoException;
-        err.code = 'ENOENT';
-        throw err;
-      }
-      return backingFile;
-    });
-    (mockedFs.writeFile as jest.Mock).mockImplementation(async (_path, data) => {
-      backingFile = data as string;
-    });
+    __resetDbForTests();
   });
 
   it('returns an empty map when no data exists', async () => {

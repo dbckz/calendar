@@ -13,6 +13,7 @@
     "orchestrator:run": "tsx workers/orchestrator/run.ts"
   },
   "dependencies": {
+    "better-sqlite3": "^13.0.1",
     "date-fns": "^4.1.0",
     "googleapis": "^169.0.0",
     "lucide-react": "^0.562.0",
@@ -26,6 +27,7 @@
     "@tailwindcss/postcss": "^4",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.1",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/jest": "^30.0.0",
     "@types/node": "^20",
     "@types/react": "^19",
@@ -38,5 +40,8 @@
     "tailwindcss": "^4",
     "ts-jest": "^29.4.6",
     "typescript": "^5"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.1": true
   }
 }

@@ -1,2 +1,22 @@
-file .data/integrations.json calendar_integrations.json
-file .data/user-data.json calendar_user-data.json
+# Calendar app — backup manifest.
+#
+# This app's persistent data does NOT live inside the repo. It lives in
+# ~/.claude/data/calendar/ (see src/lib/data-paths.ts) so it survives builds and
+# deployments. The backup script only resolves manifest paths relative to the app
+# repo dir (no $HOME/env expansion), so those files cannot be referenced here.
+#
+# They are backed up instead by the "External paths outside the app roots"
+# section of ~/bin/backup-app-data.sh (dbckz/backup-scripts), which already
+# covers time-tracking.json. That section needs these two lines added so the
+# primary SQLite store and the integration credentials are captured too:
+#
+#   backup_sqlite "$HOME/.claude/data/calendar/calendar.db"        "calendar_calendar.db"
+#   backup_file   "$HOME/.claude/data/calendar/integrations.json"  "calendar_integrations.json"
+#
+# (calendar.db must use backup_sqlite — the sqlite3 .backup command it runs takes
+# a WAL-consistent snapshot. workflow-config.json is regenerable from defaults, so
+# it is optional.)
+#
+# This manifest is intentionally left with no active entries: there is nothing
+# in-repo to back up, and its presence suppresses the script's "unregistered
+# data" audit warning for this app.
