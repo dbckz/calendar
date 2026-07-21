@@ -55,6 +55,27 @@ describe('proposeBreakBlocks', () => {
     }
   });
 
+  it('never overlaps a break-tagged event (exercise right after the run IS the break)', () => {
+    // Regression: run ends 13:30, 🏋️ Exercise 13:30–14:30 (isBreak) sits right
+    // there, more work follows. The old code excluded break intervals from run
+    // merging but never checked the proposed slot against them — so a "☕ Break"
+    // was created ON TOP of exercise. Exercise already splits the runs; no break
+    // event may be proposed inside it.
+    const breaks = proposeBreakBlocks({
+      workingDays: [workingDay()],
+      busyIntervals: [
+        busy(11, 30, 13, 30), // 2h run
+        busy(13, 30, 14, 30, true), // exercise (break)
+        busy(14, 30, 16, 0), // more work after
+        busy(16, 15, 17, 0), // final run (so 16:00 break is not dangling)
+      ],
+      workRun: WORK_RUN,
+      now: NOW,
+    });
+    // No break at 13:30 (inside exercise); the 16:00 run end still gets one.
+    expect(breaks.map(b => b.start)).toEqual(['16:00']);
+  });
+
   it('does not propose a dangling break after the final run of the day', () => {
     // A single run ending before the working day ends: no following busy time, so
     // no break (would be dangling).

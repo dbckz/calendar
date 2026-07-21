@@ -37,7 +37,14 @@ export function proposeBreakBlocks(params: {
   const breakMs = BREAK_DURATION_MINUTES * MS_PER_MINUTE;
   const proposals: ProposedBlock[] = [];
 
-  // Only NON-break busy time forms work runs (a break already splits a run).
+  // Only NON-break busy time forms work runs (a break already splits a run) —
+  // but the proposed break slot itself must be genuinely FREE, so keep the full
+  // busy set (breaks included: lunch/exercise occupy their time) for the overlap
+  // guard below.
+  const allBusy = params.busyIntervals.map(b => ({
+    start: b.start.getTime(),
+    end: b.end.getTime(),
+  }));
   const workBusy = params.busyIntervals
     .filter(b => !b.isBreak)
     .map(b => ({ start: b.start.getTime(), end: b.end.getTime() }));
@@ -73,6 +80,10 @@ export function proposeBreakBlocks(params: {
       if (runEnd < nowMs) continue;
       if (nextStart - runEnd < breakMs) continue;
       if (runEnd + breakMs > winEnd) continue;
+      // The slot must be truly free: a break-tagged event (lunch / exercise)
+      // sitting right after the run is already the break — never double-book it.
+      const breakEnd = runEnd + breakMs;
+      if (allBusy.some(b => b.start < breakEnd && b.end > runEnd)) continue;
       const start = timeStr(runEnd);
       proposals.push({
         id: `${day.dateStr}-${start}-break`,

@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { startOfWeek } from 'date-fns';
 
 import { createCalendarEvent, ensureValidCredentials } from '@/lib/google-calendar';
+import { fetchWeekEvents } from '@/lib/scheduling/gather';
+import { eventsToBusyIntervals } from '@/lib/scheduling/free-busy';
 import {
   getEnabledAsanaIntegrations,
   getEnabledGoogleIntegrations,
@@ -46,6 +49,26 @@ export async function POST(request: NextRequest) {
     if (proposals.length === 0) {
       return NextResponse.json({ error: 'No proposals provided' }, { status: 400 });
     }
+
+    // Pre-flight conflict check: proposals can be minutes-to-hours stale (the
+    // wizard may sit open while other runs / manual edits change the calendar).
+    // Re-fetch the live week and refuse any proposal whose slot now overlaps a
+    // real busy event, instead of blindly double-booking it. (Declined and
+    // all-day events don't count as busy, matching the planner.)
+    const earliestDate = proposals.map(p => p.date).sort()[0];
+    const [ey, em, ed] = earliestDate.split('-').map(Number);
+    const liveWeekStart = startOfWeek(new Date(ey, em - 1, ed), { weekStartsOn: 1 });
+    const { events: liveEvents } = await fetchWeekEvents(liveWeekStart);
+    const liveBusy = eventsToBusyIntervals(liveEvents).map(i => ({
+      start: i.start.getTime(),
+      end: i.end.getTime(),
+    }));
+    const slotTaken = (p: AcceptedProposal): boolean => {
+      const { start, end } = toStartEnd(p.date, p.start, p.durationMinutes);
+      const s = start.getTime();
+      const e = end.getTime();
+      return liveBusy.some(b => b.start < e && b.end > s);
+    };
 
     // Pick the DEFAULT Google integration to create events on. The app's default
     // event-creation calendar is the (first) enabled Google integration's
@@ -151,6 +174,14 @@ export async function POST(request: NextRequest) {
 
     for (const proposal of proposals) {
       try {
+        if (slotTaken(proposal)) {
+          results.push({
+            id: proposal.id,
+            success: false,
+            error: 'Slot is no longer free — the calendar changed since this was proposed. Re-run planning.',
+          });
+          continue;
+        }
         const { start, end } = toStartEnd(proposal.date, proposal.start, proposal.durationMinutes);
         const isPrep = proposal.kind === 'prep';
         // Break blocks are created + tracked exactly like rituals (opaque event +

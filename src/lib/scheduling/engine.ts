@@ -706,9 +706,22 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
     const taskId = task.gid ?? task.adhocId;
     if (taskId && usedTaskIds.has(taskId)) continue;
     const duration = (taskId && input.durationOverridesByTask?.[taskId]) || categoryDurationFor(category);
-    const windows = buildWindowsForTask(task.bestTime, preferredWindowsFor(category), workingDays);
+    // Earliness beats spread for must-dos: the leveled search prefers the
+    // EMPTIEST day of the category (which is often Friday), so a must-do could
+    // land later than ordinary tasks. Reorder the windows so the earliest DAY
+    // strictly wins (preferred windows still tried before fallback within each
+    // day) and search without spread levels.
+    const windows = buildWindowsForTask(task.bestTime, preferredWindowsFor(category), workingDays)
+      .slice()
+      .sort((a, b) =>
+        a.dateStr !== b.dateStr
+          ? a.dateStr < b.dateStr ? -1 : 1
+          : a.preferred !== b.preferred
+            ? a.preferred ? -1 : 1
+            : a.startMs - b.startMs
+      );
     const catCount = catCountByCategory.get(category)!;
-    const slot = findLeveledSlot(catCount, windows, duration);
+    const slot = findSlot(windows, duration, workRun, busy, nowMs);
     if (!slot) continue; // leave unplaced; the main pass / overflow logic will see it
     const start = timeStr(slot.startMs);
     proposals.push({

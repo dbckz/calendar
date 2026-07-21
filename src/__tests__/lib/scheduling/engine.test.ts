@@ -725,7 +725,7 @@ describe('proposeBlocks - must-do first pass', () => {
     expect(proposals.some(p => p.task?.gid === 'eng')).toBe(false);
   });
 
-  it('spreads multiple must-dos across distinct days rather than stacking one day', () => {
+  it('packs multiple must-dos as early in the week as the run rule allows', () => {
     const proposals = proposeBlocks(
       makeInput({
         config: makeConfig({ quotas: { Deep: { weeklyCount: 3, targetLength: '1h', preferredTimes: [] } } }),
@@ -738,8 +738,31 @@ describe('proposeBlocks - must-do first pass', () => {
     );
     const deep = proposals.filter(p => p.category === 'Deep');
     expect(deep).toHaveLength(3);
-    // The leveled spread applies across the first pass — three distinct days.
-    expect(new Set(deep.map(p => p.date)).size).toBe(3);
+    // Earliness beats spread for must-dos: with a whole free Monday, all three
+    // land on Monday (the run rule inserts the 15-min buffer after the 2h run).
+    expect(deep.every(p => p.date === dateStr(WEEK_START))).toBe(true);
+  });
+
+  it('takes the earliest free day even when the spread prefers an emptier later day', () => {
+    // Regression: the first pass used the leveled spread, whose level-0 search
+    // only admits days with ZERO existing blocks of the category — so a must-do
+    // General Todo jumped to (empty) Friday while ordinary tasks landed midweek.
+    const weekStr = dateStr(WEEK_START);
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { 'General Todos': { targetLength: '1h', preferredTimes: [] } },
+          typeMapping: { 'General Todos': [] },
+        }),
+        candidateTasks: [task({ gid: 'must', typeSignals: ['todo'], isPriority: true })],
+        // Monday already has a General Todos block — level 0 would exclude it.
+        existingCategoryCountsByDate: { [weekStr]: { 'General Todos': 1 } },
+      })
+    );
+    const must = proposals.find(p => p.task?.gid === 'must');
+    expect(must).toBeDefined();
+    // Still Monday: earliest day with a free slot wins, spread be damned.
+    expect(must!.date).toBe(weekStr);
   });
 });
 
