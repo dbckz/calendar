@@ -1,8 +1,8 @@
 // Pure meeting-prep block placement.
 //
 // Given the week's meetings that need preparation (already AI/user-decided
-// upstream), proposePrepBlocks books a prep block for each (duration
-// configurable via prepDurationMinutes, default 15): the day
+// upstream), proposePrepBlocks books a prep block for each (per-meeting
+// duration via PrepMeeting.durationMinutes, default 15): the day
 // before during working hours if possible, else the day of before the meeting
 // starts (leaving the configured buffer). Meetings that fit nowhere are
 // returned as `unplaced`. Like the scheduling engine this is I/O-free and
@@ -35,6 +35,14 @@ export interface PrepMeeting {
   title: string;
   startMs: number;
   date: string;
+  // Length of this meeting's prep block in minutes; defaults to 15 when absent.
+  durationMinutes?: number;
+  // User's chosen day (yyyy-MM-dd) for this prep block. When set, placement tries
+  // ONLY that day first (with the before-meeting end-cap when it is the meeting
+  // day); if nothing fits there it falls back to the default day-before → day-of
+  // search so the meeting never silently loses its prep. When absent, default
+  // behaviour applies.
+  preferredDate?: string;
 }
 
 export interface ProposePrepInput {
@@ -43,17 +51,14 @@ export interface ProposePrepInput {
   busyIntervals: BusyInterval[];
   weekStart: Date;
   now: Date;
-  // Length of each prep block in minutes; defaults to 15 when absent/invalid.
-  prepDurationMinutes?: number;
 }
 
 export function proposePrepBlocks(
   input: ProposePrepInput
 ): { placed: ProposedBlock[]; unplaced: PrepMeeting[] } {
   const { config, weekStart, now } = input;
-  const prepDuration = input.prepDurationMinutes ?? DEFAULT_PREP_DURATION_MINUTES;
 
-  const { buffer, workingDays } = resolveWorkingWindow(config.scheduling, weekStart, now);
+  const { workRun, workingDays } = resolveWorkingWindow(config.scheduling, weekStart, now);
   const dayByDateStr = new Map(workingDays.map(d => [d.dateStr, d]));
 
   // Mutable run state shared across all preps so they never collide.
@@ -71,17 +76,32 @@ export function proposePrepBlocks(
 
   for (const meeting of meetings) {
     const meetingDate = new Date(meeting.startMs);
+    const prepDuration = meeting.durationMinutes ?? DEFAULT_PREP_DURATION_MINUTES;
+
+    // End-cap for a day is the meeting start only when that day IS the meeting
+    // day (prep must end before the meeting begins).
+    const endCapFor = (dateStr: string): number | undefined =>
+      dateStr === meeting.date ? meeting.startMs : undefined;
+
+    let slot: ReturnType<typeof tryDay> = null;
+
+    // (0) User-preferred day, if given: try ONLY that day first.
+    if (meeting.preferredDate) {
+      slot = tryDay(dayByDateStr.get(meeting.preferredDate), prepDuration, endCapFor(meeting.preferredDate));
+    }
 
     // (a) Day before, anywhere in working hours.
-    const dayBeforeStr = localDateStr(new Date(meeting.startMs - MS_PER_DAY));
-    let slot = tryDay(dayByDateStr.get(dayBeforeStr));
+    if (!slot) {
+      const dayBeforeStr = localDateStr(new Date(meeting.startMs - MS_PER_DAY));
+      slot = tryDay(dayByDateStr.get(dayBeforeStr), prepDuration);
+    }
 
-    // (b) Day of, before the meeting (minus buffer).
+    // (b) Day of, before the meeting starts. The work-run rule handles run
+    // lengths; prep just has to end by the meeting start.
     if (!slot) {
       const dayOf = dayByDateStr.get(meeting.date);
       if (dayOf) {
-        const endMs = meeting.startMs - buffer * MS_PER_MINUTE;
-        slot = tryDay(dayOf, endMs);
+        slot = tryDay(dayOf, prepDuration, meeting.startMs);
       }
     }
 
@@ -119,6 +139,7 @@ export function proposePrepBlocks(
   // meetings working.
   function tryDay(
     day: { dateStr: string; whStartMs: number; whEndMs: number } | undefined,
+    prepDuration: number,
     endCapMs?: number
   ): { startMs: number; endMs: number; dateStr: string; preferred: boolean } | null {
     if (!day) return null;
@@ -147,6 +168,6 @@ export function proposePrepBlocks(
       preferred: false,
       bestTimeMatch: false,
     });
-    return findSlot(windows, prepDuration, buffer, busy, nowMs);
+    return findSlot(windows, prepDuration, workRun, busy, nowMs);
   }
 }

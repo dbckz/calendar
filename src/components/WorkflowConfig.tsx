@@ -9,10 +9,16 @@ interface TaskQuota {
   targetLength: string;
   preferredTimes: string[];
   autoSelect?: boolean;
+  grouped?: boolean;
+}
+
+interface WorkRunConfig {
+  maxMinutes: number;
+  bufferMinutes: number;
 }
 
 interface SchedulingConfig {
-  bufferBetweenTasks: string;
+  workRun: WorkRunConfig;
   workingDays: string[];
   workingHours: {
     start: string;
@@ -57,7 +63,7 @@ const DEFAULT_CONFIG: WorkflowConfig = {
     }
   },
   scheduling: {
-    bufferBetweenTasks: '30min',
+    workRun: { maxMinutes: 120, bufferMinutes: 15 },
     workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
     workingHours: {
       start: '09:00',
@@ -310,6 +316,18 @@ export default function WorkflowConfig() {
                     Auto-pick tasks (skip manual selection in Plan my week)
                   </label>
                 )}
+
+                {showWeeklyCount && (
+                  <label className="flex items-center mt-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={quota.grouped ?? false}
+                      onChange={(e) => updateTaskQuota(taskType, 'grouped', e.target.checked)}
+                      className="mr-2"
+                    />
+                    Grouped blocks (place N container blocks sharing one agenda of all selected tasks)
+                  </label>
+                )}
               </div>
             );
           })}
@@ -361,15 +379,44 @@ export default function WorkflowConfig() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Buffer Between Tasks
+              Max Work-Run (minutes)
             </label>
             <input
-              type="text"
-              value={config.scheduling.bufferBetweenTasks}
-              onChange={(e) => updateScheduling('bufferBetweenTasks', e.target.value)}
-              placeholder="e.g., 30min"
+              type="number"
+              min={15}
+              step={15}
+              value={config.scheduling.workRun?.maxMinutes ?? 120}
+              onChange={(e) => updateScheduling('workRun', {
+                ...(config.scheduling.workRun ?? { maxMinutes: 120, bufferMinutes: 15 }),
+                maxMinutes: Number(e.target.value),
+              })}
+              placeholder="e.g., 120"
               className="w-full px-3 py-2 border border-gray-300 rounded-md"
             />
+            <p className="text-xs text-gray-400 mt-1">
+              Longest continuous busy stretch before a break is required.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Break After a Run (minutes)
+            </label>
+            <input
+              type="number"
+              min={5}
+              step={5}
+              value={config.scheduling.workRun?.bufferMinutes ?? 15}
+              onChange={(e) => updateScheduling('workRun', {
+                ...(config.scheduling.workRun ?? { maxMinutes: 120, bufferMinutes: 15 }),
+                bufferMinutes: Number(e.target.value),
+              })}
+              placeholder="e.g., 15"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Minimum free gap that separates two work runs.
+            </p>
           </div>
 
           <div>

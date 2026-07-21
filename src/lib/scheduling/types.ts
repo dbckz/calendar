@@ -5,10 +5,14 @@
 import type { BestTime, DeadlineType, EnergyLevel } from '@/types';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 
-// A merged busy interval on the user's timeline. Absolute times.
+// A merged busy interval on the user's timeline. Absolute times. `isBreak`
+// marks a "break" interval (e.g. the daily lunch ritual): it is still busy (can't
+// be double-booked) but does NOT count as work when forming continuous work runs,
+// so a run interrupted by a break is two runs.
 export interface BusyInterval {
   start: Date;
   end: Date;
+  isBreak?: boolean;
 }
 
 // A candidate task the engine may place on the calendar. Either an Asana task
@@ -57,10 +61,14 @@ export interface ProposedBlock {
   durationMinutes: number;
   reason: string;
   // Block classification. Absent on engine task/reserved blocks (derive from
-  // `task` presence for back-compat); set to 'prep' by the prep placer.
-  kind?: 'task' | 'reserved' | 'prep';
+  // `task` presence for back-compat); set to 'prep' by the prep placer and
+  // 'ritual' by the ritual (lunch/emails) placer.
+  kind?: 'task' | 'reserved' | 'prep' | 'ritual';
   // Present only on prep blocks: the meeting this block prepares for.
   meeting?: { eventId: string; title: string; meetingStart: string /* ISO */ };
+  // Present only on ritual blocks (lunch/emails): the exact event title to
+  // create ("🍽️ Lunch" / "📧 Emails"). `category` is 'Lunch' or 'Emails'.
+  title?: string;
 }
 
 export interface ProposeBlocksInput {
@@ -76,8 +84,23 @@ export interface ProposeBlocksInput {
   existingCategoryCountsByDate?: Record<string, Record<string, number>>;
   // Per-week block-length overrides (minutes), keyed by category name. When set
   // for a category, its blocks use this duration instead of the targetLength
-  // parsed from workflow config. Does not modify the saved config.
+  // parsed from workflow config. Grouped categories (shared containers) take
+  // their length from here; single-task categories prefer a per-task override
+  // (below) and fall back to this, then to the parsed targetLength. Does not
+  // modify the saved config.
   durationOverridesByCategory?: Record<string, number>;
+  // Per-task block-length overrides (minutes), keyed by task id (gid or adhocId).
+  // Applies to that task's single-task block — both its duration and the slot
+  // search for it. Ignored for grouped/reserved blocks (which are not tied to a
+  // single task). Does not modify the saved config.
+  durationOverridesByTask?: Record<string, number>;
+  // Per-category count of tasks the user explicitly selected for a manual
+  // (non-auto-select, non-grouped) category. When present, that category places
+  // max(remaining weekly quota, selected count) blocks, so explicit over-quota
+  // picks are attempted rather than clamped to the quota. Absent when no manual
+  // selection was made (e.g. the tasks step was skipped), in which case the
+  // quota cap applies as before. Keyed by category name.
+  selectedCountsByCategory?: Record<string, number>;
   weekStart: Date; // local midnight of the week's Monday
   now: Date;
 }

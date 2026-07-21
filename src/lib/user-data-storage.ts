@@ -45,6 +45,21 @@ export interface PrepBlock {
   createdAt: string;
 }
 
+// A daily-ritual block (lunch / emails) the "Plan my week" flow created on the
+// calendar. Tracked here (like PrepBlock) so the planner can dedupe against it,
+// reconcile it when the user deletes the event, reset it, and re-slot it in
+// replan. No `done` concept — a ritual is never marked done.
+export interface RitualBlock {
+  id: string;
+  googleEventId: string;
+  googleIntegrationId: string;
+  title: string; // exact event title ("🍽️ Lunch" / "📧 Emails")
+  date: string; // yyyy-MM-dd
+  start: string; // HH:mm
+  durationMinutes: number;
+  createdAt: string;
+}
+
 interface UserData {
   taskTemplates: TaskTemplate[];
   templateGroups: TemplateGroup[];
@@ -61,6 +76,7 @@ interface UserData {
   staleKeep?: Record<string, string>; // GID -> ISO timestamp: "keep active" until (snooze)
   meetingPrepDecisions?: Record<string, MeetingPrepDecision>; // Key is normalized meeting title
   prepBlocks?: PrepBlock[]; // meeting-prep blocks created on the calendar
+  ritualBlocks?: RitualBlock[]; // daily lunch/emails blocks created on the calendar
   // Google event ids the user explicitly marked "done for planning" during a
   // replan. Used for Asana-backed blocks whose task must stay open in Asana.
   blockDoneOverrides?: Record<string, true>;
@@ -81,6 +97,7 @@ const DEFAULT_USER_DATA: UserData = {
   staleKeep: {},
   meetingPrepDecisions: {},
   prepBlocks: [],
+  ritualBlocks: [],
   blockDoneOverrides: {},
 };
 
@@ -121,6 +138,7 @@ export async function getUserData(): Promise<UserData> {
       staleKeep: parsed.staleKeep || {},
       meetingPrepDecisions: parsed.meetingPrepDecisions || {},
       prepBlocks: parsed.prepBlocks || [],
+      ritualBlocks: parsed.ritualBlocks || [],
       blockDoneOverrides: parsed.blockDoneOverrides || {},
     };
   } catch {
@@ -756,6 +774,40 @@ export async function deletePrepBlock(id: string): Promise<boolean> {
   if (filtered.length === data.prepBlocks.length) return false;
 
   data.prepBlocks = filtered;
+  await saveUserData(data);
+  return true;
+}
+
+// Ritual blocks (daily lunch/emails blocks the planner created on the calendar).
+export async function getRitualBlocks(): Promise<RitualBlock[]> {
+  const data = await getUserData();
+  return data.ritualBlocks || [];
+}
+
+export async function addRitualBlock(
+  block: Omit<RitualBlock, 'id' | 'createdAt'>
+): Promise<RitualBlock> {
+  const data = await getUserData();
+  if (!data.ritualBlocks) data.ritualBlocks = [];
+
+  const newBlock: RitualBlock = {
+    ...block,
+    id: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+  };
+
+  data.ritualBlocks.push(newBlock);
+  await saveUserData(data);
+  return newBlock;
+}
+
+export async function deleteRitualBlock(id: string): Promise<boolean> {
+  const data = await getUserData();
+  if (!data.ritualBlocks) return false;
+  const filtered = data.ritualBlocks.filter(b => b.id !== id);
+  if (filtered.length === data.ritualBlocks.length) return false;
+
+  data.ritualBlocks = filtered;
   await saveUserData(data);
   return true;
 }

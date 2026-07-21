@@ -21,8 +21,22 @@ export interface TaskQuota {
   grouped?: boolean;
 }
 
+// Continuous-work-run rule. The calendar should form busy runs of at most
+// `maxMinutes` (meetings + placed blocks counted together), each followed by at
+// least `bufferMinutes` of free time. Replaces the old flat `bufferBetweenTasks`.
+export interface WorkRunConfig {
+  maxMinutes: number;
+  bufferMinutes: number;
+}
+
+export const DEFAULT_WORK_RUN: WorkRunConfig = { maxMinutes: 120, bufferMinutes: 15 };
+
 export interface SchedulingConfig {
-  bufferBetweenTasks: string;
+  // Legacy flat buffer between tasks. No longer read (superseded by workRun);
+  // tolerated on load so old config files still parse.
+  bufferBetweenTasks?: string;
+  // Continuous-work-run rule (defaults applied on load when absent).
+  workRun?: WorkRunConfig;
   workingDays: string[];
   workingHours: {
     start: string;
@@ -93,7 +107,7 @@ const DEFAULT_CONFIG: WorkflowConfig = {
     },
   },
   scheduling: {
-    bufferBetweenTasks: '0',
+    workRun: { ...DEFAULT_WORK_RUN },
     workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
     workingHours: {
       start: '09:00',
@@ -186,9 +200,21 @@ export async function getWorkflowConfig(): Promise<WorkflowConfig> {
       if (quota.autoSelect === undefined) quota.autoSelect = category === 'Batch';
     }
 
+    // Normalize scheduling: fill the work-run rule with defaults when a legacy
+    // config predates it (old files carry only `bufferBetweenTasks`, now ignored).
+    const scheduling: SchedulingConfig = parsed.scheduling
+      ? {
+          ...parsed.scheduling,
+          workRun: {
+            maxMinutes: parsed.scheduling.workRun?.maxMinutes ?? DEFAULT_WORK_RUN.maxMinutes,
+            bufferMinutes: parsed.scheduling.workRun?.bufferMinutes ?? DEFAULT_WORK_RUN.bufferMinutes,
+          },
+        }
+      : DEFAULT_CONFIG.scheduling;
+
     return {
       taskQuotas,
-      scheduling: parsed.scheduling || DEFAULT_CONFIG.scheduling,
+      scheduling,
       agentPacing: parsed.agentPacing || DEFAULT_CONFIG.agentPacing,
       typeMapping,
       lastUpdated: parsed.lastUpdated || new Date().toISOString(),

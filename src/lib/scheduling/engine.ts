@@ -26,8 +26,9 @@
 //  * If a category still has quota but no candidate task fits/remains, we emit a
 //    task-less "reserved" block instead.
 //
-// Categories with no weeklyCount (e.g. a catch-all "General Todos") are skipped
-// — without a target count there is nothing to fill toward.
+// Categories with no weeklyCount (e.g. a catch-all "General Todos") have no
+// target to fill toward, so they emit no reserved blocks; instead they schedule
+// one block per SELECTED candidate task, placed after all quota'd categories.
 
 import { classifyBlockCategory, normalize, parseTargetLength, type CapacityQuota } from '@/lib/capacity';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
@@ -68,6 +69,17 @@ export interface Window {
 export interface BusyMs {
   start: number;
   end: number;
+  // Break intervals (e.g. the daily lunch ritual) are still busy but split work
+  // runs — they are excluded when merging busy time into continuous work runs.
+  isBreak?: boolean;
+}
+
+// The continuous-work-run rule: busy runs of at most `maxMinutes`, each followed
+// by at least `bufferMinutes` of free time. Gaps smaller than `bufferMinutes`
+// bridge two busy stretches into one run.
+export interface WorkRun {
+  maxMinutes: number;
+  bufferMinutes: number;
 }
 
 // A working day in the week, with its working-hours window bounds (absolute ms).
@@ -158,17 +170,47 @@ export function compareKeys(a: Array<number | string>, b: Array<number | string>
   return 0;
 }
 
-// Does [start, end] have `buffer` minutes of clearance from every busy interval?
-function slotIsFree(start: number, end: number, buffer: number, busy: BusyMs[]): boolean {
-  const bufferMs = buffer * MS_PER_MINUTE;
-  const paddedStart = start - bufferMs;
-  const paddedEnd = end + bufferMs;
+// Is placing a work block [start, end] valid under the work-run rule?
+//   (1) It must not overlap any busy interval (breaks included — a break is still
+//       busy and can't be double-booked).
+//   (2) The contiguous busy RUN it would join/create must be <= maxMinutes.
+//       Runs are formed by merging only NON-break busy intervals (plus this
+//       candidate), bridging any gap smaller than bufferMinutes; a break interval
+//       is excluded from the merge, so a run interrupted by a break is two runs.
+// Because a >= bufferMinutes gap splits runs, this simultaneously guarantees that
+// a run already at/over maxMinutes leaves at least bufferMinutes of free time
+// before the next block can be placed.
+export function slotIsValid(start: number, end: number, busy: BusyMs[], workRun: WorkRun): boolean {
+  // (1) No overlap with anything busy.
   for (const b of busy) {
-    // Conflict when the busy interval overlaps the padded region. Exact
-    // boundary touching (busy ends exactly `buffer` before start) is allowed.
-    if (b.start < paddedEnd && b.end > paddedStart) return false;
+    if (b.start < end && b.end > start) return false;
   }
-  return true;
+  // (2) Run-length check: grow the run around the candidate across every non-break
+  // busy interval within bufferMinutes, to a fixpoint (bridging can chain).
+  const bufferMs = workRun.bufferMinutes * MS_PER_MINUTE;
+  const maxMs = workRun.maxMinutes * MS_PER_MINUTE;
+  const work = busy.filter(b => !b.isBreak);
+  let runStart = start;
+  let runEnd = end;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const w of work) {
+      // Connected when within bufferMinutes on both sides (gap < bufferMinutes,
+      // or overlapping). A gap of exactly bufferMinutes does NOT connect.
+      if (w.start < runEnd + bufferMs && w.end > runStart - bufferMs) {
+        if (w.start < runStart) {
+          runStart = w.start;
+          changed = true;
+        }
+        if (w.end > runEnd) {
+          runEnd = w.end;
+          changed = true;
+        }
+      }
+    }
+  }
+  return runEnd - runStart <= maxMs;
 }
 
 // Build the ordered list of working days in the week (>= today), each with its
@@ -244,11 +286,11 @@ export function buildWindowsForTask(
 }
 
 // Find the earliest valid slot for a block of `duration` minutes across the
-// given windows, respecting buffer and the now-cutoff.
+// given windows, respecting the work-run rule and the now-cutoff.
 export function findSlot(
   windows: Window[],
   duration: number,
-  buffer: number,
+  workRun: WorkRun,
   busy: BusyMs[],
   nowMs: number,
   allowedDates?: Set<string>
@@ -262,7 +304,7 @@ export function findSlot(
     let start = ceilToStep(Math.max(win.startMs, nowMs));
     while (start + durationMs <= win.endMs) {
       const end = start + durationMs;
-      if (start >= nowMs && slotIsFree(start, end, buffer, busy)) {
+      if (start >= nowMs && slotIsValid(start, end, busy, workRun)) {
         return { startMs: start, endMs: end, dateStr: win.dateStr, preferred: win.preferred };
       }
       start += stepMs;
@@ -307,7 +349,7 @@ export interface WorkingWindow {
   workingHoursStart: TimeOfDay;
   workingHoursEnd: TimeOfDay;
   workingDayNames: Set<string>;
-  buffer: number;
+  workRun: WorkRun;
   workingDays: WorkingDay[];
 }
 
@@ -321,20 +363,135 @@ export function resolveWorkingWindow(
   const workingDayNames = new Set(
     scheduling.workingDays.map(d => d.charAt(0).toUpperCase() + d.slice(1).toLowerCase())
   );
-  const buffer = parseTargetLength(scheduling.bufferBetweenTasks);
+  // Work-run rule, defaulted when a legacy config predates it.
+  const workRun: WorkRun = {
+    maxMinutes: scheduling.workRun?.maxMinutes ?? 120,
+    bufferMinutes: scheduling.workRun?.bufferMinutes ?? 15,
+  };
   const workingDays = buildWorkingDays(
     weekStart,
     now,
     { start: workingHoursStart, end: workingHoursEnd },
     workingDayNames
   );
-  return { workingHoursStart, workingHoursEnd, workingDayNames, buffer, workingDays };
+  return { workingHoursStart, workingHoursEnd, workingDayNames, workRun, workingDays };
+}
+
+// --- Spare-capacity assessment ---------------------------------------------
+//
+// After a plan is proposed, we want to tell the user how much *usable* free work
+// time is left in the remaining week. "Usable" means: inside working hours, on a
+// working day, at/after now, in a free gap big enough to hold a real block
+// (>= MIN_USABLE_GAP_MINUTES) — and respecting the work-run rule, so a gap that
+// sits right after an already-maxed-out work run loses the leading buffer that
+// must separate it from that run (and likewise a trailing buffer before a maxed
+// run that follows the gap). Breaks (e.g. lunch) occupy time but are NOT work
+// runs, so a gap adjacent to a break needs no buffer.
+
+const MIN_USABLE_GAP_MINUTES = 30;
+
+export interface SpareCapacity {
+  totalMinutes: number;
+  gapCount: number;
+  largestGapMinutes: number;
+  byDate: Array<{ date: string; freeMinutes: number }>;
+}
+
+// Merge ms-intervals into a minimal, start-sorted set. Two consecutive intervals
+// coalesce when `shouldMerge(gapMs)` holds for the gap between them (negative gap
+// = overlap). Callers supply the boundary rule: overlap/touch merging vs work-run
+// bridging (gap strictly below the buffer).
+function mergeIntervals(
+  intervals: Array<{ start: number; end: number }>,
+  shouldMerge: (gapMs: number) => boolean
+): Array<{ start: number; end: number }> {
+  const sorted = [...intervals].sort((a, b) => a.start - b.start);
+  const out: Array<{ start: number; end: number }> = [];
+  for (const iv of sorted) {
+    const last = out[out.length - 1];
+    if (last && shouldMerge(iv.start - last.end)) last.end = Math.max(last.end, iv.end);
+    else out.push({ start: iv.start, end: iv.end });
+  }
+  return out;
+}
+
+// Compute the usable spare capacity across the given working days, given the busy
+// timeline (calendar busy + all accepted/proposed blocks) and the work-run rule.
+// Pure and deterministic — every input is passed in.
+export function computeSpareCapacity(
+  workingDays: WorkingDay[],
+  busy: BusyMs[],
+  workRun: WorkRun,
+  nowMs: number
+): SpareCapacity {
+  const bufferMs = workRun.bufferMinutes * MS_PER_MINUTE;
+  const maxMs = workRun.maxMinutes * MS_PER_MINUTE;
+  const minGapMs = MIN_USABLE_GAP_MINUTES * MS_PER_MINUTE;
+
+  const byDate: Array<{ date: string; freeMinutes: number }> = [];
+  let totalMinutes = 0;
+  let gapCount = 0;
+  let largestGapMinutes = 0;
+
+  // Work runs are measured across the full timeline (not clipped to a day) so a
+  // run's true length is known when a gap sits right after it. Non-break busy is
+  // bridged into runs using the same rule as slotIsValid: a gap strictly smaller
+  // than bufferMinutes joins two stretches (a gap of exactly bufferMinutes does
+  // not).
+  const runs = mergeIntervals(busy.filter(b => !b.isBreak), gap => gap < bufferMs);
+  const runEndingAt = (t: number) => runs.find(r => Math.abs(r.end - t) < 1);
+  const runStartingAt = (t: number) => runs.find(r => Math.abs(r.start - t) < 1);
+  const isMaxed = (r: { start: number; end: number }) => r.end - r.start >= maxMs;
+
+  for (const wd of workingDays) {
+    // Clip the working-hours window to the now-cutoff; a fully-past day is skipped.
+    const windowStart = Math.max(wd.whStartMs, nowMs);
+    const windowEnd = wd.whEndMs;
+    if (windowStart >= windowEnd) continue;
+
+    // Occupied blocks (all busy incl. breaks) clipped to the window; free gaps are
+    // the complement within [windowStart, windowEnd]. Overlapping/touching blocks
+    // coalesce (gap <= 0).
+    const occupied = mergeIntervals(
+      busy
+        .map(b => ({ start: Math.max(b.start, windowStart), end: Math.min(b.end, windowEnd) }))
+        .filter(b => b.end > b.start),
+      gap => gap <= 0
+    );
+
+    let dayFree = 0;
+    let cursor = windowStart;
+    for (const block of [...occupied, { start: windowEnd, end: windowEnd }]) {
+      if (block.start > cursor) {
+        let gapStart = cursor;
+        let gapEnd = block.start;
+        // A maxed work run touching this gap eats the abutting buffer.
+        const left = runEndingAt(gapStart);
+        if (left && isMaxed(left)) gapStart += bufferMs;
+        const right = runStartingAt(gapEnd);
+        if (right && isMaxed(right)) gapEnd -= bufferMs;
+        const usableMs = gapEnd - gapStart;
+        if (usableMs >= minGapMs) {
+          const mins = Math.floor(usableMs / MS_PER_MINUTE);
+          dayFree += mins;
+          gapCount += 1;
+          if (mins > largestGapMinutes) largestGapMinutes = mins;
+        }
+      }
+      cursor = Math.max(cursor, block.end);
+    }
+
+    if (dayFree > 0) byDate.push({ date: wd.dateStr, freeMinutes: dayFree });
+    totalMinutes += dayFree;
+  }
+
+  return { totalMinutes, gapCount, largestGapMinutes, byDate };
 }
 
 export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
   const { config, candidateTasks } = input;
 
-  const { workingHoursEnd, buffer, workingDays } = resolveWorkingWindow(
+  const { workingHoursEnd, workRun, workingDays } = resolveWorkingWindow(
     config.scheduling,
     input.weekStart,
     input.now
@@ -361,25 +518,58 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
     list.sort((a, b) => compareKeys(taskSortKey(a), taskSortKey(b)));
   }
 
-  // Remaining quota per category.
+  // Remaining "count to place" per category. Two kinds of category:
+  //  * Quota'd (weeklyCount > 0): place up to the unmet weekly quota, filling
+  //    with reserved blocks when candidates run out.
+  //  * No-quota catch-all (no weeklyCount, e.g. "General Todos"): there is no
+  //    weekly target, but the wizard still lets the user SELECT any number of its
+  //    tasks. Place one block per selected candidate task (target = candidate
+  //    count), never a reserved block, and process them AFTER quota'd categories
+  //    so this filler can't steal morning/preferred slots from deep work etc.
   const remainingByCategory = new Map<string, number>();
+  const noQuotaCategories = new Set<string>();
   for (const quota of quotas) {
     const weeklyCount = quota.weeklyCount ?? 0;
-    if (weeklyCount <= 0) continue; // catch-all / no target -> skip
+    if (weeklyCount <= 0) {
+      const candidateCount = (tasksByCategory.get(quota.category) ?? []).length;
+      if (candidateCount > 0) {
+        remainingByCategory.set(quota.category, candidateCount);
+        noQuotaCategories.add(quota.category);
+      }
+      continue;
+    }
     const already = input.existingScheduledCounts[quota.category] ?? 0;
-    const remaining = Math.max(0, weeklyCount - already);
+    const quotaRemaining = Math.max(0, weeklyCount - already);
+    // Over-quota manual selection: when the user explicitly picks tasks for a
+    // manual (non-auto-select, non-grouped) category, every pick should be
+    // attempted even beyond the weekly quota. So place max(quotaRemaining,
+    // selectedCount) blocks. Auto-select and grouped categories keep the quota
+    // cap. Reserved filler only ever appears when candidates run short of
+    // quotaRemaining, so it stays bounded by the quota (never over-fills).
+    const isAutoSelect = config.taskQuotas[quota.category]?.autoSelect === true;
+    const isGroupedCat = config.taskQuotas[quota.category]?.grouped === true;
+    let remaining = quotaRemaining;
+    if (!isAutoSelect && !isGroupedCat && input.selectedCountsByCategory) {
+      remaining = Math.max(quotaRemaining, input.selectedCountsByCategory[quota.category] ?? 0);
+    }
     if (remaining > 0) remainingByCategory.set(quota.category, remaining);
   }
 
-  // Category processing order: the Writing/Deep Work category is processed
-  // FIRST so it claims the earliest morning slots before other categories fill
-  // them; then hard-deadline categories first, then by remaining quota desc,
-  // then name. Deep work is matched via the whitespace-robust normalize so
+  // Category processing order: no-quota catch-all categories are always LAST
+  // (they're filler and must not steal slots from quota'd work). Among quota'd
+  // categories, the Writing/Deep Work category is processed FIRST so it claims
+  // the earliest morning slots before other categories fill them; then
+  // hard-deadline categories first, then by remaining quota desc, then name.
+  // Deep work is matched via the whitespace-robust normalize so
   // "Writing / Deep Work" and "Writing/Deep Work" are treated the same.
   const categoryHasHard = (category: string): boolean =>
     (tasksByCategory.get(category) ?? []).some(t => t.deadlineType === 'hard');
 
   const orderedCategories = [...remainingByCategory.keys()].sort((a, b) => {
+    const noqA = noQuotaCategories.has(a);
+    const noqB = noQuotaCategories.has(b);
+    if (noqA !== noqB) return noqA ? 1 : -1; // no-quota categories last
+    if (noqA && noqB) return a < b ? -1 : a > b ? 1 : 0; // among no-quota: by name
     const deepA = isDeepWork(a);
     const deepB = isDeepWork(b);
     if (deepA !== deepB) return deepA ? -1 : 1;
@@ -396,6 +586,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
   const busy: BusyMs[] = input.busyIntervals.map(i => ({
     start: i.start.getTime(),
     end: i.end.getTime(),
+    isBreak: i.isBreak,
   }));
   const usedTaskIds = new Set<string>();
   const nowMs = input.now.getTime();
@@ -405,13 +596,19 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
 
   for (const category of orderedCategories) {
     const quota = quotaByCategory.get(category)!;
-    const duration =
+    // Category-level block length: an explicit per-category override, else the
+    // parsed targetLength (default 30). Grouped/reserved blocks use this; a
+    // single-task block may further override it per task (see below).
+    const categoryDuration =
       input.durationOverridesByCategory?.[category] ?? (parseTargetLength(quota.targetLength) || 30);
     const preferredWindows = preferredWindowsForCategory(config, category, workingHoursEnd);
 
     let remaining = remainingByCategory.get(category)!;
     const categoryTasks = tasksByCategory.get(category) ?? [];
-    const grouped = config.taskQuotas[category]?.grouped === true;
+    const isNoQuota = noQuotaCategories.has(category);
+    // Grouped mode is a quota'd behavior (places weeklyCount shared containers);
+    // it never applies to a no-quota catch-all, which schedules real tasks only.
+    const grouped = config.taskQuotas[category]?.grouped === true && !isNoQuota;
 
     // Per-date count of this category's blocks, seeded from what's already on the
     // calendar. Drives the leveled (spread) search below so same-category blocks
@@ -425,13 +622,13 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
     // with zero blocks of this category, level 1 up to one, etc. Window ordering
     // (preferred/bestTime, then working hours) is preserved within each level, so
     // spread outranks earliness but preferred times still win across distinct days.
-    const findLeveledSlot = (windows: Window[]) => {
+    const findLeveledSlot = (windows: Window[], duration: number) => {
       let slot: ReturnType<typeof findSlot> = null;
       for (let level = 0; level <= 7 && !slot; level++) {
         const allowed = new Set(
           workingDays.filter(wd => catCount[wd.dateStr] <= level).map(wd => wd.dateStr)
         );
-        slot = findSlot(windows, duration, buffer, busy, nowMs, allowed);
+        slot = findSlot(windows, duration, workRun, busy, nowMs, allowed);
       }
       return slot;
     };
@@ -445,7 +642,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
       const placed: Array<{ blockId: string; dateStr: string; start: string }> = [];
       while (remaining > 0) {
         const windows = buildWindowsForTask(undefined, preferredWindows, workingDays);
-        const slot = findLeveledSlot(windows);
+        const slot = findLeveledSlot(windows, categoryDuration);
         if (!slot) break; // no more room this week for this category
         const start = timeStr(slot.startMs);
         placed.push({ blockId: `${slot.dateStr}-${start}-${category}`, dateStr: slot.dateStr, start });
@@ -467,7 +664,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
           tasks: agenda,
           date: slot.dateStr,
           start: slot.start,
-          durationMinutes: duration,
+          durationMinutes: categoryDuration,
           reason:
             agenda.length > 0
               ? `${category} block — ${agenda.length} task${agenda.length === 1 ? '' : 's'} on the agenda.`
@@ -483,16 +680,26 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
         return id ? !usedTaskIds.has(id) : true;
       });
 
+      // No-quota catch-all categories place only real selected tasks — never a
+      // reserved filler block. Once the selected tasks are exhausted, stop.
+      if (!task && isNoQuota) break;
+
+      // A single-task block prefers this task's per-task length override; a
+      // reserved block (no task) falls back to the category length. The chosen
+      // duration also drives the slot search so the block is sized correctly.
+      const taskId = task ? task.gid ?? task.adhocId : undefined;
+      const duration =
+        (taskId && input.durationOverridesByTask?.[taskId]) || categoryDuration;
+
       const windows = buildWindowsForTask(task?.bestTime, preferredWindows, workingDays);
-      const slot = findLeveledSlot(windows);
+      const slot = findLeveledSlot(windows, duration);
       if (!slot) break; // no more room this week for this category
 
       const start = timeStr(slot.startMs);
       const blockId = `${slot.dateStr}-${start}-${category}`;
 
       if (task) {
-        const id = task.gid ?? task.adhocId!;
-        usedTaskIds.add(id);
+        usedTaskIds.add(taskId!);
         proposals.push({
           id: blockId,
           category,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { gatherWeekContext } from '@/lib/scheduling/gather';
+import { resolveWorkingWindow } from '@/lib/scheduling/engine';
 import { proposePrepBlocks, type PrepMeeting } from '@/lib/scheduling/prep';
 import {
   classifyPrep,
@@ -11,7 +12,7 @@ import {
   type PrepResult,
 } from '@/lib/prep-classifier';
 import { getMeetingPrepDecisions, getPrepBlocks, setMeetingPrepDecision } from '@/lib/user-data-storage';
-import { PREP_TITLE_PREFIX } from '@/lib/scheduling/reset';
+import { isPrepTitle, prepMeetingTitleFromEvent } from '@/lib/scheduling/event-titles';
 import type { CalendarEvent, MeetingPrepDecision } from '@/types';
 
 function localDateStr(date: Date): string {
@@ -25,7 +26,11 @@ function localTimeStr(date: Date): string {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
-// POST { weekStart?: string }
+// POST {
+//   weekStart?: string,
+//   prepDurations?: Record<eventId, 15|30|60>,
+//   prepDays?: Record<eventId, yyyy-MM-dd>,
+// }
 // Resolve which of the week's future meetings need a prep block (user decision >
 // cached AI verdict > fresh classification) and propose a slot for each. AI
 // verdicts are persisted. Meetings that already have a "Prep:" event are dropped.
@@ -33,10 +38,35 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
     const ctx = await gatherWeekContext(typeof body?.weekStart === 'string' ? body.weekStart : undefined);
-    // Prep block length: only 15/30/60 are valid; anything else defaults to 15.
-    const prepDurationMinutes = [15, 30, 60].includes(body?.prepDurationMinutes)
-      ? body.prepDurationMinutes
-      : 15;
+
+    // Working days of the (remaining) week — used to validate day overrides and
+    // returned so the UI can offer a per-meeting day dropdown.
+    const { workingDays } = resolveWorkingWindow(ctx.config.scheduling, ctx.weekStart, ctx.now);
+    const workingDayStrs = workingDays.map(d => d.dateStr);
+    const workingDaySet = new Set(workingDayStrs);
+
+    // Per-meeting prep-block length overrides, keyed by eventId. Only 15/30/60
+    // are valid values; anything else is dropped (that meeting defaults to 15).
+    const prepDurations: Record<string, number> = {};
+    if (body?.prepDurations && typeof body.prepDurations === 'object') {
+      for (const [eventId, value] of Object.entries(body.prepDurations)) {
+        if ([15, 30, 60].includes(value as number)) {
+          prepDurations[eventId] = value as number;
+        }
+      }
+    }
+
+    // Per-meeting preferred prep DAY overrides, keyed by eventId. A value is kept
+    // only when it is a working day within this week; anything else is dropped
+    // (that meeting keeps the default day-before → day-of placement).
+    const prepDays: Record<string, string> = {};
+    if (body?.prepDays && typeof body.prepDays === 'object') {
+      for (const [eventId, value] of Object.entries(body.prepDays)) {
+        if (typeof value === 'string' && workingDaySet.has(value)) {
+          prepDays[eventId] = value;
+        }
+      }
+    }
     const nowMs = ctx.now.getTime();
 
     // Meetings that already have a prep block this week (dedupe on re-run).
@@ -53,8 +83,8 @@ export async function POST(request: NextRequest) {
     // event presence directly so a stale record can never wrongly suppress.
     const preppedTitles = new Set<string>();
     for (const e of ctx.weekEvents) {
-      if (e.title.startsWith(PREP_TITLE_PREFIX)) {
-        preppedTitles.add(normalizePrepKey(e.title.slice(PREP_TITLE_PREFIX.length)));
+      if (isPrepTitle(e.title)) {
+        preppedTitles.add(normalizePrepKey(prepMeetingTitleFromEvent(e.title)));
       }
     }
 
@@ -70,11 +100,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Candidate meetings: future, timed, not a prep block, not already prepped.
+    // Candidate meetings: future, timed, not declined, not a prep block, not
+    // already prepped. A meeting the user has declined isn't being attended, so
+    // don't offer prep for it.
     const candidates = ctx.weekEvents.filter(e => {
       if (e.allDay) return false;
+      if (e.selfResponseStatus === 'declined') return false;
       if (e.startTime.getTime() <= nowMs) return false;
-      if (e.title.startsWith(PREP_TITLE_PREFIX)) return false;
+      if (isPrepTitle(e.title)) return false;
       return !preppedTitles.has(normalizePrepKey(e.title));
     });
 
@@ -152,7 +185,14 @@ export async function POST(request: NextRequest) {
       const key = normalizePrepKey(e.title);
       eventByKey.set(e.id, e);
       if (verdicts.get(key)?.needsPrep) {
-        prepMeetings.push({ eventId: e.id, title: e.title, startMs: e.startTime.getTime(), date: localDateStr(e.startTime) });
+        prepMeetings.push({
+          eventId: e.id,
+          title: e.title,
+          startMs: e.startTime.getTime(),
+          date: localDateStr(e.startTime),
+          ...(prepDurations[e.id] ? { durationMinutes: prepDurations[e.id] } : {}),
+          ...(prepDays[e.id] ? { preferredDate: prepDays[e.id] } : {}),
+        });
       }
     }
 
@@ -162,7 +202,6 @@ export async function POST(request: NextRequest) {
       busyIntervals: ctx.busyIntervals,
       weekStart: ctx.weekStart,
       now: ctx.now,
-      prepDurationMinutes,
     });
     const blockByEventId = new Map(placed.map(b => [b.meeting!.eventId, b]));
     const unplacedIds = new Set(unplaced.map(m => m.eventId));
@@ -190,7 +229,7 @@ export async function POST(request: NextRequest) {
       .filter(e => unplacedIds.has(e.id))
       .map(e => ({ key: normalizePrepKey(e.title), title: e.title }));
 
-    return NextResponse.json({ meetings, unplaced: unplacedRows });
+    return NextResponse.json({ meetings, unplaced: unplacedRows, workingDays: workingDayStrs });
   } catch (error) {
     console.error('Error resolving prep candidates:', error);
     return NextResponse.json(

@@ -15,11 +15,14 @@ import {
   getCustomTaskTypes,
   getAllTaskMetadata,
   getPrepBlocks,
+  getRitualBlocks,
   unscheduleAsanaTask,
   updateAdHocTask,
   deletePrepBlock,
+  deleteRitualBlock,
   removeGoogleEventAttribution,
   type PrepBlock,
+  type RitualBlock,
 } from '@/lib/user-data-storage';
 import { selectStaleRecords, type ReconcileRecord } from '@/lib/scheduling/reconcile';
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations, updateIntegration } from '@/lib/integration-storage';
@@ -177,6 +180,7 @@ async function reconcileDeletedEvents(
   scheduledAsana: ScheduledAsanaTask[],
   adHocTasks: AdHocTask[],
   prepBlocks: PrepBlock[],
+  ritualBlocks: RitualBlock[],
   weekEvents: CalendarEvent[],
   fetchedIntegrationIds: Set<string>,
   weekStartStr: string,
@@ -214,6 +218,15 @@ async function reconcileDeletedEvents(
       date: p.date,
     });
   }
+  for (const r of ritualBlocks) {
+    records.push({
+      kind: 'ritual',
+      id: r.id,
+      googleEventId: r.googleEventId,
+      googleIntegrationId: r.googleIntegrationId,
+      date: r.date,
+    });
+  }
 
   const stale = selectStaleRecords({
     records,
@@ -235,6 +248,8 @@ async function reconcileDeletedEvents(
     } else if (r.kind === 'adhoc') {
       await updateAdHocTask(r.id, { googleEventId: undefined, dueDate: undefined, dueTime: undefined });
       staleAdhocIds.add(r.id);
+    } else if (r.kind === 'ritual') {
+      await deleteRitualBlock(r.id);
     } else {
       await deletePrepBlock(r.id);
     }
@@ -265,7 +280,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   const weekStartStr = format(weekStart, 'yyyy-MM-dd');
   const weekEndStr = format(addDays(weekStart, 6), 'yyyy-MM-dd');
 
-  const [config, scheduledAsanaRaw, adHocTasksRaw, customTypes, metadata, asanaCandidates, fetched, prepBlocksRaw] =
+  const [config, scheduledAsanaRaw, adHocTasksRaw, customTypes, metadata, asanaCandidates, fetched, prepBlocksRaw, ritualBlocksRaw] =
     await Promise.all([
       getWorkflowConfig(),
       getScheduledAsanaTasks(),
@@ -275,6 +290,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
       fetchAsanaCandidates(),
       fetchWeekEvents(weekStart),
       getPrepBlocks(),
+      getRitualBlocks(),
     ]);
 
   const weekEvents = fetched.events;
@@ -289,6 +305,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     scheduledAsanaRaw,
     adHocTasksRaw,
     prepBlocksRaw,
+    ritualBlocksRaw,
     weekEvents,
     fetched.fetchedIntegrationIds,
     weekStartStr,

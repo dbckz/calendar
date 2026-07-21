@@ -11,9 +11,11 @@ import {
   updateAdHocTask,
   setGoogleEventAttribution,
   addPrepBlock,
+  addRitualBlock,
 } from '@/lib/user-data-storage';
 import type { GoogleCalendarCredentials, GoogleIntegration } from '@/types';
 import type { ProposedBlock } from '@/lib/scheduling/types';
+import { eventTitleForBlock } from '@/lib/scheduling/event-titles';
 
 // An accepted proposal is a ProposedBlock, optionally with a user-edited date /
 // start time.
@@ -114,7 +116,7 @@ export async function POST(request: NextRequest) {
       proposal: ProposedBlock
     ): { googleIntegrationId: string; transparency: 'opaque' | 'transparent' } => {
       const fallback = { googleIntegrationId: defaultGoogle!.id, transparency: 'opaque' as const };
-      if (proposal.kind === 'prep') return fallback;
+      if (proposal.kind === 'prep' || proposal.kind === 'ritual') return fallback;
       const tasks = Array.isArray(proposal.tasks)
         ? proposal.tasks
         : proposal.task
@@ -134,18 +136,15 @@ export async function POST(request: NextRequest) {
       try {
         const { start, end } = toStartEnd(proposal.date, proposal.start, proposal.durationMinutes);
         const isPrep = proposal.kind === 'prep';
+        const isRitual = proposal.kind === 'ritual';
         // A grouped block (e.g. Engagement / Outreach) carries a `tasks` list
         // instead of a single `task`: one container event titled with the
         // category, its agenda listed in the description.
         const isGrouped = Array.isArray(proposal.tasks);
-        const isReserved = !isPrep && !isGrouped && !proposal.task;
-        const title = isPrep
-          ? `Prep: ${proposal.meeting?.title ?? proposal.category}`
-          : isGrouped
-            ? proposal.category
-            : isReserved
-              ? `${proposal.category} block`
-              : proposal.task!.title;
+        const isReserved = !isPrep && !isRitual && !isGrouped && !proposal.task;
+        // All app-created events are titled via the shared module (emoji prefix
+        // by category / prep / ritual, one source of truth).
+        const title = eventTitleForBlock(proposal);
 
         // Grouped blocks list their assigned tasks as a bulleted agenda beneath
         // the reason; everything else just uses the reason as the description.
@@ -187,6 +186,17 @@ export async function POST(request: NextRequest) {
               durationMinutes: proposal.durationMinutes,
             });
           }
+        } else if (isRitual) {
+          // Record the ritual block so the planner can dedupe against it, reconcile
+          // it if the user deletes the event, reset it, and re-slot it in replan.
+          await addRitualBlock({
+            googleEventId: event.id,
+            googleIntegrationId: googleIntegration.id,
+            title,
+            date: proposal.date,
+            start: proposal.start,
+            durationMinutes: proposal.durationMinutes,
+          });
         } else if (isGrouped) {
           // Record each listed task as scheduled to the shared container event, so
           // they show as scheduled and drop out of future candidate pools.

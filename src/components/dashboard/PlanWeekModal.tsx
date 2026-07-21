@@ -22,6 +22,7 @@ import {
   type PriorityMatchRow,
   type PrepCandidatesResponse,
   type WeekCandidateCategory,
+  type SpareCapacity,
 } from '@/lib/api';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { AsanaProject, CalendarEvent } from '@/types';
@@ -116,6 +117,62 @@ function blockLengthOptions(defaultMins: number): Array<{ value: number; label: 
   }));
 }
 
+// Rough, human-friendly duration for the spare-capacity line: minutes under an
+// hour read as "45m"; an hour or more rounds to the nearest half hour ("2h",
+// "4.5h").
+function roughDuration(mins: number): string {
+  if (mins < 60) return `${mins}m`;
+  const halves = Math.round(mins / 30) / 2;
+  return `${Number.isInteger(halves) ? halves : halves.toFixed(1)}h`;
+}
+
+// Compact <select> shared by the per-row dropdowns (prep length, prep day, task
+// block length). Those rows are themselves clickable (checkbox / expand), so
+// clicks and changes stop propagation to keep a pick from toggling the row.
+// Option values are strings over the wire; the caller converts as needed.
+function RowSelect({
+  value,
+  options,
+  onChange,
+  ariaLabel,
+  disabled = false,
+  className = '',
+}: {
+  value: string | number;
+  options: Array<{ value: string | number; label: string }>;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <select
+      value={value}
+      onClick={e => e.stopPropagation()}
+      onChange={e => {
+        e.stopPropagation();
+        onChange(e.target.value);
+      }}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      className={`shrink-0 text-xs border border-gray-300 rounded px-1.5 py-1 outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 disabled:opacity-50 ${className}`}
+    >
+      {options.map(o => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// The 15/30/60-minute prep-length options, shared by every prep row.
+const PREP_LENGTH_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 15, label: '15 mins' },
+  { value: 30, label: '30 mins' },
+  { value: 60, label: '1 hour' },
+];
+
 interface EditableProposal extends ProposedBlock {
   accepted: boolean;
 }
@@ -202,19 +259,36 @@ export function PlanWeekModal({
   const [prepBusy, setPrepBusy] = useState(false);
   const [showOtherMeetings, setShowOtherMeetings] = useState(false);
   const [prepEngaged, setPrepEngaged] = useState(false);
-  const [prepDuration, setPrepDuration] = useState(15); // prep block length, mins
+  // Per-meeting prep-length overrides, keyed by eventId. Only explicit picks are
+  // stored; a meeting without an entry defaults to 15 mins.
+  const [prepDurations, setPrepDurations] = useState<Record<string, number>>({});
+  // Per-meeting prep-DAY overrides (yyyy-MM-dd), keyed by eventId. Only explicit
+  // picks are stored; a meeting without an entry uses the default day-before →
+  // day-of placement.
+  const [prepDays, setPrepDays] = useState<Record<string, string>>({});
 
   // Step 3 — tasks
   const [taskCats, setTaskCats] = useState<WeekCandidateCategory[] | null>(null);
   const [selections, setSelections] = useState<Record<string, Set<string>>>({});
   const [tasksEngaged, setTasksEngaged] = useState(false);
-  // Per-week block-length overrides (mins), keyed by category. Only holds
-  // explicit user picks; a category not present here uses its configured default.
+  // Per-week block-length overrides (mins), keyed by category. Now used only for
+  // GROUPED categories (shared containers); single-task categories override per
+  // task via taskDurationOverrides below. Only holds explicit user picks.
   const [taskDurations, setTaskDurations] = useState<Record<string, number>>({});
+  // Per-task block-length overrides (mins), keyed by candidate id (gid/adhocId),
+  // for single-task (non-grouped) categories. Only holds explicit picks; a task
+  // not present here uses its category's default block length.
+  const [taskDurationOverrides, setTaskDurationOverrides] = useState<Record<string, number>>({});
+
+  // Step 3 — "Add more tasks": set when the user returns to the tasks step from
+  // review to spend spare capacity. Lifts the per-category selection cap so
+  // explicit over-quota picks are allowed, and shows a banner on the tasks step.
+  const [addMoreMode, setAddMoreMode] = useState(false);
 
   // Step 4 — review / done
   const [proposals, setProposals] = useState<EditableProposal[]>([]);
   const [quotaSummary, setQuotaSummary] = useState<QuotaSummaryRow[]>([]);
+  const [spareCapacity, setSpareCapacity] = useState<SpareCapacity | null>(null);
   const [weekLabel, setWeekLabel] = useState('');
   const [isConfirming, setIsConfirming] = useState(false);
   const [results, setResults] = useState<Record<string, ConfirmWeekResult>>({});
@@ -239,13 +313,17 @@ export function PlanWeekModal({
     setPrepBusy(false);
     setShowOtherMeetings(false);
     setPrepEngaged(false);
-    setPrepDuration(15);
+    setPrepDurations({});
+    setPrepDays({});
     setTaskCats(null);
     setSelections({});
     setTasksEngaged(false);
     setTaskDurations({});
+    setTaskDurationOverrides({});
+    setAddMoreMode(false);
     setProposals([]);
     setQuotaSummary([]);
+    setSpareCapacity(null);
     setWeekLabel('');
     setIsConfirming(false);
     setResults({});
@@ -339,26 +417,39 @@ export function PlanWeekModal({
 
   // --- Data fetching per step ---
 
-  const fetchPrep = useCallback(async (durationMinutes = prepDuration) => {
+  const fetchPrep = useCallback(async (durations = prepDurations, days = prepDays) => {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await api.getPrepCandidates(undefined, durationMinutes);
+      const data = await api.getPrepCandidates(undefined, durations, days);
       setPrepData(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load meeting prep');
     } finally {
       setIsLoading(false);
     }
-  }, [prepDuration]);
+  }, [prepDurations, prepDays]);
 
-  // Changing the per-meeting prep length re-proposes slots (blocks are longer).
+  // Overriding one meeting's prep length re-proposes slots with the full maps so
+  // the proposed blocks re-flow around the new (possibly longer) block.
   const changePrepDuration = useCallback(
-    (durationMinutes: number) => {
-      setPrepDuration(durationMinutes);
-      fetchPrep(durationMinutes);
+    (eventId: string, durationMinutes: number) => {
+      const next = { ...prepDurations, [eventId]: durationMinutes };
+      setPrepDurations(next);
+      fetchPrep(next, prepDays);
     },
-    [fetchPrep]
+    [prepDurations, prepDays, fetchPrep]
+  );
+
+  // Overriding one meeting's prep DAY re-proposes slots with the full maps so the
+  // block moves to the chosen day (falling back if nothing fits there).
+  const changePrepDay = useCallback(
+    (eventId: string, date: string) => {
+      const next = { ...prepDays, [eventId]: date };
+      setPrepDays(next);
+      fetchPrep(prepDurations, next);
+    },
+    [prepDays, prepDurations, fetchPrep]
   );
 
   const fetchTasks = useCallback(async () => {
@@ -416,9 +507,11 @@ export function PlanWeekModal({
         body.selections = selObj;
       }
       if (Object.keys(taskDurations).length) body.durationOverrides = taskDurations;
+      if (Object.keys(taskDurationOverrides).length) body.taskDurationOverrides = taskDurationOverrides;
       const data: ProposeWeekResponse = await api.proposeWeeklyPlan(body);
       setProposals(data.proposals.map(p => ({ ...p, accepted: true })));
       setQuotaSummary(data.quotaSummary);
+      setSpareCapacity(data.spareCapacity ?? null);
       setWeekLabel(
         `${format(parseISO(data.weekStart), 'MMM d')} – ${format(parseISO(data.weekEnd), 'MMM d')}`
       );
@@ -427,7 +520,7 @@ export function PlanWeekModal({
     } finally {
       setIsLoading(false);
     }
-  }, [priorityIds, categoryOverrides, prepEngaged, acceptedPrepBlocks, tasksEngaged, taskCats, selections, taskDurations]);
+  }, [priorityIds, categoryOverrides, prepEngaged, acceptedPrepBlocks, tasksEngaged, taskCats, selections, taskDurations, taskDurationOverrides]);
 
   // Lazy-fetch on entering a step. Prep/tasks fetch once (cached); review
   // re-proposes each entry since it depends on prior steps' choices.
@@ -550,7 +643,7 @@ export function PlanWeekModal({
       setError(null);
       try {
         await api.setPrepDecision(title, needsPrep);
-        const data = await api.getPrepCandidates(undefined, prepDuration);
+        const data = await api.getPrepCandidates(undefined, prepDurations, prepDays);
         setPrepData(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to update prep decision');
@@ -558,7 +651,7 @@ export function PlanWeekModal({
         setPrepBusy(false);
       }
     },
-    [prepDuration]
+    [prepDurations, prepDays]
   );
 
   // --- Step 3 actions ---
@@ -572,6 +665,14 @@ export function PlanWeekModal({
       return { ...prev, [category]: set };
     });
   };
+
+  // Return to the tasks step from review to spend spare capacity. Selections are
+  // preserved (kept in state); addMoreMode lifts the per-category selection cap so
+  // the user can pick beyond a quota, and those extra picks get scheduled.
+  const addMoreTasks = useCallback(() => {
+    setAddMoreMode(true);
+    setStep('tasks');
+  }, []);
 
   // --- Step 4 actions ---
 
@@ -616,6 +717,7 @@ export function PlanWeekModal({
         reason: p.reason,
         kind: p.kind,
         meeting: p.meeting,
+        title: p.title,
       }));
       const { results: res } = await api.confirmWeeklyPlan(blocks);
       const map: Record<string, ConfirmWeekResult> = {};
@@ -1123,23 +1225,25 @@ export function PlanWeekModal({
     }
     const suggested = prepData.meetings.filter(m => m.needsPrep && m.block);
     const others = prepData.meetings.filter(m => !m.needsPrep);
+    const workingDays = prepData.workingDays ?? [];
+
+    // Per-meeting prep-day options: every working day from now up to and
+    // including the meeting's day. Labels: the meeting day is "Day of", the day
+    // immediately before is "Day before", the rest are "EEE d" (e.g. "Mon 20").
+    const dayOptionsFor = (meetingDate: string): Array<{ value: string; label: string }> => {
+      const md = parseISO(meetingDate);
+      const dayBefore = format(new Date(md.getFullYear(), md.getMonth(), md.getDate() - 1), 'yyyy-MM-dd');
+      return workingDays
+        .filter(d => d <= meetingDate)
+        .map(d => ({
+          value: d,
+          label:
+            d === meetingDate ? 'Day of' : d === dayBefore ? 'Day before' : format(parseISO(d), 'EEE d'),
+        }));
+    };
 
     return (
       <div className={`space-y-5 ${prepBusy ? 'opacity-60 pointer-events-none' : ''}`}>
-        <label className="flex items-center gap-2 text-sm text-gray-600">
-          Prep time per meeting
-          <select
-            value={prepDuration}
-            onChange={e => changePrepDuration(Number(e.target.value))}
-            disabled={prepBusy || isLoading}
-            className="text-sm border border-gray-300 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 disabled:opacity-50"
-          >
-            <option value={15}>15 mins</option>
-            <option value={30}>30 mins</option>
-            <option value={60}>1 hour</option>
-          </select>
-        </label>
-
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
             Suggested prep
@@ -1172,6 +1276,22 @@ export function PlanWeekModal({
                         · {m.reason}
                       </p>
                     </div>
+                    <RowSelect
+                      value={prepDurations[m.eventId] ?? 15}
+                      options={PREP_LENGTH_OPTIONS}
+                      onChange={v => changePrepDuration(m.eventId, Number(v))}
+                      disabled={prepBusy || isLoading}
+                      ariaLabel={`Prep length for ${m.title}`}
+                      className="mt-0.5"
+                    />
+                    <RowSelect
+                      value={prepDays[m.eventId] ?? b.date}
+                      options={dayOptionsFor(m.date)}
+                      onChange={v => changePrepDay(m.eventId, v)}
+                      disabled={prepBusy || isLoading}
+                      ariaLabel={`Prep day for ${m.title}`}
+                      className="mt-0.5"
+                    />
                   </li>
                 );
               })}
@@ -1243,8 +1363,30 @@ export function PlanWeekModal({
         </p>
       );
     }
+
+    // Compact per-task block-length select for single-task category rows. Default
+    // = the category's target length; only explicit picks are stored in
+    // taskDurationOverrides.
+    const renderTaskDurationSelect = (candidateId: string, defaultDuration: number) => (
+      <RowSelect
+        value={taskDurationOverrides[candidateId] ?? defaultDuration}
+        options={blockLengthOptions(defaultDuration)}
+        onChange={v =>
+          setTaskDurationOverrides(prev => ({ ...prev, [candidateId]: Number(v) }))
+        }
+        ariaLabel="Block length"
+      />
+    );
+
     return (
       <div className="space-y-5">
+        {addMoreMode && (
+          <div className="rounded-lg bg-orange-50 border border-orange-200 p-3 text-sm text-orange-800">
+            {spareCapacity && spareCapacity.totalMinutes > 0
+              ? `You have ~${roughDuration(spareCapacity.totalMinutes)} spare — pick extra tasks to fill it. Quota caps are lifted here, so you can select beyond a category's weekly target.`
+              : `Pick extra tasks to fill your remaining free time. Quota caps are lifted here, so you can select beyond a category's weekly target.`}
+          </div>
+        )}
         {taskCats.map(cat => {
           const color = categoryColor(cat.category);
           const picked = selections[cat.category] ?? new Set<string>();
@@ -1253,6 +1395,9 @@ export function PlanWeekModal({
             ? cat.candidates.length
             : Math.min(cat.remainingQuota, cat.candidates.length);
           const defaultDuration = cat.targetLengthMinutes || 30;
+          // Effective selection cap: "Add more tasks" mode lifts every category's
+          // cap (null = unlimited) so the user can over-select beyond quota.
+          const cap = addMoreMode ? null : cat.remainingQuota;
           return (
             <div key={cat.category} className="rounded-lg border border-gray-200 p-3">
               <div className="flex items-center justify-between gap-2 mb-2">
@@ -1267,41 +1412,47 @@ export function PlanWeekModal({
                     <span className="text-[11px] text-gray-400">
                       Auto-picking {autoN} task{autoN === 1 ? '' : 's'}
                     </span>
-                  ) : cat.remainingQuota === null ? (
+                  ) : cap === null ? (
                     <span className="text-[11px] text-gray-400">
                       Pick any · {picked.size} selected
                     </span>
                   ) : (
                     <span className="text-[11px] text-gray-400">
-                      Pick up to {cat.remainingQuota} · {picked.size} selected
+                      Pick up to {cap} · {picked.size} selected
                     </span>
                   )}
-                  <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
-                    Block length
-                    <select
-                      value={taskDurations[cat.category] ?? defaultDuration}
-                      onChange={e =>
-                        setTaskDurations(prev => ({ ...prev, [cat.category]: Number(e.target.value) }))
-                      }
-                      className="text-sm border border-gray-300 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
-                    >
-                      {blockLengthOptions(defaultDuration).map(o => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  {/* Grouped categories are shared containers, so their length is
+                      set once at the category level. Single-task categories set
+                      length per task on each row below. */}
+                  {cat.grouped && (
+                    <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                      Block length
+                      <select
+                        value={taskDurations[cat.category] ?? defaultDuration}
+                        onChange={e =>
+                          setTaskDurations(prev => ({ ...prev, [cat.category]: Number(e.target.value) }))
+                        }
+                        className="text-sm border border-gray-300 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                      >
+                        {blockLengthOptions(defaultDuration).map(o => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                 </div>
               </div>
 
               {cat.candidates.length === 0 ? (
                 <p className="text-xs text-gray-400 italic">No candidate tasks.</p>
               ) : cat.autoSelect ? (
-                <ul className="space-y-1">
+                <ul className="space-y-1.5">
                   {cat.candidates.slice(0, autoN).map(c => (
-                    <li key={c.id} className="text-sm text-gray-500 truncate">
-                      {c.title}
+                    <li key={c.id} className="flex items-center gap-2">
+                      <span className="text-sm text-gray-500 truncate flex-1">{c.title}</span>
+                      {!cat.grouped && renderTaskDurationSelect(c.id, defaultDuration)}
                     </li>
                   ))}
                 </ul>
@@ -1310,17 +1461,14 @@ export function PlanWeekModal({
                   <ul className="space-y-1.5">
                     {cat.candidates.map(c => {
                       const checked = picked.has(c.id);
-                      const atCap =
-                        cat.remainingQuota !== null && picked.size >= cat.remainingQuota;
+                      const atCap = cap !== null && picked.size >= cap;
                       return (
                         <li key={c.id} className="flex items-center gap-2">
                           <input
                             type="checkbox"
                             checked={checked}
                             disabled={!checked && atCap}
-                            onChange={() =>
-                              toggleSelection(cat.category, c.id, cat.remainingQuota)
-                            }
+                            onChange={() => toggleSelection(cat.category, c.id, cap)}
                             className="w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500 disabled:opacity-40"
                           />
                           {c.isPriority && (
@@ -1332,14 +1480,15 @@ export function PlanWeekModal({
                               {format(parseISO(c.dueDate), 'MMM d')}
                             </span>
                           )}
+                          {!cat.grouped && renderTaskDurationSelect(c.id, defaultDuration)}
                         </li>
                       );
                     })}
                   </ul>
-                  {cat.remainingQuota !== null && picked.size < cat.remainingQuota && (
+                  {cap !== null && picked.size < cap && (
                     <p className="mt-2 text-[11px] text-gray-400">
-                      {cat.remainingQuota - picked.size} unpicked slot
-                      {cat.remainingQuota - picked.size === 1 ? '' : 's'} will be kept as reserved
+                      {cap - picked.size} unpicked slot
+                      {cap - picked.size === 1 ? '' : 's'} will be kept as reserved
                       time.
                     </p>
                   )}
@@ -1387,16 +1536,19 @@ export function PlanWeekModal({
               <ul className="space-y-2">
                 {group.items.map(p => {
                   const isPrep = p.kind === 'prep';
+                  const isRitual = p.kind === 'ritual';
                   const isGrouped = Array.isArray(p.tasks);
                   const color = categoryColor(p.category);
                   const result = results[p.id];
                   const label = isPrep
                     ? p.meeting?.title ?? 'Prep'
-                    : isGrouped
-                      ? `${p.tasks!.length} task${p.tasks!.length === 1 ? '' : 's'}`
-                      : p.task
-                        ? p.task.title
-                        : 'Reserved';
+                    : isRitual
+                      ? p.title ?? p.category
+                      : isGrouped
+                        ? `${p.tasks!.length} task${p.tasks!.length === 1 ? '' : 's'}`
+                        : p.task
+                          ? p.task.title
+                          : 'Reserved';
                   return (
                     <li
                       key={p.id}
@@ -1417,6 +1569,11 @@ export function PlanWeekModal({
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-600">
                               <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
                               Prep
+                            </span>
+                          ) : isRitual ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-teal-100 text-teal-700">
+                              <span className="w-1.5 h-1.5 rounded-full bg-teal-400" />
+                              Ritual
                             </span>
                           ) : (
                             <span
@@ -1468,6 +1625,37 @@ export function PlanWeekModal({
             </div>
           ))}
         </div>
+
+        {/* Spare capacity — how much usable free work time is left this week, with
+            an affordance to go back and pick more tasks when there's room. Hidden
+            once the plan has been confirmed (results shown). */}
+        {spareCapacity && !hasResults && (
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-gray-50 border border-gray-200 p-3">
+            <p className="text-sm text-gray-600">
+              {spareCapacity.totalMinutes > 0 ? (
+                <>
+                  You still have ~<span className="font-medium text-gray-800">{roughDuration(spareCapacity.totalMinutes)}</span>{' '}
+                  of usable free time this week
+                  {spareCapacity.largestGapMinutes > 0 && (
+                    <> (largest gap {roughDuration(spareCapacity.largestGapMinutes)})</>
+                  )}
+                  .
+                </>
+              ) : (
+                <>No usable free time left this week — your plan fills the working hours.</>
+              )}
+            </p>
+            {spareCapacity.totalMinutes >= 60 && (
+              <button
+                onClick={addMoreTasks}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-orange-600 border border-orange-300 rounded-lg hover:bg-orange-50 transition-colors"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                Add more tasks
+              </button>
+            )}
+          </div>
+        )}
       </>
     );
   }

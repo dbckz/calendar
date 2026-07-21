@@ -21,6 +21,12 @@ export interface CalendarEvent {
   calendarName?: string;     // Display name of the sub-calendar
   recurringEventId?: string; // Set when this event is an instance of a recurring series
   attendeeCount?: number;    // Number of attendees on the event (separates meetings from solo blocks)
+  // The current user's own RSVP response for this event ('accepted', 'declined',
+  // 'tentative', 'needsAction'), taken from the attendee whose self flag is true.
+  // Undefined when the user isn't in the attendee list (e.g. an event they own
+  // with no other attendees) — treated as attending. A 'declined' event is shown
+  // in the UI but ignored by scheduling (it doesn't block free time).
+  selfResponseStatus?: string;
   // Asana-specific fields
   projects?: Array<{ gid: string; name: string }>;
   customFields?: AsanaCustomField[];

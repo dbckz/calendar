@@ -125,7 +125,7 @@ function formatDateOnly(date: Date): string {
 }
 
 function toCalendarEvent(
-  event: { id?: string | null; summary?: string | null; description?: string | null; start?: { date?: string | null; dateTime?: string | null } | null; end?: { date?: string | null; dateTime?: string | null } | null; colorId?: string | null; location?: string | null; recurringEventId?: string | null; attendees?: unknown[] | null },
+  event: { id?: string | null; summary?: string | null; description?: string | null; start?: { date?: string | null; dateTime?: string | null } | null; end?: { date?: string | null; dateTime?: string | null } | null; colorId?: string | null; location?: string | null; recurringEventId?: string | null; attendees?: Array<{ self?: boolean | null; responseStatus?: string | null }> | null },
   fallbackColor: string,
   calendarId?: string
 ): CalendarEvent {
@@ -136,6 +136,10 @@ function toCalendarEvent(
   const endTime = isAllDay
     ? parseGoogleDateOnly(event.end?.date || '')
     : new Date(event.end?.dateTime || '');
+
+  // The user's own RSVP, from the attendee flagged self:true. Absent when the
+  // user isn't listed (e.g. an event they own solo) → left undefined (attending).
+  const selfAttendee = event.attendees?.find(a => a?.self === true);
 
   return {
     id: event.id!,
@@ -150,6 +154,7 @@ function toCalendarEvent(
     calendarId,
     recurringEventId: event.recurringEventId || undefined,
     attendeeCount: event.attendees?.length,
+    selfResponseStatus: selfAttendee?.responseStatus || undefined,
   };
 }
 

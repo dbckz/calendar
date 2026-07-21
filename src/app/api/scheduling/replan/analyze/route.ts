@@ -9,8 +9,11 @@ import {
   getAdHocTasks,
   getCustomTaskTypes,
   getPrepBlocks,
+  getRitualBlocks,
   getBlockDoneOverrides,
 } from '@/lib/user-data-storage';
+import { isLunchTitle } from '@/lib/scheduling/rituals';
+import { prepTitle } from '@/lib/scheduling/event-titles';
 import type { ScheduledAsanaTask } from '@/types';
 
 const MS_PER_MINUTE = 60 * 1000;
@@ -25,11 +28,12 @@ export async function POST(request: NextRequest) {
     const weekStartParam = typeof body?.weekStart === 'string' ? body.weekStart : undefined;
 
     const ctx = await gatherWeekContext(weekStartParam);
-    const [scheduledAsana, adHocTasks, customTypes, prepBlocks, doneOverrides] = await Promise.all([
+    const [scheduledAsana, adHocTasks, customTypes, prepBlocks, ritualBlocks, doneOverrides] = await Promise.all([
       getScheduledAsanaTasks(),
       getAdHocTasks(),
       getCustomTaskTypes(),
       getPrepBlocks(),
+      getRitualBlocks(),
       getBlockDoneOverrides(),
     ]);
 
@@ -140,11 +144,34 @@ export async function POST(request: NextRequest) {
         date: p.date,
         start: p.start,
         durationMinutes: p.durationMinutes,
-        titles: [`Prep: ${p.meetingTitle}`],
+        titles: [prepTitle(p.meetingTitle)],
         done: p.done || !!doneOverrides[p.googleEventId],
         startMs,
         endMs,
         ...(Number.isNaN(meetingStartMs) ? {} : { mustEndBeforeMs: meetingStartMs }),
+      });
+    }
+
+    // Daily ritual blocks (lunch/emails). Never "missed" — only a future ritual
+    // that now conflicts with a meeting is moved (lunch re-slotted to its window).
+    for (const r of ritualBlocks) {
+      if (!inWeek(r.date)) continue;
+      appEventIds.add(r.googleEventId);
+      const lunch = isLunchTitle(r.title);
+      const { startMs, endMs } = intervalFor(r.googleEventId, r.date, r.start, r.durationMinutes);
+      blocks.push({
+        googleEventId: r.googleEventId,
+        googleIntegrationId: r.googleIntegrationId,
+        category: lunch ? 'Lunch' : 'Emails',
+        date: r.date,
+        start: r.start,
+        durationMinutes: r.durationMinutes,
+        titles: [r.title],
+        done: false, // rituals are never "done"
+        startMs,
+        endMs,
+        ritualKind: lunch ? 'lunch' : 'emails',
+        isBreak: lunch,
       });
     }
 

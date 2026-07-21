@@ -10,15 +10,18 @@ import {
   getScheduledAsanaTasks,
   getAdHocTasks,
   getPrepBlocks,
+  getRitualBlocks,
   unscheduleAsanaTask,
   updateAdHocTask,
   deletePrepBlock,
+  deleteRitualBlock,
   removeGoogleEventAttribution,
   removeBlockDoneOverride,
 } from '@/lib/user-data-storage';
 import {
   splitWeekResetEvents,
   selectUntrackedPrepEvents,
+  selectUntrackedRitualEvents,
   type ResetEvent,
   type WeekCalendarEvent,
 } from '@/lib/scheduling/reset';
@@ -57,10 +60,11 @@ export async function POST(request: NextRequest) {
     const weekEndStr = format(addDays(weekStart, 6), 'yyyy-MM-dd');
     const inWeek = (d?: string): boolean => !!d && d >= weekStartStr && d <= weekEndStr;
 
-    const [scheduledAsana, adHocTasks, prepBlocks, weekFetch] = await Promise.all([
+    const [scheduledAsana, adHocTasks, prepBlocks, ritualBlocks, weekFetch] = await Promise.all([
       getScheduledAsanaTasks(),
       getAdHocTasks(),
       getPrepBlocks(),
+      getRitualBlocks(),
       fetchWeekEvents(weekStart),
     ]);
 
@@ -90,6 +94,14 @@ export async function POST(request: NextRequest) {
         startMs: toMs(p.date, p.start),
       });
     }
+    const ritualInWeek = ritualBlocks.filter(r => inWeek(r.date));
+    for (const r of ritualInWeek) {
+      events.push({
+        googleEventId: r.googleEventId,
+        googleIntegrationId: r.googleIntegrationId,
+        startMs: toMs(r.date, r.start),
+      });
+    }
 
     const { toDelete } = splitWeekResetEvents(events, now.getTime());
 
@@ -106,7 +118,8 @@ export async function POST(request: NextRequest) {
       calendarId: e.calendarId,
     }));
     const untrackedPrep = selectUntrackedPrepEvents(weekCalendarEvents, trackedEventIds, now.getTime());
-    const allToDelete = [...toDelete, ...untrackedPrep];
+    const untrackedRituals = selectUntrackedRitualEvents(weekCalendarEvents, trackedEventIds, now.getTime());
+    const allToDelete = [...toDelete, ...untrackedPrep, ...untrackedRituals];
 
     // --- Delete the future events from the calendar ---
     const enabledGoogle = await getEnabledGoogleIntegrations();
@@ -170,6 +183,11 @@ export async function POST(request: NextRequest) {
     for (const p of prepInWeek) {
       await deletePrepBlock(p.id);
       removedEventIds.add(p.googleEventId);
+      recordsCleared += 1;
+    }
+    for (const r of ritualInWeek) {
+      await deleteRitualBlock(r.id);
+      removedEventIds.add(r.googleEventId);
       recordsCleared += 1;
     }
 

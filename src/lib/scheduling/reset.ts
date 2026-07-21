@@ -6,10 +6,8 @@
 // deterministic, I/O-free decision the reset route feeds with the week's blocks
 // and then acts on (deleting the future ones, clearing every in-week record).
 
-// The app's meeting-prep event titles all start with this prefix. Shared so the
-// prep-candidates route (title dedupe) and reset (untracked-prep cleanup) agree
-// on the convention instead of each hard-coding the literal.
-export const PREP_TITLE_PREFIX = 'Prep: ';
+import { isPrepTitle } from './event-titles';
+import { RITUAL_TITLES } from './rituals';
 
 export interface ResetEvent {
   googleEventId: string;
@@ -77,7 +75,36 @@ export function selectUntrackedPrepEvents(
 
   for (const e of events) {
     if (!e.id || seen.has(e.id) || trackedEventIds.has(e.id)) continue;
-    if (!e.title.startsWith(PREP_TITLE_PREFIX)) continue;
+    if (!isPrepTitle(e.title)) continue;
+    if (e.startMs <= nowMs) continue; // past → leave as history
+    seen.add(e.id);
+    out.push({
+      googleEventId: e.id,
+      googleIntegrationId: e.integrationId,
+      calendarId: e.calendarId,
+      startMs: e.startMs,
+    });
+  }
+
+  return out;
+}
+
+// Pick the FUTURE ritual-titled ("🍽️ Lunch" / "📧 Emails") calendar events that
+// have NO stored record — rituals created before ritual-block tracking existed,
+// or whose record was lost. Mirrors selectUntrackedPrepEvents (exact title match,
+// untracked-only, future-only) so reset clears them too and their titles don't
+// suppress re-proposing the ritual for that day.
+export function selectUntrackedRitualEvents(
+  events: WeekCalendarEvent[],
+  trackedEventIds: Set<string>,
+  nowMs: number
+): ResetEvent[] {
+  const out: ResetEvent[] = [];
+  const seen = new Set<string>();
+
+  for (const e of events) {
+    if (!e.id || seen.has(e.id) || trackedEventIds.has(e.id)) continue;
+    if (!RITUAL_TITLES.includes(e.title.trim())) continue;
     if (e.startMs <= nowMs) continue; // past → leave as history
     seen.add(e.id);
     out.push({

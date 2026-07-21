@@ -78,6 +78,20 @@ describe('eventsToBusyIntervals', () => {
     expect(busy).toHaveLength(0);
   });
 
+  it('excludes declined events but keeps accepted / needsAction / tentative / unset', () => {
+    const busy = eventsToBusyIntervals([
+      { startTime: d('2026-07-13T09:00:00'), endTime: d('2026-07-13T10:00:00'), selfResponseStatus: 'declined' },
+      { startTime: d('2026-07-13T11:00:00'), endTime: d('2026-07-13T12:00:00'), selfResponseStatus: 'accepted' },
+      { startTime: d('2026-07-13T13:00:00'), endTime: d('2026-07-13T14:00:00'), selfResponseStatus: 'needsAction' },
+      { startTime: d('2026-07-13T15:00:00'), endTime: d('2026-07-13T16:00:00'), selfResponseStatus: 'tentative' },
+      { startTime: d('2026-07-13T16:30:00'), endTime: d('2026-07-13T17:00:00') },
+    ]);
+    expect(busy).toHaveLength(4);
+    expect(
+      busy.some(b => b.start.getTime() === d('2026-07-13T09:00:00').getTime())
+    ).toBe(false);
+  });
+
   it('merges overlapping timed events across the list', () => {
     const busy = eventsToBusyIntervals([
       { startTime: d('2026-07-13T09:00:00'), endTime: d('2026-07-13T10:00:00') },
@@ -85,5 +99,26 @@ describe('eventsToBusyIntervals', () => {
     ]);
     expect(busy).toHaveLength(1);
     expect(busy[0].end).toEqual(d('2026-07-13T11:00:00'));
+  });
+
+  it('tags a lunch-ritual event as a break and keeps it separate from an adjacent meeting', () => {
+    const busy = eventsToBusyIntervals([
+      { title: '🍽️ Lunch', startTime: d('2026-07-13T12:00:00'), endTime: d('2026-07-13T12:30:00') },
+      { title: 'Standup', startTime: d('2026-07-13T12:30:00'), endTime: d('2026-07-13T13:00:00') },
+    ]);
+    // The break is NOT merged into the touching meeting: two intervals remain.
+    expect(busy).toHaveLength(2);
+    const lunch = busy.find(b => b.start.getTime() === d('2026-07-13T12:00:00').getTime());
+    const meeting = busy.find(b => b.start.getTime() === d('2026-07-13T12:30:00').getTime());
+    expect(lunch?.isBreak).toBe(true);
+    expect(meeting?.isBreak).toBeFalsy();
+  });
+
+  it('treats an emails-ritual event as ordinary work (not a break)', () => {
+    const busy = eventsToBusyIntervals([
+      { title: '📧 Emails', startTime: d('2026-07-13T16:00:00'), endTime: d('2026-07-13T16:30:00') },
+    ]);
+    expect(busy).toHaveLength(1);
+    expect(busy[0].isBreak).toBeFalsy();
   });
 });

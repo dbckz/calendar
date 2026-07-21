@@ -360,3 +360,74 @@ describe('planReplan - meeting prep blocks', () => {
     expect(kept).toHaveLength(1);
   });
 });
+
+describe('planReplan - ritual blocks', () => {
+  it('never treats a past, undone lunch ritual as missed (keeps it, does not re-slot)', () => {
+    const { moves, kept, stale } = run({
+      blocks: [
+        block({
+          googleEventId: 'lunch',
+          date: '2026-07-13', // Monday, already past
+          start: '12:00',
+          durationMinutes: 30,
+          category: 'Lunch',
+          titles: ['🍽️ Lunch'],
+          ritualKind: 'lunch',
+          isBreak: true,
+        }),
+      ],
+      now: WED_8AM,
+    });
+    expect(moves).toHaveLength(0);
+    expect(stale).toHaveLength(0);
+    expect(kept).toHaveLength(1);
+    expect(kept[0].googleEventId).toBe('lunch');
+  });
+
+  it('re-slots a future lunch that now conflicts with a meeting into its 11:30–13:00 window', () => {
+    const { moves } = run({
+      blocks: [
+        block({
+          googleEventId: 'lunch',
+          date: '2026-07-15', // Wednesday, future
+          start: '12:00',
+          durationMinutes: 30,
+          category: 'Lunch',
+          titles: ['🍽️ Lunch'],
+          ritualKind: 'lunch',
+          isBreak: true,
+        }),
+      ],
+      otherBusy: [busy(15, 12, 0, 12, 30)], // meeting booked over the lunch slot
+      now: WED_8AM,
+    });
+    expect(moves).toHaveLength(1);
+    expect(moves[0].reason).toBe('conflict');
+    // Re-slotted within the lunch window, avoiding the 12:00–12:30 meeting.
+    expect(moves[0].newStart >= '11:30' && moves[0].newStart <= '13:00').toBe(true);
+    expect(moves[0].newStart).not.toBe('12:00');
+  });
+
+  it('re-slots a conflicted emails ritual toward the end of the working day', () => {
+    const { moves } = run({
+      blocks: [
+        block({
+          googleEventId: 'emails',
+          date: '2026-07-15',
+          start: '16:00',
+          durationMinutes: 30,
+          category: 'Emails',
+          titles: ['📧 Emails'],
+          ritualKind: 'emails',
+        }),
+      ],
+      otherBusy: [busy(15, 16, 0, 16, 30)], // meeting over the emails slot
+      now: WED_8AM,
+    });
+    expect(moves).toHaveLength(1);
+    expect(moves[0].reason).toBe('conflict');
+    // Stays in the final two hours (15:00–17:00), not on the taken 16:00 slot.
+    expect(moves[0].newStart >= '15:00').toBe(true);
+    expect(moves[0].newStart).not.toBe('16:00');
+  });
+});

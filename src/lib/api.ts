@@ -13,11 +13,27 @@ export interface QuotaSummaryRow {
   unmet: number;
 }
 
+// Usable free work time left in the remaining week after a plan is proposed.
+export interface SpareCapacityRow {
+  date: string; // yyyy-MM-dd
+  freeMinutes: number;
+}
+
+export interface SpareCapacity {
+  totalMinutes: number;
+  gapCount: number;
+  largestGapMinutes: number;
+  byDate: SpareCapacityRow[];
+}
+
 export interface ProposeWeekResponse {
   weekStart: string;
   weekEnd: string;
   proposals: ProposedBlock[];
   quotaSummary: QuotaSummaryRow[];
+  // Absent on older responses; the review step shows a spare-capacity line and
+  // an "Add more tasks" affordance when present.
+  spareCapacity?: SpareCapacity;
 }
 
 export interface ConfirmWeekResult {
@@ -35,7 +51,8 @@ export interface ProposeWeekRequest {
   priorityGids?: string[];
   categoryOverrides?: Record<string, string>; // candidate id -> category
   prepBlocks?: ProposedBlock[];
-  durationOverrides?: Record<string, number>; // category -> per-week block length (mins)
+  durationOverrides?: Record<string, number>; // grouped category -> per-week block length (mins)
+  taskDurationOverrides?: Record<string, number>; // task id (gid/adhocId) -> block length (mins)
 }
 
 export interface PriorityMatchRow {
@@ -70,6 +87,9 @@ export interface PrepMeetingRow {
 export interface PrepCandidatesResponse {
   meetings: PrepMeetingRow[];
   unplaced: Array<{ key: string; title: string }>;
+  // Working days (yyyy-MM-dd) of the remaining week, for the per-meeting prep-day
+  // dropdown. Absent on older responses.
+  workingDays?: string[];
 }
 
 export interface WeekCandidate {
@@ -858,7 +878,8 @@ export const api = {
   // Wizard step 2: which meetings need prep, with proposed slots.
   async getPrepCandidates(
     weekStart?: string,
-    prepDurationMinutes?: number
+    prepDurations?: Record<string, number>,
+    prepDays?: Record<string, string>
   ): Promise<PrepCandidatesResponse> {
     return fetchWithRetry<PrepCandidatesResponse>(
       '/api/scheduling/prep/candidates',
@@ -867,7 +888,8 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...(weekStart ? { weekStart } : {}),
-          ...(prepDurationMinutes ? { prepDurationMinutes } : {}),
+          ...(prepDurations && Object.keys(prepDurations).length ? { prepDurations } : {}),
+          ...(prepDays && Object.keys(prepDays).length ? { prepDays } : {}),
         }),
       },
       { maxRetries: 0 }

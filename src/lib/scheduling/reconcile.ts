@@ -10,7 +10,7 @@
 // It is I/O-free and deterministic so it can be unit-tested in isolation; the
 // gather step feeds it the fetched events and applies the purge.
 
-export type ReconcileRecordKind = 'asana' | 'adhoc' | 'prep';
+export type ReconcileRecordKind = 'asana' | 'adhoc' | 'prep' | 'ritual';
 
 // A stored record that owns a Google event. `id` identifies the record within
 // its store (schedule-entry id / ad-hoc id / prep-block id). `date` is the
