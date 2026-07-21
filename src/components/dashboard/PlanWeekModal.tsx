@@ -1175,6 +1175,16 @@ export function PlanWeekModal({
                         <Check className="w-3 h-3" />
                         Matched: {row.match.title}
                       </span>
+                      {(() => {
+                        const name = matchMeta.asanaIntegrations.find(
+                          i => i.id === row.match!.integrationId
+                        )?.name;
+                        return name ? (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide bg-gray-100 text-gray-500 flex-shrink-0">
+                            {name}
+                          </span>
+                        ) : null;
+                      })()}
                       {row.match.category ? (
                         <span
                           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color!.bg} ${color!.text}`}
@@ -1489,6 +1499,15 @@ export function PlanWeekModal({
       );
     };
 
+    // Tiny muted pill showing which Asana integration/workspace a task comes
+    // from (e.g. "DBC" / "OM"). Nothing rendered for ad-hoc tasks.
+    const renderIntegrationBadge = (name?: string) =>
+      name ? (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide bg-gray-100 text-gray-500 flex-shrink-0">
+          {name}
+        </span>
+      ) : null;
+
     // "Must do this week" toggle for a selectable row.
     const renderMustDo = (category: string, id: string) => {
       const on = mustDoIds.has(id);
@@ -1603,6 +1622,7 @@ export function PlanWeekModal({
                   {cat.candidates.slice(0, autoN).map(c => (
                     <li key={c.id} className="flex items-center gap-2">
                       <span className="text-sm text-gray-500 truncate flex-1">{c.title}</span>
+                      {renderIntegrationBadge(c.integrationName)}
                       {renderAsanaControls(c)}
                       {!cat.grouped && renderTaskDurationSelect(c.id, defaultDuration)}
                     </li>
@@ -1629,6 +1649,7 @@ export function PlanWeekModal({
                             <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400 flex-shrink-0" />
                           )}
                           <span className="text-sm text-gray-700 truncate flex-1">{c.title}</span>
+                          {renderIntegrationBadge(c.integrationName)}
                           {c.dueDate && (
                             <span className="text-[11px] text-gray-400 flex-shrink-0">
                               {format(parseISO(c.dueDate), 'MMM d')}

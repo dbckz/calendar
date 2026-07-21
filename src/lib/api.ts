@@ -102,6 +102,9 @@ export interface WeekCandidate {
   // Asana integration id (present for Asana-backed tasks). Needed to mark the
   // task done in Asana from the wizard.
   integrationId?: string;
+  // Display name of the Asana integration/workspace this task comes from (e.g.
+  // "DBC" / "OM"). Present for Asana-backed tasks; absent for ad-hoc tasks.
+  integrationName?: string;
   title: string;
   dueDate?: string;
   deadlineType?: string;

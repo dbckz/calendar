@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { classifyBlockCategoryWithCatchAll, parseTargetLength, resolveSelectionCap } from '@/lib/capacity';
 import { gatherWeekContext } from '@/lib/scheduling/gather';
+import { getEnabledAsanaIntegrations } from '@/lib/integration-storage';
 import { taskSortKey, compareKeys } from '@/lib/scheduling/engine';
 import type { CandidateTask } from '@/lib/scheduling/types';
 
@@ -18,6 +19,12 @@ export async function POST(request: NextRequest) {
 
     const ctx = await gatherWeekContext(typeof body?.weekStart === 'string' ? body.weekStart : undefined);
     const priorityIds = new Set(priorityGids);
+
+    // Map Asana integration id → display name so each candidate can carry a label
+    // indicating which workspace/integration it comes from. Ad-hoc tasks (no
+    // integrationId) get no name.
+    const integrations = await getEnabledAsanaIntegrations();
+    const integrationNameById = new Map(integrations.map(i => [i.id, i.name]));
 
     // Apply priority flags + category overrides, then bucket by category.
     const tasksByCategory = new Map<string, CandidateTask[]>();
@@ -71,6 +78,7 @@ export async function POST(request: NextRequest) {
             id: t.gid ?? t.adhocId ?? '',
             gid: t.gid,
             integrationId: t.integrationId,
+            integrationName: t.integrationId ? integrationNameById.get(t.integrationId) : undefined,
             title: t.title,
             dueDate: t.dueDate,
             deadlineType: t.deadlineType,
