@@ -1,1 +1,8 @@
 - Explore: for sprint planning, could i have a chat interface in the app, that uses claude on the backend, and allows me to plan by chatting with AI?
+- Future week-planning additions (parked 2026-07-21, waiting for bandwidth — most fit the existing rituals/quota machinery):
+  - Daily walk ritual, 45m–1h, paired with podcast listening (break-type, like exercise)
+  - Daily "process Kindle notes" ritual, 30 min (work-type)
+  - Weekly 1h backlog grooming slot
+  - Weekly time dedicated to progressing consulting (DBC) work
+  - Weekly 1h retrospective slot (pairs naturally with the Daily review flow)
+  - Dedicated weekly slots for AI-built side projects
