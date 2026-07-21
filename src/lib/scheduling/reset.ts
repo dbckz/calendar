@@ -6,10 +6,27 @@
 // deterministic, I/O-free decision the reset route feeds with the week's blocks
 // and then acts on (deleting the future ones, clearing every in-week record).
 
+// The app's meeting-prep event titles all start with this prefix. Shared so the
+// prep-candidates route (title dedupe) and reset (untracked-prep cleanup) agree
+// on the convention instead of each hard-coding the literal.
+export const PREP_TITLE_PREFIX = 'Prep: ';
+
 export interface ResetEvent {
   googleEventId: string;
   googleIntegrationId?: string;
+  calendarId?: string; // Google sub-calendar the event lives on (for deletion)
   startMs: number; // the block's absolute start
+}
+
+// A live calendar event as seen by the week fetch, reduced to what the
+// untracked-prep decision needs. `integrationId` is the tag gather/fetchWeekEvents
+// stamps on each event so a deletion can be routed to the right integration.
+export interface WeekCalendarEvent {
+  id: string;
+  title: string;
+  startMs: number;
+  integrationId?: string;
+  calendarId?: string;
 }
 
 export interface ResetSplit {
@@ -36,4 +53,40 @@ export function splitWeekResetEvents(events: ResetEvent[], nowMs: number): Reset
   }
 
   return { toDelete, pastKept };
+}
+
+// Pick the FUTURE "Prep:"-titled calendar events that have NO stored record —
+// prep events created before prep-block tracking existed (so they were never
+// covered by splitWeekResetEvents). Reset must delete these too, otherwise they
+// linger on the calendar and their "Prep:" titles suppress re-proposing prep for
+// their meetings. Rules, mirroring splitWeekResetEvents:
+//  - only untracked events (a tracked event id is left to the record-driven
+//    split, so it is never double-counted here),
+//  - only "Prep:"-titled events (a non-prep untracked event is never touched),
+//  - only future events (start strictly after now); past ones are left as
+//    history, consistent with the past/future split.
+// `integrationId`/`calendarId` are carried through so the route can route each
+// deletion to the calendar it lives on.
+export function selectUntrackedPrepEvents(
+  events: WeekCalendarEvent[],
+  trackedEventIds: Set<string>,
+  nowMs: number
+): ResetEvent[] {
+  const out: ResetEvent[] = [];
+  const seen = new Set<string>();
+
+  for (const e of events) {
+    if (!e.id || seen.has(e.id) || trackedEventIds.has(e.id)) continue;
+    if (!e.title.startsWith(PREP_TITLE_PREFIX)) continue;
+    if (e.startMs <= nowMs) continue; // past → leave as history
+    seen.add(e.id);
+    out.push({
+      googleEventId: e.id,
+      googleIntegrationId: e.integrationId,
+      calendarId: e.calendarId,
+      startMs: e.startMs,
+    });
+  }
+
+  return out;
 }

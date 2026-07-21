@@ -11,9 +11,8 @@ import {
   type PrepResult,
 } from '@/lib/prep-classifier';
 import { getMeetingPrepDecisions, getPrepBlocks, setMeetingPrepDecision } from '@/lib/user-data-storage';
+import { PREP_TITLE_PREFIX } from '@/lib/scheduling/reset';
 import type { CalendarEvent, MeetingPrepDecision } from '@/types';
-
-const PREP_TITLE_PREFIX = 'Prep: ';
 
 function localDateStr(date: Date): string {
   const y = date.getFullYear();

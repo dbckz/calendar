@@ -119,7 +119,7 @@ async function fetchAsanaCandidates(): Promise<AsanaCandidate[]> {
 // sub-fetch returned without error. Reconcile only trusts "the event is gone"
 // for integrations in that set, so a swallowed partial failure never triggers a
 // mass purge.
-async function fetchWeekEvents(
+export async function fetchWeekEvents(
   weekStart: Date
 ): Promise<{ events: CalendarEvent[]; fetchedIntegrationIds: Set<string> }> {
   const integrations = await getEnabledGoogleIntegrations();

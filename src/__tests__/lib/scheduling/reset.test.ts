@@ -2,7 +2,12 @@
  * Tests for the pure "start the week from scratch" split — which app-created
  * events are future (delete from the calendar) vs past (kept as history).
  */
-import { splitWeekResetEvents, type ResetEvent } from '@/lib/scheduling/reset';
+import {
+  splitWeekResetEvents,
+  selectUntrackedPrepEvents,
+  type ResetEvent,
+  type WeekCalendarEvent,
+} from '@/lib/scheduling/reset';
 
 function at(date: string, time: string): number {
   const [y, mo, d] = date.split('-').map(Number);
@@ -65,5 +70,69 @@ describe('splitWeekResetEvents', () => {
   it('carries the integration id through so the route can route deletions', () => {
     const { toDelete } = splitWeekResetEvents([evt('f', at('2026-07-17', '09:00'), 'gABC')], NOW);
     expect(toDelete[0].googleIntegrationId).toBe('gABC');
+  });
+});
+
+describe('selectUntrackedPrepEvents', () => {
+  function cal(
+    id: string,
+    title: string,
+    startMs: number,
+    integrationId = 'g1'
+  ): WeekCalendarEvent {
+    return { id, title, startMs, integrationId, calendarId: 'primary' };
+  }
+
+  it('deletes an untracked FUTURE "Prep:" event', () => {
+    const out = selectUntrackedPrepEvents(
+      [cal('p1', 'Prep: Board sync', at('2026-07-17', '09:00'))],
+      new Set(),
+      NOW
+    );
+    expect(out.map(e => e.googleEventId)).toEqual(['p1']);
+    expect(out[0].googleIntegrationId).toBe('g1');
+    expect(out[0].calendarId).toBe('primary');
+  });
+
+  it('leaves an untracked PAST "Prep:" event as history', () => {
+    const out = selectUntrackedPrepEvents(
+      [cal('p-past', 'Prep: Yesterday call', at('2026-07-14', '09:00'))],
+      new Set(),
+      NOW
+    );
+    expect(out).toHaveLength(0);
+  });
+
+  it('does not re-select a tracked event (no double-counting)', () => {
+    // The event is already covered by the record-driven split, so it must not
+    // also come back through the untracked-prep path.
+    const out = selectUntrackedPrepEvents(
+      [cal('tracked', 'Prep: Board sync', at('2026-07-17', '09:00'))],
+      new Set(['tracked']),
+      NOW
+    );
+    expect(out).toHaveLength(0);
+  });
+
+  it('never touches a non-prep untracked event', () => {
+    const out = selectUntrackedPrepEvents(
+      [cal('meeting', 'Board sync', at('2026-07-17', '09:00'))],
+      new Set(),
+      NOW
+    );
+    expect(out).toHaveLength(0);
+  });
+
+  it('collapses a duplicate event id to a single deletion', () => {
+    const out = selectUntrackedPrepEvents(
+      [
+        cal('dup', 'Prep: Board sync', at('2026-07-17', '09:00')),
+        cal('dup', 'Prep: Board sync', at('2026-07-17', '09:00')),
+      ],
+      new Set(),
+      NOW
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].googleEventId).toBe('dup');
   });
 });

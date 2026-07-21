@@ -16,7 +16,13 @@ import {
   removeGoogleEventAttribution,
   removeBlockDoneOverride,
 } from '@/lib/user-data-storage';
-import { splitWeekResetEvents, type ResetEvent } from '@/lib/scheduling/reset';
+import {
+  splitWeekResetEvents,
+  selectUntrackedPrepEvents,
+  type ResetEvent,
+  type WeekCalendarEvent,
+} from '@/lib/scheduling/reset';
+import { fetchWeekEvents } from '@/lib/scheduling/gather';
 import type { GoogleCalendarCredentials, GoogleIntegration } from '@/types';
 
 // Absolute ms for a local yyyy-MM-dd + HH:mm.
@@ -51,10 +57,11 @@ export async function POST(request: NextRequest) {
     const weekEndStr = format(addDays(weekStart, 6), 'yyyy-MM-dd');
     const inWeek = (d?: string): boolean => !!d && d >= weekStartStr && d <= weekEndStr;
 
-    const [scheduledAsana, adHocTasks, prepBlocks] = await Promise.all([
+    const [scheduledAsana, adHocTasks, prepBlocks, weekFetch] = await Promise.all([
       getScheduledAsanaTasks(),
       getAdHocTasks(),
       getPrepBlocks(),
+      fetchWeekEvents(weekStart),
     ]);
 
     // --- Enumerate this week's app-created blocks (one ResetEvent per event) ---
@@ -86,6 +93,21 @@ export async function POST(request: NextRequest) {
 
     const { toDelete } = splitWeekResetEvents(events, now.getTime());
 
+    // Also delete this week's FUTURE "Prep:" calendar events that have NO stored
+    // record — prep events created before prep-block tracking existed. Left
+    // behind, their titles suppress the Plan-my-week prep step from re-proposing
+    // prep for those meetings. Past untracked ones are left as history.
+    const trackedEventIds = new Set(events.map(e => e.googleEventId));
+    const weekCalendarEvents: WeekCalendarEvent[] = weekFetch.events.map(e => ({
+      id: e.id,
+      title: e.title,
+      startMs: e.startTime.getTime(),
+      integrationId: e.integrationId,
+      calendarId: e.calendarId,
+    }));
+    const untrackedPrep = selectUntrackedPrepEvents(weekCalendarEvents, trackedEventIds, now.getTime());
+    const allToDelete = [...toDelete, ...untrackedPrep];
+
     // --- Delete the future events from the calendar ---
     const enabledGoogle = await getEnabledGoogleIntegrations();
     const defaultGoogle = enabledGoogle[0] ?? null;
@@ -106,7 +128,7 @@ export async function POST(request: NextRequest) {
     };
 
     let eventsDeleted = 0;
-    for (const e of toDelete) {
+    for (const e of allToDelete) {
       try {
         const resolved = await resolveGoogle(e.googleIntegrationId);
         if (!resolved) {
@@ -117,7 +139,8 @@ export async function POST(request: NextRequest) {
           resolved.credentials,
           resolved.integration.clientId,
           resolved.integration.clientSecret,
-          e.googleEventId
+          e.googleEventId,
+          e.calendarId
         );
         eventsDeleted += 1;
       } catch (err) {
