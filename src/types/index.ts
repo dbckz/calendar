@@ -314,6 +314,13 @@ export interface AsanaIntegration extends IntegrationBase {
   clientSecret: string;
   credentials?: AsanaCredentials;
   workspaceId?: string;
+  // Optional event-routing overrides for calendar events created from this
+  // Asana integration's tasks. When `eventGoogleIntegrationId` is set, the
+  // planner creates those tasks' events on that Google integration's primary
+  // calendar (instead of the default first-enabled one); `eventTransparency`
+  // controls the event's availability (default 'opaque' = busy).
+  eventGoogleIntegrationId?: string;
+  eventTransparency?: 'opaque' | 'transparent';
 }
 
 export type Integration = GoogleIntegration | AsanaIntegration;
@@ -391,6 +398,8 @@ export interface SettingsResponse {
     name: string;
     enabled: boolean;
     connected: boolean;
+    eventGoogleIntegrationId?: string;
+    eventTransparency?: 'opaque' | 'transparent';
   }>;
 }
 

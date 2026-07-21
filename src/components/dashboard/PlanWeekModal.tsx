@@ -87,6 +87,35 @@ function timeRange(start: string, durationMinutes: number): string {
   return `${start}–${format(endDate, 'HH:mm')}`;
 }
 
+// Standard block-length options (minutes) for the tasks step.
+const BLOCK_LENGTH_OPTIONS = [15, 30, 45, 60, 90, 120, 180];
+
+// Human label for a block length in minutes: "15 mins", "1 hour", "1.5 hours".
+function blockLengthLabel(mins: number): string {
+  if (mins < 60) return `${mins} mins`;
+  if (mins % 60 === 0) {
+    const hours = mins / 60;
+    return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+  }
+  // Clean half-hour multiples read as "1.5 hours"; anything else as "1h 20m".
+  if (mins % 30 === 0) return `${mins / 60} hours`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+// Build the ordered option list for a category, always including its default so
+// a non-standard configured length stays selectable (labelled "… (default)").
+function blockLengthOptions(defaultMins: number): Array<{ value: number; label: string }> {
+  const values = BLOCK_LENGTH_OPTIONS.includes(defaultMins)
+    ? BLOCK_LENGTH_OPTIONS
+    : [...BLOCK_LENGTH_OPTIONS, defaultMins].sort((a, b) => a - b);
+  return values.map(v => ({
+    value: v,
+    label: v === defaultMins && !BLOCK_LENGTH_OPTIONS.includes(defaultMins)
+      ? `${blockLengthLabel(v)} (default)`
+      : blockLengthLabel(v),
+  }));
+}
+
 interface EditableProposal extends ProposedBlock {
   accepted: boolean;
 }
@@ -173,11 +202,15 @@ export function PlanWeekModal({
   const [prepBusy, setPrepBusy] = useState(false);
   const [showOtherMeetings, setShowOtherMeetings] = useState(false);
   const [prepEngaged, setPrepEngaged] = useState(false);
+  const [prepDuration, setPrepDuration] = useState(15); // prep block length, mins
 
   // Step 3 — tasks
   const [taskCats, setTaskCats] = useState<WeekCandidateCategory[] | null>(null);
   const [selections, setSelections] = useState<Record<string, Set<string>>>({});
   const [tasksEngaged, setTasksEngaged] = useState(false);
+  // Per-week block-length overrides (mins), keyed by category. Only holds
+  // explicit user picks; a category not present here uses its configured default.
+  const [taskDurations, setTaskDurations] = useState<Record<string, number>>({});
 
   // Step 4 — review / done
   const [proposals, setProposals] = useState<EditableProposal[]>([]);
@@ -206,9 +239,11 @@ export function PlanWeekModal({
     setPrepBusy(false);
     setShowOtherMeetings(false);
     setPrepEngaged(false);
+    setPrepDuration(15);
     setTaskCats(null);
     setSelections({});
     setTasksEngaged(false);
+    setTaskDurations({});
     setProposals([]);
     setQuotaSummary([]);
     setWeekLabel('');
@@ -304,18 +339,27 @@ export function PlanWeekModal({
 
   // --- Data fetching per step ---
 
-  const fetchPrep = useCallback(async () => {
+  const fetchPrep = useCallback(async (durationMinutes = prepDuration) => {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await api.getPrepCandidates();
+      const data = await api.getPrepCandidates(undefined, durationMinutes);
       setPrepData(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load meeting prep');
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [prepDuration]);
+
+  // Changing the per-meeting prep length re-proposes slots (blocks are longer).
+  const changePrepDuration = useCallback(
+    (durationMinutes: number) => {
+      setPrepDuration(durationMinutes);
+      fetchPrep(durationMinutes);
+    },
+    [fetchPrep]
+  );
 
   const fetchTasks = useCallback(async () => {
     setIsLoading(true);
@@ -371,6 +415,7 @@ export function PlanWeekModal({
         }
         body.selections = selObj;
       }
+      if (Object.keys(taskDurations).length) body.durationOverrides = taskDurations;
       const data: ProposeWeekResponse = await api.proposeWeeklyPlan(body);
       setProposals(data.proposals.map(p => ({ ...p, accepted: true })));
       setQuotaSummary(data.quotaSummary);
@@ -382,7 +427,7 @@ export function PlanWeekModal({
     } finally {
       setIsLoading(false);
     }
-  }, [priorityIds, categoryOverrides, prepEngaged, acceptedPrepBlocks, tasksEngaged, taskCats, selections]);
+  }, [priorityIds, categoryOverrides, prepEngaged, acceptedPrepBlocks, tasksEngaged, taskCats, selections, taskDurations]);
 
   // Lazy-fetch on entering a step. Prep/tasks fetch once (cached); review
   // re-proposes each entry since it depends on prior steps' choices.
@@ -505,7 +550,7 @@ export function PlanWeekModal({
       setError(null);
       try {
         await api.setPrepDecision(title, needsPrep);
-        const data = await api.getPrepCandidates();
+        const data = await api.getPrepCandidates(undefined, prepDuration);
         setPrepData(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to update prep decision');
@@ -513,7 +558,7 @@ export function PlanWeekModal({
         setPrepBusy(false);
       }
     },
-    []
+    [prepDuration]
   );
 
   // --- Step 3 actions ---
@@ -1081,6 +1126,20 @@ export function PlanWeekModal({
 
     return (
       <div className={`space-y-5 ${prepBusy ? 'opacity-60 pointer-events-none' : ''}`}>
+        <label className="flex items-center gap-2 text-sm text-gray-600">
+          Prep time per meeting
+          <select
+            value={prepDuration}
+            onChange={e => changePrepDuration(Number(e.target.value))}
+            disabled={prepBusy || isLoading}
+            className="text-sm border border-gray-300 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 disabled:opacity-50"
+          >
+            <option value={15}>15 mins</option>
+            <option value={30}>30 mins</option>
+            <option value={60}>1 hour</option>
+          </select>
+        </label>
+
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
             Suggested prep
@@ -1193,28 +1252,47 @@ export function PlanWeekModal({
           const autoN = cat.remainingQuota === null
             ? cat.candidates.length
             : Math.min(cat.remainingQuota, cat.candidates.length);
+          const defaultDuration = cat.targetLengthMinutes || 30;
           return (
             <div key={cat.category} className="rounded-lg border border-gray-200 p-3">
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between gap-2 mb-2">
                 <span
                   className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
                 >
                   <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
                   {cat.category}
                 </span>
-                {cat.autoSelect ? (
-                  <span className="text-[11px] text-gray-400">
-                    Auto-picking {autoN} task{autoN === 1 ? '' : 's'}
-                  </span>
-                ) : cat.remainingQuota === null ? (
-                  <span className="text-[11px] text-gray-400">
-                    Pick any · {picked.size} selected
-                  </span>
-                ) : (
-                  <span className="text-[11px] text-gray-400">
-                    Pick up to {cat.remainingQuota} · {picked.size} selected
-                  </span>
-                )}
+                <div className="flex items-center gap-3">
+                  {cat.autoSelect ? (
+                    <span className="text-[11px] text-gray-400">
+                      Auto-picking {autoN} task{autoN === 1 ? '' : 's'}
+                    </span>
+                  ) : cat.remainingQuota === null ? (
+                    <span className="text-[11px] text-gray-400">
+                      Pick any · {picked.size} selected
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-gray-400">
+                      Pick up to {cat.remainingQuota} · {picked.size} selected
+                    </span>
+                  )}
+                  <label className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                    Block length
+                    <select
+                      value={taskDurations[cat.category] ?? defaultDuration}
+                      onChange={e =>
+                        setTaskDurations(prev => ({ ...prev, [cat.category]: Number(e.target.value) }))
+                      }
+                      className="text-sm border border-gray-300 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                    >
+                      {blockLengthOptions(defaultDuration).map(o => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
               </div>
 
               {cat.candidates.length === 0 ? (

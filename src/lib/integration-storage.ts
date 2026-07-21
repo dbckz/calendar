@@ -150,6 +150,8 @@ export function sanitizeIntegrations(settings: MultiIntegrationSettings): {
     connected: boolean;
     workspaceId?: string;
     createdAt: string;
+    eventGoogleIntegrationId?: string;
+    eventTransparency?: 'opaque' | 'transparent';
   }>;
 } {
   return {
@@ -168,6 +170,8 @@ export function sanitizeIntegrations(settings: MultiIntegrationSettings): {
       connected: !!i.credentials?.accessToken,
       workspaceId: i.workspaceId,
       createdAt: i.createdAt,
+      eventGoogleIntegrationId: i.eventGoogleIntegrationId,
+      eventTransparency: i.eventTransparency,
     })),
   };
 }

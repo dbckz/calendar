@@ -3,6 +3,7 @@
 import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { CapacityRow } from '@/lib/capacity';
 import type { ProposedBlock } from '@/lib/scheduling/types';
+import type { ReplanKept, ReplanMove, ReplanUnplaceable } from '@/lib/scheduling/replan';
 
 export interface QuotaSummaryRow {
   category: string;
@@ -34,6 +35,7 @@ export interface ProposeWeekRequest {
   priorityGids?: string[];
   categoryOverrides?: Record<string, string>; // candidate id -> category
   prepBlocks?: ProposedBlock[];
+  durationOverrides?: Record<string, number>; // category -> per-week block length (mins)
 }
 
 export interface PriorityMatchRow {
@@ -89,6 +91,10 @@ export interface WeekCandidateCategory {
   grouped?: boolean;
   remainingQuota: number | null;
   autoSelect: boolean;
+  // Category's configured target block length in minutes (parsed from the
+  // workflow config's targetLength). Used as the default for the per-week
+  // block-length override on the tasks step.
+  targetLengthMinutes: number;
   candidates: WeekCandidate[];
 }
 
@@ -98,6 +104,22 @@ export interface WeekCandidatesResponse {
 
 export interface ConfirmWeekResponse {
   results: ConfirmWeekResult[];
+}
+
+// --- Mid-week replan ---
+
+export interface ReplanAnalyzeResponse {
+  weekStart: string;
+  weekEnd: string;
+  kept: ReplanKept[];
+  moves: ReplanMove[];
+  unplaceable: ReplanUnplaceable[];
+}
+
+export interface ReplanConfirmResult {
+  googleEventId: string;
+  success: boolean;
+  error?: string;
 }
 
 export interface ClientTimeRow {
@@ -211,6 +233,7 @@ export const api = {
     options?: {
       allDay?: boolean;
       recurrence?: string[];
+      transparency?: 'opaque' | 'transparent';
     }
   ): Promise<CalendarEventResponse> {
     return fetchWithRetry<CalendarEventResponse>('/api/calendar', {
@@ -226,6 +249,7 @@ export const api = {
         calendarId,
         allDay: options?.allDay,
         recurrence: options?.recurrence,
+        transparency: options?.transparency,
       }),
     });
   },
@@ -826,13 +850,19 @@ export const api = {
   },
 
   // Wizard step 2: which meetings need prep, with proposed slots.
-  async getPrepCandidates(weekStart?: string): Promise<PrepCandidatesResponse> {
+  async getPrepCandidates(
+    weekStart?: string,
+    prepDurationMinutes?: number
+  ): Promise<PrepCandidatesResponse> {
     return fetchWithRetry<PrepCandidatesResponse>(
       '/api/scheduling/prep/candidates',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(weekStart ? { weekStart } : {}),
+        body: JSON.stringify({
+          ...(weekStart ? { weekStart } : {}),
+          ...(prepDurationMinutes ? { prepDurationMinutes } : {}),
+        }),
       },
       { maxRetries: 0 }
     );
@@ -868,6 +898,38 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ proposals, googleIntegrationId }),
+    });
+  },
+
+  // Mid-week replan: analyze which of this week's app blocks were missed or now
+  // conflict, and propose new slots for them.
+  async analyzeReplan(weekStart?: string): Promise<ReplanAnalyzeResponse> {
+    return fetchWithRetry<ReplanAnalyzeResponse>(
+      '/api/scheduling/replan/analyze',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(weekStart ? { weekStart } : {}),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Mid-week replan: apply the accepted moves (patch each Google event's time +
+  // update the stored schedule).
+  async confirmReplan(
+    moves: Array<{
+      googleEventId: string;
+      googleIntegrationId?: string;
+      date: string;
+      start: string;
+      durationMinutes: number;
+    }>
+  ): Promise<{ results: ReplanConfirmResult[] }> {
+    return fetchWithRetry<{ results: ReplanConfirmResult[] }>('/api/scheduling/replan/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ moves }),
     });
   },
 };

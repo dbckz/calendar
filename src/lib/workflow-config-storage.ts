@@ -22,7 +22,6 @@ export interface TaskQuota {
 }
 
 export interface SchedulingConfig {
-  maxTasksPerDay: number;
   bufferBetweenTasks: string;
   workingDays: string[];
   workingHours: {
@@ -94,7 +93,6 @@ const DEFAULT_CONFIG: WorkflowConfig = {
     },
   },
   scheduling: {
-    maxTasksPerDay: 4,
     bufferBetweenTasks: '0',
     workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
     workingHours: {

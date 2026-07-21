@@ -22,8 +22,7 @@
 //    Tier 2 is the working-hours window on each working day. We first-fit the
 //    earliest 15-minute-aligned slot of the category's target length that has
 //    the required buffer on both sides against busy intervals AND proposals
-//    already accepted in this run, is >= now, and does not exceed maxTasksPerDay
-//    for its date.
+//    already accepted in this run, and is >= now.
 //  * If a category still has quota but no candidate task fits/remains, we emit a
 //    task-less "reserved" block instead.
 //
@@ -31,6 +30,7 @@
 // — without a target count there is nothing to fill toward.
 
 import { classifyBlockCategory, normalize, parseTargetLength, type CapacityQuota } from '@/lib/capacity';
+import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 import type { BestTime } from '@/types';
 import type {
   CandidateTask,
@@ -51,7 +51,7 @@ const WEEKDAY_NAMES = [
   'Saturday',
 ];
 
-interface TimeOfDay {
+export interface TimeOfDay {
   h: number;
   m: number;
 }
@@ -70,6 +70,14 @@ export interface BusyMs {
   end: number;
 }
 
+// A working day in the week, with its working-hours window bounds (absolute ms).
+export interface WorkingDay {
+  date: Date; // local midnight of the day
+  dateStr: string; // yyyy-MM-dd
+  whStartMs: number;
+  whEndMs: number;
+}
+
 export function parseTimeOfDay(value: string): TimeOfDay | null {
   const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
   if (!match) return null;
@@ -80,7 +88,7 @@ export function parseTimeOfDay(value: string): TimeOfDay | null {
 }
 
 // "09:00-11:00" -> [{h,m},{h,m}]
-function parsePreferredWindow(value: string): [TimeOfDay, TimeOfDay] | null {
+export function parsePreferredWindow(value: string): [TimeOfDay, TimeOfDay] | null {
   const parts = value.split('-');
   if (parts.length !== 2) return null;
   const start = parseTimeOfDay(parts[0]);
@@ -170,8 +178,8 @@ export function buildWorkingDays(
   now: Date,
   workingHours: { start: TimeOfDay; end: TimeOfDay },
   workingDayNames: Set<string>
-): Array<{ date: Date; dateStr: string; whStartMs: number; whEndMs: number }> {
-  const days: Array<{ date: Date; dateStr: string; whStartMs: number; whEndMs: number }> = [];
+): WorkingDay[] {
+  const days: WorkingDay[] = [];
   const todayStr = localDateStr(now);
   for (let i = 0; i < 7; i++) {
     const day = new Date(
@@ -195,10 +203,10 @@ export function buildWorkingDays(
 // Build candidate search windows for a task (or reserved block when bestTime is
 // undefined): preferred windows first (bestTime-matching first), then
 // working-hours fallback windows. All ordered by date within each tier.
-function buildWindowsForTask(
+export function buildWindowsForTask(
   bestTime: BestTime | undefined,
   preferredWindows: Array<[TimeOfDay, TimeOfDay]>,
-  workingDays: Array<{ date: Date; dateStr: string; whStartMs: number; whEndMs: number }>
+  workingDays: WorkingDay[]
 ): Window[] {
   const preferred: Window[] = [];
   for (const day of workingDays) {
@@ -236,15 +244,13 @@ function buildWindowsForTask(
 }
 
 // Find the earliest valid slot for a block of `duration` minutes across the
-// given windows, respecting buffer, now-cutoff and maxTasksPerDay.
+// given windows, respecting buffer and the now-cutoff.
 export function findSlot(
   windows: Window[],
   duration: number,
   buffer: number,
   busy: BusyMs[],
   nowMs: number,
-  maxPerDay: number,
-  countByDate: Record<string, number>,
   allowedDates?: Set<string>
 ): { startMs: number; endMs: number; dateStr: string; preferred: boolean } | null {
   const durationMs = duration * MS_PER_MINUTE;
@@ -252,7 +258,6 @@ export function findSlot(
 
   for (const win of windows) {
     if (allowedDates && !allowedDates.has(win.dateStr)) continue;
-    if ((countByDate[win.dateStr] ?? 0) >= maxPerDay) continue;
     // Start at the window start (or now if later), aligned up to the step grid.
     let start = ceilToStep(Math.max(win.startMs, nowMs));
     while (start + durationMs <= win.endMs) {
@@ -266,23 +271,73 @@ export function findSlot(
   return null;
 }
 
-export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
-  const { config, candidateTasks } = input;
-  const scheduling = config.scheduling;
+// Whether a category is the deep-work category, compared with the
+// whitespace-robust normalize so "Writing / Deep Work" and "Writing/Deep Work"
+// are treated the same. Deep work owns the mornings.
+export function isDeepWork(category: string): boolean {
+  return normalize(category) === normalize('Writing/Deep Work');
+}
 
+// Preferred-time search windows for a category: its explicit `preferredTimes` if
+// configured; otherwise a default afternoon window (12:00 → working-hours end)
+// for non-deep-work categories, so they try afternoons before falling back to
+// mornings and leave early slots free for deep work. Deep work with no
+// preferredTimes gets none (falls through to the working-hours tier, which
+// starts in the morning). buildWindowsForTask drops any day whose window end <=
+// start, so a day ending at/before 12:00 simply contributes no afternoon window.
+export function preferredWindowsForCategory(
+  config: WorkflowConfig,
+  category: string,
+  workingHoursEnd: TimeOfDay
+): Array<[TimeOfDay, TimeOfDay]> {
+  const windows = (config.taskQuotas[category]?.preferredTimes ?? [])
+    .map(parsePreferredWindow)
+    .filter((w): w is [TimeOfDay, TimeOfDay] => w !== null);
+  if (windows.length === 0 && !isDeepWork(category)) {
+    windows.push([{ h: 12, m: 0 }, workingHoursEnd]);
+  }
+  return windows;
+}
+
+// Resolve the scheduling config's working-hours/day settings into the derived
+// values every planner (task engine, prep, replan) needs: parsed working-hours
+// bounds, the working-day name set, the buffer minutes, and the ordered list of
+// this week's working days (>= today) with their window bounds.
+export interface WorkingWindow {
+  workingHoursStart: TimeOfDay;
+  workingHoursEnd: TimeOfDay;
+  workingDayNames: Set<string>;
+  buffer: number;
+  workingDays: WorkingDay[];
+}
+
+export function resolveWorkingWindow(
+  scheduling: WorkflowConfig['scheduling'],
+  weekStart: Date,
+  now: Date
+): WorkingWindow {
   const workingHoursStart = parseTimeOfDay(scheduling.workingHours.start) ?? { h: 9, m: 0 };
   const workingHoursEnd = parseTimeOfDay(scheduling.workingHours.end) ?? { h: 17, m: 0 };
   const workingDayNames = new Set(
     scheduling.workingDays.map(d => d.charAt(0).toUpperCase() + d.slice(1).toLowerCase())
   );
   const buffer = parseTargetLength(scheduling.bufferBetweenTasks);
-  const maxPerDay = scheduling.maxTasksPerDay > 0 ? scheduling.maxTasksPerDay : Infinity;
-
   const workingDays = buildWorkingDays(
-    input.weekStart,
-    input.now,
+    weekStart,
+    now,
     { start: workingHoursStart, end: workingHoursEnd },
     workingDayNames
+  );
+  return { workingHoursStart, workingHoursEnd, workingDayNames, buffer, workingDays };
+}
+
+export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
+  const { config, candidateTasks } = input;
+
+  const { workingHoursEnd, buffer, workingDays } = resolveWorkingWindow(
+    config.scheduling,
+    input.weekStart,
+    input.now
   );
 
   // Quotas in the capacity lib's shape, for classification reuse.
@@ -323,8 +378,6 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
   // "Writing / Deep Work" and "Writing/Deep Work" are treated the same.
   const categoryHasHard = (category: string): boolean =>
     (tasksByCategory.get(category) ?? []).some(t => t.deadlineType === 'hard');
-  const isDeepWork = (category: string): boolean =>
-    normalize(category) === normalize('Writing/Deep Work');
 
   const orderedCategories = [...remainingByCategory.keys()].sort((a, b) => {
     const deepA = isDeepWork(a);
@@ -344,7 +397,6 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
     start: i.start.getTime(),
     end: i.end.getTime(),
   }));
-  const countByDate: Record<string, number> = { ...input.existingBlocksByDate };
   const usedTaskIds = new Set<string>();
   const nowMs = input.now.getTime();
   const proposals: ProposedBlock[] = [];
@@ -353,10 +405,9 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
 
   for (const category of orderedCategories) {
     const quota = quotaByCategory.get(category)!;
-    const duration = parseTargetLength(quota.targetLength) || 30;
-    const preferredWindows = (config.taskQuotas[category]?.preferredTimes ?? [])
-      .map(parsePreferredWindow)
-      .filter((w): w is [TimeOfDay, TimeOfDay] => w !== null);
+    const duration =
+      input.durationOverridesByCategory?.[category] ?? (parseTargetLength(quota.targetLength) || 30);
+    const preferredWindows = preferredWindowsForCategory(config, category, workingHoursEnd);
 
     let remaining = remainingByCategory.get(category)!;
     const categoryTasks = tasksByCategory.get(category) ?? [];
@@ -380,7 +431,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
         const allowed = new Set(
           workingDays.filter(wd => catCount[wd.dateStr] <= level).map(wd => wd.dateStr)
         );
-        slot = findSlot(windows, duration, buffer, busy, nowMs, maxPerDay, countByDate, allowed);
+        slot = findSlot(windows, duration, buffer, busy, nowMs, allowed);
       }
       return slot;
     };
@@ -399,7 +450,6 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
         const start = timeStr(slot.startMs);
         placed.push({ blockId: `${slot.dateStr}-${start}-${category}`, dateStr: slot.dateStr, start });
         busy.push({ start: slot.startMs, end: slot.endMs });
-        countByDate[slot.dateStr] = (countByDate[slot.dateStr] ?? 0) + 1;
         catCount[slot.dateStr] = (catCount[slot.dateStr] ?? 0) + 1;
         remaining -= 1;
       }
@@ -470,7 +520,6 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
 
       // Occupy the slot for the rest of the run.
       busy.push({ start: slot.startMs, end: slot.endMs });
-      countByDate[slot.dateStr] = (countByDate[slot.dateStr] ?? 0) + 1;
       catCount[slot.dateStr] = (catCount[slot.dateStr] ?? 0) + 1;
       remaining -= 1;
     }

@@ -325,6 +325,24 @@ export async function updateScheduledAsanaTaskByGoogleEvent(
   return data.scheduledAsanaTasks[index];
 }
 
+// Update every scheduled-task entry linked to a Google event (a grouped block
+// records several tasks against the same event). Returns how many were updated.
+export async function updateScheduledAsanaTasksByGoogleEvent(
+  googleEventId: string,
+  updates: Partial<ScheduledAsanaTask>
+): Promise<number> {
+  const data = await getUserData();
+  let updated = 0;
+  data.scheduledAsanaTasks = data.scheduledAsanaTasks.map(t => {
+    if (t.googleEventId !== googleEventId) return t;
+    updated += 1;
+    return { ...t, ...updates };
+  });
+
+  if (updated > 0) await saveUserData(data);
+  return updated;
+}
+
 export async function unscheduleAsanaTask(scheduleId: string): Promise<boolean> {
   const data = await getUserData();
   const filtered = data.scheduledAsanaTasks.filter(t => t.id !== scheduleId);

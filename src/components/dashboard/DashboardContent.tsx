@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { CalendarClock, Bot, Loader2, Archive } from 'lucide-react';
+import { CalendarClock, Bot, Loader2, Archive, RefreshCw } from 'lucide-react';
 
 import { CalendarEvent, TaskMetadata } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
@@ -15,6 +15,7 @@ import { DelegationWidget } from './DelegationWidget';
 import { AiRunnableTasks } from './AiRunnableTasks';
 import { StaleTasksModal } from './StaleTasksModal';
 import { PlanWeekModal } from './PlanWeekModal';
+import { ReplanWeekModal } from './ReplanWeekModal';
 
 interface Integration {
   id: string;
@@ -63,6 +64,7 @@ export function DashboardContent({
 }: DashboardContentProps) {
   const { data, isLoading, refetch } = useDashboard();
   const [showPlanModal, setShowPlanModal] = useState(false);
+  const [showReplanModal, setShowReplanModal] = useState(false);
 
   const [isReassessing, setIsReassessing] = useState(false);
   const [reassessNote, setReassessNote] = useState<string | null>(null);
@@ -115,6 +117,14 @@ export function DashboardContent({
             {isReassessing
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Assessing AI-runnable…</>
               : <><Bot className="w-4 h-4" /> Assess AI-runnable</>}
+          </button>
+          <button
+            onClick={() => setShowReplanModal(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium border border-orange-300 text-orange-700 rounded-lg hover:bg-orange-50 transition-colors"
+            title="Replan the rest of this week — reschedule missed or newly-clashing blocks"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Replan week
           </button>
           <button
             onClick={() => setShowPlanModal(true)}
@@ -184,6 +194,15 @@ export function DashboardContent({
         onClose={() => setShowPlanModal(false)}
         asanaTasks={asanaTasks}
         typeFieldInfoByIntegration={typeFieldInfoByIntegration}
+        onApplied={() => {
+          refetch();
+          onPlanApplied?.();
+        }}
+      />
+
+      <ReplanWeekModal
+        isOpen={showReplanModal}
+        onClose={() => setShowReplanModal(false)}
         onApplied={() => {
           refetch();
           onPlanApplied?.();

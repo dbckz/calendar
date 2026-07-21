@@ -70,13 +70,14 @@ export interface ProposeBlocksInput {
   // Per-category count of blocks already scheduled this week (reduces remaining
   // weekly quota). Keyed by category name.
   existingScheduledCounts: Record<string, number>;
-  // Per-date count of blocks already scheduled (for maxTasksPerDay). Keyed by
-  // yyyy-MM-dd.
-  existingBlocksByDate: Record<string, number>;
   // Per-date, per-category count of blocks already on the calendar this week.
   // Seeds the spread heuristic so mid-week re-runs don't re-pile a day. Keyed
   // by yyyy-MM-dd then category name.
   existingCategoryCountsByDate?: Record<string, Record<string, number>>;
+  // Per-week block-length overrides (minutes), keyed by category name. When set
+  // for a category, its blocks use this duration instead of the targetLength
+  // parsed from workflow config. Does not modify the saved config.
+  durationOverridesByCategory?: Record<string, number>;
   weekStart: Date; // local midnight of the week's Monday
   now: Date;
 }

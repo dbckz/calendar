@@ -12,7 +12,6 @@ interface TaskQuota {
 }
 
 interface SchedulingConfig {
-  maxTasksPerDay: number;
   bufferBetweenTasks: string;
   workingDays: string[];
   workingHours: {
@@ -58,7 +57,6 @@ const DEFAULT_CONFIG: WorkflowConfig = {
     }
   },
   scheduling: {
-    maxTasksPerDay: 4,
     bufferBetweenTasks: '30min',
     workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
     workingHours: {
@@ -361,20 +359,6 @@ export default function WorkflowConfig() {
         <h3 className="text-xl font-semibold mb-4">Scheduling Settings</h3>
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Max Tasks Per Day
-            </label>
-            <input
-              type="number"
-              min="1"
-              max="10"
-              value={config.scheduling.maxTasksPerDay}
-              onChange={(e) => updateScheduling('maxTasksPerDay', parseInt(e.target.value))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md"
-            />
-          </div>
-
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Buffer Between Tasks

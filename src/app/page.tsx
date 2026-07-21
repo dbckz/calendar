@@ -447,10 +447,55 @@ export default function Home() {
     [settings]
   );
 
+  // Event routing for an Asana task: if its Asana integration declares an event
+  // Google calendar (e.g. OM tasks → OM calendar, marked Free), scheduling that
+  // task creates the event there with the configured availability, bypassing the
+  // default/picker. Returns null when there's no override or the target calendar
+  // isn't connected.
+  const asanaEventRouting = useCallback(
+    (asanaIntegrationId?: string): { googleIntegrationId: string; transparency: 'opaque' | 'transparent' } | null => {
+      if (!asanaIntegrationId) return null;
+      const asana = settings?.asanaIntegrations.find(i => i.id === asanaIntegrationId);
+      if (!asana?.eventGoogleIntegrationId) return null;
+      const target = connectedGoogleIntegrations.find(i => i.id === asana.eventGoogleIntegrationId);
+      if (!target) return null;
+      return { googleIntegrationId: asana.eventGoogleIntegrationId, transparency: asana.eventTransparency ?? 'opaque' };
+    },
+    [settings, connectedGoogleIntegrations]
+  );
+
   const handleDropTask = useCallback((dragItem: DragItem, startTime: Date, endTime: Date) => {
     const dateStr = format(startTime, 'yyyy-MM-dd');
     const timeStr = format(startTime, 'HH:mm');
     const duration = Math.round((endTime.getTime() - startTime.getTime()) / (60 * 1000));
+
+    // An Asana task with an event-routing override goes straight to its target
+    // calendar (e.g. OM → OM calendar, Free), skipping the picker entirely.
+    if (dragItem.type === 'asana-task') {
+      const routedTask = allAsanaTasks.find(t => t.id === dragItem.id);
+      const routed = asanaEventRouting(routedTask?.integrationId);
+      if (routed && routedTask) {
+        createGoogleEvent(
+          routed.googleIntegrationId,
+          routedTask.title,
+          startTime,
+          endTime,
+          undefined,
+          undefined,
+          undefined,
+          { transparency: routed.transparency }
+        ).then(googleEvent => {
+          if (googleEvent) {
+            scheduleAsana(dragItem.id, routedTask.integrationId, dateStr, timeStr, duration, googleEvent.id, routed.googleIntegrationId);
+            toast.success('Task scheduled and synced to Google Calendar');
+          } else {
+            scheduleAsana(dragItem.id, routedTask.integrationId, dateStr, timeStr, duration);
+            toast.error('Failed to sync with Google Calendar');
+          }
+        });
+        return;
+      }
+    }
 
     if (connectedGoogleIntegrations.length > 1) {
       setCalendarSelectionModal({
@@ -541,7 +586,7 @@ export default function Home() {
         }
       });
     }
-  }, [updateTask, addTask, scheduleAsana, allAsanaTasks, connectedGoogleIntegrations, createGoogleEvent, toast]);
+  }, [updateTask, addTask, scheduleAsana, allAsanaTasks, connectedGoogleIntegrations, createGoogleEvent, toast, asanaEventRouting]);
 
   const handleCalendarSelection = useCallback((integrationId: string) => {
     const { pendingDrop } = calendarSelectionModal;

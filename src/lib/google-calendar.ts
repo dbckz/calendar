@@ -250,6 +250,9 @@ export async function createCalendarEvent(
   options?: {
     allDay?: boolean;
     recurrence?: string[];
+    // Google Calendar availability: 'opaque' shows as busy (default),
+    // 'transparent' marks the event as free.
+    transparency?: 'opaque' | 'transparent';
   }
 ): Promise<CalendarEvent> {
   const oauth2Client = createAuthenticatedClient(credentials, clientId, clientSecret);
@@ -262,6 +265,7 @@ export async function createCalendarEvent(
     start: buildEventDate(startTime, isAllDay),
     end: buildEventDate(endTime, isAllDay),
     ...(options?.recurrence?.length ? { recurrence: options.recurrence } : {}),
+    ...(options?.transparency ? { transparency: options.transparency } : {}),
   };
 
   // Try with requested eventType first, fall back to default if focusTime isn't supported

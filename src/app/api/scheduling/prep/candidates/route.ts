@@ -34,6 +34,10 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
     const ctx = await gatherWeekContext(typeof body?.weekStart === 'string' ? body.weekStart : undefined);
+    // Prep block length: only 15/30/60 are valid; anything else defaults to 15.
+    const prepDurationMinutes = [15, 30, 60].includes(body?.prepDurationMinutes)
+      ? body.prepDurationMinutes
+      : 15;
     const nowMs = ctx.now.getTime();
 
     // Meetings that already have a prep block this week (dedupe on re-run).
@@ -134,9 +138,9 @@ export async function POST(request: NextRequest) {
       meetings: prepMeetings,
       config: ctx.config,
       busyIntervals: ctx.busyIntervals,
-      existingBlocksByDate: ctx.existingBlocksByDate,
       weekStart: ctx.weekStart,
       now: ctx.now,
+      prepDurationMinutes,
     });
     const blockByEventId = new Map(placed.map(b => [b.meeting!.eventId, b]));
     const unplacedIds = new Set(unplaced.map(m => m.eventId));

@@ -14,7 +14,6 @@ function makeConfig(overrides: Partial<WorkflowConfig['scheduling']> = {}): Work
     taskQuotas: {},
     typeMapping: {},
     scheduling: {
-      maxTasksPerDay: 4,
       bufferBetweenTasks: '30min',
       workingDays: ALL_DAYS,
       workingHours: { start: '09:00', end: '17:00' },
@@ -38,15 +37,15 @@ function run(input: {
   meetings: PrepMeeting[];
   scheduling?: Partial<WorkflowConfig['scheduling']>;
   busyIntervals?: BusyInterval[];
-  existingBlocksByDate?: Record<string, number>;
+  prepDurationMinutes?: number;
 }) {
   return proposePrepBlocks({
     meetings: input.meetings,
     config: makeConfig(input.scheduling),
     busyIntervals: input.busyIntervals ?? [],
-    existingBlocksByDate: input.existingBlocksByDate ?? {},
     weekStart: WEEK_START,
     now: WEEK_START,
+    prepDurationMinutes: input.prepDurationMinutes,
   });
 }
 
@@ -62,7 +61,7 @@ describe('proposePrepBlocks', () => {
     expect(block.category).toBe('Meeting prep');
     expect(block.durationMinutes).toBe(15);
     expect(block.date).toBe('2026-07-14'); // Tuesday, the day before
-    expect(block.start).toBe('09:00');
+    expect(block.start).toBe('12:00'); // afternoon-first, mornings left for deep work
     expect(block.meeting?.eventId).toBe('evt-1');
     expect(block.reason).toContain('Board sync');
     expect(block.reason).toContain('Wed 14:00');
@@ -76,7 +75,7 @@ describe('proposePrepBlocks', () => {
     expect(unplaced).toHaveLength(0);
     expect(placed).toHaveLength(1);
     expect(placed[0].date).toBe('2026-07-13'); // Monday, day of
-    expect(placed[0].start).toBe('09:00'); // before the 14:00 meeting
+    expect(placed[0].start).toBe('12:00'); // afternoon-first, before the 14:00 meeting
   });
 
   it('respects the buffer before the meeting on the day-of fallback', () => {
@@ -112,18 +111,44 @@ describe('proposePrepBlocks', () => {
     expect(new Set(starts).size).toBe(2);
   });
 
-  it('honours maxTasksPerDay when placing prep', () => {
-    // Tuesday already full (maxTasksPerDay 1) -> day-before blocked, so prep for
-    // a Wednesday meeting falls back to the day of.
-    const startMs = new Date(2026, 6, 15, 14, 0).getTime(); // Wed 14:00
+  it('prefers the afternoon on the day before, but still fits a morning meeting day-of when the day before is full', () => {
+    // Meeting Tuesday 10:00. Monday (day before) is busy across all working
+    // hours, so no prep slot exists there. Day-of Tuesday morning must still
+    // fit prep before the 10:00 meeting (afternoon window is empty when capped
+    // before noon, so it falls through to the morning working-hours window).
+    const startMs = new Date(2026, 6, 14, 10, 0).getTime(); // Tue 10:00
+    const mondayFull: BusyInterval = {
+      start: new Date(2026, 6, 13, 9, 0),
+      end: new Date(2026, 6, 13, 17, 0),
+    };
     const { placed, unplaced } = run({
       meetings: [meeting({ startMs })],
-      scheduling: { maxTasksPerDay: 1 },
-      existingBlocksByDate: { '2026-07-14': 1 }, // Tuesday full
+      busyIntervals: [mondayFull],
     });
 
     expect(unplaced).toHaveLength(0);
     expect(placed).toHaveLength(1);
-    expect(placed[0].date).toBe('2026-07-15'); // Wednesday, day of
+    expect(placed[0].date).toBe('2026-07-14'); // Tuesday, day of
+    expect(placed[0].start).toBe('09:00'); // morning, before the 10:00 meeting
   });
+
+  it('defaults prep blocks to 15 minutes when no duration is given', () => {
+    const startMs = new Date(2026, 6, 15, 14, 0).getTime(); // Wed 14:00
+    const { placed } = run({ meetings: [meeting({ startMs })] });
+    expect(placed).toHaveLength(1);
+    expect(placed[0].durationMinutes).toBe(15);
+  });
+
+  it('honours prepDurationMinutes of 30 and 60', () => {
+    const startMs = new Date(2026, 6, 15, 14, 0).getTime(); // Wed 14:00
+
+    const thirty = run({ meetings: [meeting({ startMs })], prepDurationMinutes: 30 });
+    expect(thirty.placed).toHaveLength(1);
+    expect(thirty.placed[0].durationMinutes).toBe(30);
+
+    const sixty = run({ meetings: [meeting({ startMs })], prepDurationMinutes: 60 });
+    expect(sixty.placed).toHaveLength(1);
+    expect(sixty.placed[0].durationMinutes).toBe(60);
+  });
+
 });

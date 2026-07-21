@@ -161,6 +161,7 @@ export async function POST(request: NextRequest) {
       calendarId,
       allDay,
       recurrence,
+      transparency,
     } = body;
 
     if (!integrationId || !title || !startTime || !endTime) {
@@ -188,6 +189,7 @@ export async function POST(request: NextRequest) {
       {
         allDay: !!allDay,
         recurrence: Array.isArray(recurrence) ? recurrence : undefined,
+        transparency: transparency === 'transparent' ? 'transparent' : undefined,
       }
     );
 

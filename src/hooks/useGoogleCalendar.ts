@@ -32,6 +32,7 @@ interface UseGoogleCalendarReturn {
     options?: {
       allDay?: boolean;
       recurrence?: string[];
+      transparency?: 'opaque' | 'transparent';
     }
   ) => Promise<{ event: CalendarEvent | null; error?: string }>;
   deleteGoogleEvent: (
@@ -207,6 +208,7 @@ export function useGoogleCalendar(): UseGoogleCalendarReturn {
     options?: {
       allDay?: boolean;
       recurrence?: string[];
+      transparency?: 'opaque' | 'transparent';
     }
   ): Promise<{ event: CalendarEvent | null; error?: string }> => {
     // Create optimistic event with temp ID

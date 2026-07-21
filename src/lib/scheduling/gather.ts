@@ -51,7 +51,6 @@ export interface WeekContext {
   busyIntervals: BusyInterval[];
   weekEvents: CalendarEvent[]; // full events (for the prep step + "Prep:" dedupe)
   existingScheduledCounts: Record<string, number>;
-  existingBlocksByDate: Record<string, number>;
   existingCategoryCountsByDate: Record<string, Record<string, number>>;
   quotas: CapacityQuota[];
 }
@@ -177,7 +176,6 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   const inWeek = (d?: string) => !!d && d >= weekStartStr && d <= weekEndStr;
 
   const existingScheduledCounts: Record<string, number> = {};
-  const existingBlocksByDate: Record<string, number> = {};
   const existingCategoryCountsByDate: Record<string, Record<string, number>> = {};
   const scheduledGids = new Set<string>();
 
@@ -190,9 +188,10 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
 
   // Grouped-block tasks (e.g. Engagement / Outreach) all point at the SAME Google
   // event, so count that block once even though it records several scheduled
-  // tasks — otherwise remaining quota / maxTasksPerDay would be over-counted on a
-  // mid-week re-run. Single-task blocks each have a unique event, so this is a
-  // no-op for them; entries without an event id are always counted.
+  // tasks — otherwise remaining quota / per-category spread counts would be
+  // over-counted on a mid-week re-run. Single-task blocks each have a unique
+  // event, so this is a no-op for them; entries without an event id are always
+  // counted.
   const countedEvents = new Set<string>();
   for (const s of scheduledAsana) {
     if (!inWeek(s.scheduledDate)) continue;
@@ -201,7 +200,6 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
       if (countedEvents.has(s.googleEventId)) continue;
       countedEvents.add(s.googleEventId);
     }
-    existingBlocksByDate[s.scheduledDate] = (existingBlocksByDate[s.scheduledDate] ?? 0) + 1;
     const typeValue = asanaTypeByGid.get(s.asanaTaskId) ?? null;
     bump(classifyBlockCategory(typeValue ? [typeValue] : [], quotas), s.scheduledDate);
   }
@@ -210,7 +208,6 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   for (const t of adHocTasks) {
     if (t.completed || !inWeek(t.dueDate)) continue;
     scheduledAdhocIds.add(t.id);
-    existingBlocksByDate[t.dueDate!] = (existingBlocksByDate[t.dueDate!] ?? 0) + 1;
     bump(classifyBlockCategory(adHocTypeSignals(t.taskType, customTypes), quotas), t.dueDate!);
   }
 
@@ -252,7 +249,6 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     busyIntervals,
     weekEvents,
     existingScheduledCounts,
-    existingBlocksByDate,
     existingCategoryCountsByDate,
     quotas,
   };

@@ -115,8 +115,26 @@ export function useCalendarEvents() {
   }, []);
 
   const createGoogleEvent = useCallback(
-    async (integrationId: string, title: string, startTime: Date, endTime: Date, description?: string, eventType?: 'default' | 'focusTime'): Promise<CalendarEvent | null> => {
-      const result = await createGoogleEventInternal(integrationId, title, startTime, endTime, description, eventType);
+    async (
+      integrationId: string,
+      title: string,
+      startTime: Date,
+      endTime: Date,
+      description?: string,
+      eventType?: 'default' | 'focusTime',
+      calendarId?: string,
+      options?: { allDay?: boolean; recurrence?: string[]; transparency?: 'opaque' | 'transparent' }
+    ): Promise<CalendarEvent | null> => {
+      const result = await createGoogleEventInternal(
+        integrationId,
+        title,
+        startTime,
+        endTime,
+        description,
+        eventType,
+        calendarId,
+        options
+      );
       return result.event;
     },
     [createGoogleEventInternal]

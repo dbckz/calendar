@@ -24,7 +24,6 @@ function makeConfig(overrides: {
     },
     typeMapping: overrides.typeMapping ?? { Deep: ['deep'] },
     scheduling: {
-      maxTasksPerDay: 4,
       bufferBetweenTasks: '30min',
       workingDays: ALL_DAYS,
       workingHours: { start: '09:00', end: '17:00' },
@@ -49,7 +48,6 @@ function makeInput(overrides: Partial<ProposeBlocksInput> = {}): ProposeBlocksIn
     busyIntervals: [],
     candidateTasks: [],
     existingScheduledCounts: {},
-    existingBlocksByDate: {},
     weekStart: WEEK_START,
     now: WEEK_START, // Monday 00:00, no now-cutoff within the week
     ...overrides,
@@ -102,6 +100,51 @@ describe('proposeBlocks - basics', () => {
   });
 });
 
+describe('proposeBlocks - durationOverridesByCategory', () => {
+  it('uses the override duration for a category instead of its targetLength', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({ quotas: { Deep: { weeklyCount: 1, targetLength: '1h', preferredTimes: ['09:00-11:00'] } } }),
+        candidateTasks: [task({ gid: 'a' })],
+        durationOverridesByCategory: { Deep: 90 },
+      })
+    );
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].durationMinutes).toBe(90);
+  });
+
+  it('falls back to the targetLength-derived duration when no override is given', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({ quotas: { Deep: { weeklyCount: 1, targetLength: '1h', preferredTimes: ['09:00-11:00'] } } }),
+        candidateTasks: [task({ gid: 'a' })],
+      })
+    );
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].durationMinutes).toBe(60);
+  });
+
+  it('only overrides the named category, leaving others at their targetLength', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: {
+            Deep: { weeklyCount: 1, targetLength: '1h', preferredTimes: [] },
+            Todos: { weeklyCount: 1, targetLength: '30min', preferredTimes: [] },
+          },
+          typeMapping: { Deep: ['deep'], Todos: ['todo'] },
+        }),
+        candidateTasks: [task({ gid: 'a' }), task({ gid: 'b', typeSignals: ['todo'] })],
+        durationOverridesByCategory: { Deep: 120 },
+      })
+    );
+    const deep = proposals.find(p => p.category === 'Deep');
+    const todos = proposals.find(p => p.category === 'Todos');
+    expect(deep?.durationMinutes).toBe(120);
+    expect(todos?.durationMinutes).toBe(30);
+  });
+});
+
 describe('proposeBlocks - buffer collisions', () => {
   it('respects buffer against existing busy intervals', () => {
     // Busy 09:00-10:00, buffer 30min, duration 1h, preferred 09:00-12:00.
@@ -137,35 +180,6 @@ describe('proposeBlocks - buffer collisions', () => {
   });
 });
 
-describe('proposeBlocks - maxTasksPerDay', () => {
-  it('does not exceed maxTasksPerDay on a single working day', () => {
-    const proposals = proposeBlocks(
-      makeInput({
-        config: makeConfig({
-          quotas: { Deep: { weeklyCount: 3, targetLength: '1h', preferredTimes: [] } },
-          scheduling: { maxTasksPerDay: 1, workingDays: ['Monday'] },
-        }),
-        candidateTasks: [task({ gid: 'a' }), task({ gid: 'b' }), task({ gid: 'c' })],
-      })
-    );
-    expect(proposals).toHaveLength(1);
-  });
-
-  it('counts existing blocks toward maxTasksPerDay', () => {
-    const proposals = proposeBlocks(
-      makeInput({
-        config: makeConfig({
-          quotas: { Deep: { weeklyCount: 2, targetLength: '1h', preferredTimes: [] } },
-          scheduling: { maxTasksPerDay: 2, workingDays: ['Monday'] },
-        }),
-        candidateTasks: [task({ gid: 'a' }), task({ gid: 'b' })],
-        existingBlocksByDate: { [dateStr(WEEK_START)]: 1 },
-      })
-    );
-    expect(proposals).toHaveLength(1); // 1 existing + 1 new = max 2
-  });
-});
-
 describe('proposeBlocks - preferred windows outside working hours', () => {
   it('honours a preferred window that sits outside working hours', () => {
     const proposals = proposeBlocks(
@@ -190,7 +204,6 @@ describe('proposeBlocks - week boundary', () => {
       makeInput({
         config: makeConfig({
           quotas: { Deep: { weeklyCount: 20, targetLength: '1h', preferredTimes: [] } },
-          scheduling: { maxTasksPerDay: 10 },
         }),
         candidateTasks: [],
       })
@@ -266,8 +279,10 @@ describe('proposeBlocks - ranking', () => {
         ],
       })
     );
-    // Category B (has a hard-deadline task) is scheduled into the earliest slot.
-    const first = proposals.find(p => p.start === '09:00');
+    // Both categories lack preferredTimes, so they default to the afternoon
+    // window (mornings are reserved for deep work); category B (hard deadline)
+    // is processed first and claims the earliest afternoon slot.
+    const first = proposals.find(p => p.start === '12:00');
     expect(first?.category).toBe('B');
   });
 
@@ -356,23 +371,6 @@ describe('proposeBlocks - soft day spread', () => {
     );
     expect(proposals).toHaveLength(1);
     // Monday already has a Deep block, so the new one avoids it.
-    expect(proposals[0].date).toBe(tuesdayStr);
-  });
-
-  it('skips a day that is full per maxTasksPerDay even at spread level 0', () => {
-    const mondayStr = dateStr(WEEK_START);
-    const tuesdayStr = dateStr(new Date(2026, 6, 14));
-    const proposals = proposeBlocks(
-      makeInput({
-        config: makeConfig({
-          quotas: { Deep: { weeklyCount: 1, targetLength: '1h', preferredTimes: [] } },
-          scheduling: { maxTasksPerDay: 1, workingDays: ['Monday', 'Tuesday'] },
-        }),
-        candidateTasks: [task({ gid: 'a' })],
-        existingBlocksByDate: { [mondayStr]: 1 }, // Monday full
-      })
-    );
-    expect(proposals).toHaveLength(1);
     expect(proposals[0].date).toBe(tuesdayStr);
   });
 
@@ -475,6 +473,51 @@ describe('proposeBlocks - grouped blocks', () => {
     for (const p of proposals) {
       expect(p.tasks!.map(t => t.gid).sort()).toEqual(['a', 'b']);
     }
+  });
+});
+
+describe('proposeBlocks - afternoon default for non-deep-work', () => {
+  it('lands empty-preferredTimes categories at/after 12:00 while deep work keeps its morning window', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: {
+            'Writing/Deep Work': { weeklyCount: 1, targetLength: '1h', preferredTimes: ['08:30-11:00'] },
+            Todos: { weeklyCount: 1, targetLength: '30min', preferredTimes: [] },
+          },
+          typeMapping: { 'Writing/Deep Work': ['deep'], Todos: ['todo'] },
+          scheduling: { workingHours: { start: '08:30', end: '17:00' } },
+        }),
+        candidateTasks: [
+          task({ gid: 'd', typeSignals: ['deep'] }),
+          task({ gid: 't', typeSignals: ['todo'] }),
+        ],
+      })
+    );
+    const deep = proposals.find(p => p.category === 'Writing/Deep Work');
+    const todos = proposals.find(p => p.category === 'Todos');
+    // Deep work owns the morning; the non-deep category defaults to afternoon.
+    expect(deep?.start).toBe('08:30');
+    expect(todos?.start).toBeDefined();
+    expect(todos!.start >= '12:00').toBe(true);
+  });
+
+  it('keeps a configured preferredTimes window (does not force afternoon)', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: {
+            Blogs: { weeklyCount: 1, targetLength: '1h', preferredTimes: ['08:30-16:00'] },
+          },
+          typeMapping: { Blogs: ['blog'] },
+          scheduling: { workingHours: { start: '08:30', end: '17:00' } },
+        }),
+        candidateTasks: [task({ gid: 'b', typeSignals: ['blog'] })],
+      })
+    );
+    expect(proposals).toHaveLength(1);
+    // Its explicit morning-inclusive window is honoured, not overridden to 12:00.
+    expect(proposals[0].start).toBe('08:30');
   });
 });
 

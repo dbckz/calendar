@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { classifyBlockCategory } from '@/lib/capacity';
+import { classifyBlockCategory, parseTargetLength } from '@/lib/capacity';
 import { gatherWeekContext } from '@/lib/scheduling/gather';
 import { taskSortKey, compareKeys } from '@/lib/scheduling/engine';
 import type { CandidateTask } from '@/lib/scheduling/types';
@@ -60,6 +60,7 @@ export async function POST(request: NextRequest) {
           grouped,
           remainingQuota: noQuota || grouped ? null : Math.max(0, weeklyCount - existing),
           autoSelect: noQuota ? false : ctx.config.taskQuotas[q.category]?.autoSelect === true,
+          targetLengthMinutes: parseTargetLength(ctx.config.taskQuotas[q.category]?.targetLength) || 30,
           candidates: list.map(t => ({
             id: t.gid ?? t.adhocId ?? '',
             gid: t.gid,

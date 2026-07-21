@@ -26,14 +26,23 @@ export async function POST(request: NextRequest) {
       body?.categoryOverrides && typeof body.categoryOverrides === 'object' ? body.categoryOverrides : {};
     const prepBlocks: ProposedBlock[] = Array.isArray(body?.prepBlocks) ? body.prepBlocks : [];
 
+    // Per-week block-length overrides (minutes) keyed by category. Keep only
+    // positive finite numbers, round to int, cap at 480 (8h). These do not
+    // modify the saved workflow config.
+    const durationOverrides: Record<string, number> = {};
+    if (body?.durationOverrides && typeof body.durationOverrides === 'object') {
+      for (const [category, value] of Object.entries(body.durationOverrides)) {
+        const n = Number(value);
+        if (Number.isFinite(n) && n > 0) {
+          durationOverrides[category] = Math.min(480, Math.round(n));
+        }
+      }
+    }
+
     const ctx = await gatherWeekContext(typeof body?.weekStart === 'string' ? body.weekStart : undefined);
 
-    // Accepted prep blocks occupy time before task placement: join busy + counts.
+    // Accepted prep blocks occupy time before task placement (as busy intervals).
     const busyIntervals = [...ctx.busyIntervals, ...prepBlocks.map(blockToInterval)];
-    const existingBlocksByDate = { ...ctx.existingBlocksByDate };
-    for (const block of prepBlocks) {
-      existingBlocksByDate[block.date] = (existingBlocksByDate[block.date] ?? 0) + 1;
-    }
 
     const priorityIds = new Set(priorityGids);
     const autoSelectByCategory = new Map(
@@ -74,8 +83,8 @@ export async function POST(request: NextRequest) {
       busyIntervals,
       candidateTasks,
       existingScheduledCounts: ctx.existingScheduledCounts,
-      existingBlocksByDate,
       existingCategoryCountsByDate: ctx.existingCategoryCountsByDate,
+      durationOverridesByCategory: Object.keys(durationOverrides).length ? durationOverrides : undefined,
       weekStart: ctx.weekStart,
       now: ctx.now,
     });
