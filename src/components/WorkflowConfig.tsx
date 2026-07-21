@@ -10,6 +10,7 @@ interface TaskQuota {
   preferredTimes: string[];
   autoSelect?: boolean;
   grouped?: boolean;
+  maxSelection?: number;
 }
 
 interface WorkRunConfig {
@@ -24,6 +25,7 @@ interface SchedulingConfig {
     start: string;
     end: string;
   };
+  ritualGoogleIntegrationId?: string;
 }
 
 interface WorkflowConfig {
@@ -76,6 +78,7 @@ const DEFAULT_CONFIG: WorkflowConfig = {
 export default function WorkflowConfig() {
   const [config, setConfig] = useState<WorkflowConfig>(DEFAULT_CONFIG);
   const [customTypes, setCustomTypes] = useState<CustomTaskType[]>([]);
+  const [googleIntegrations, setGoogleIntegrations] = useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
@@ -85,6 +88,16 @@ export default function WorkflowConfig() {
     api.getCustomTaskTypes()
       .then(({ customTypes }) => setCustomTypes(customTypes))
       .catch(err => console.error('Failed to load custom task types:', err));
+    // Enabled + connected Google integrations feed the ritual-calendar picker.
+    api.getSettings()
+      .then(({ googleIntegrations }) =>
+        setGoogleIntegrations(
+          googleIntegrations
+            .filter(g => g.enabled && g.connected)
+            .map(g => ({ id: g.id, name: g.name }))
+        )
+      )
+      .catch(err => console.error('Failed to load integrations:', err));
   }, []);
 
   // Known task types available for mapping: built-ins + user custom types.
@@ -328,6 +341,33 @@ export default function WorkflowConfig() {
                     Grouped blocks (place N container blocks sharing one agenda of all selected tasks)
                   </label>
                 )}
+
+                {showWeeklyCount && (
+                  <div className="mt-3">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Max tasks to select (optional)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={quota.maxSelection ?? ''}
+                      onChange={(e) => {
+                        const v = e.target.value.trim();
+                        const n = parseInt(v, 10);
+                        updateTaskQuota(
+                          taskType,
+                          'maxSelection',
+                          v === '' || Number.isNaN(n) || n <= 0 ? undefined : n
+                        );
+                      }}
+                      placeholder="No cap"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Caps how many tasks you can pick in Plan my week — enforced even for grouped categories. Leave blank for no cap.
+                    </p>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -473,6 +513,29 @@ export default function WorkflowConfig() {
               </label>
             ))}
           </div>
+        </div>
+
+        <div className="mt-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Ritual calendar (Lunch &amp; Emails)
+          </label>
+          <select
+            value={config.scheduling.ritualGoogleIntegrationId ?? ''}
+            onChange={(e) =>
+              updateScheduling('ritualGoogleIntegrationId', e.target.value || undefined)
+            }
+            className="w-full px-3 py-2 border border-gray-300 rounded-md"
+          >
+            <option value="">Default calendar</option>
+            {googleIntegrations.map(g => (
+              <option key={g.id} value={g.id}>
+                {g.name}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-400 mt-1">
+            Which Google calendar daily Lunch / Emails events are created on. Defaults to the primary calendar.
+          </p>
         </div>
       </div>
 

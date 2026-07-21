@@ -32,7 +32,9 @@ import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 
 import {
   buildWindowsForTask,
+  excludeMorningWindows,
   findSlot,
+  MORNING_PREP_EXCLUSION_MINUTES,
   preferredWindowsForCategory,
   resolveWorkingWindow,
   timeStr,
@@ -241,8 +243,12 @@ export function planReplan(input: ReplanInput): ReplanResult {
           workingDays
         );
     // Prep constraint: the new slot must END before the meeting starts. Cap each
-    // window's end at the meeting start; drop windows left with no room.
+    // window's end at the meeting start; drop windows left with no room. Prep also
+    // never starts a day (deep work / todos / meetings first), so exclude the
+    // first MORNING_PREP_EXCLUSION_MINUTES of each working day — the same rule the
+    // initial prep placer applies.
     if (block.mustEndBeforeMs !== undefined) {
+      windows = excludeMorningWindows(windows, workingDays, MORNING_PREP_EXCLUSION_MINUTES);
       windows = capWindows(windows, block.mustEndBeforeMs);
     }
     const slot = findSlot(windows, block.durationMinutes, workRun, busy, nowMs);

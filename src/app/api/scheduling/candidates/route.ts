@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { classifyBlockCategory, parseTargetLength } from '@/lib/capacity';
+import { classifyBlockCategoryWithCatchAll, parseTargetLength, resolveSelectionCap } from '@/lib/capacity';
 import { gatherWeekContext } from '@/lib/scheduling/gather';
 import { taskSortKey, compareKeys } from '@/lib/scheduling/engine';
 import type { CandidateTask } from '@/lib/scheduling/types';
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
       const id = task.gid ?? task.adhocId ?? '';
       const overrideCategory = categoryOverrides[id];
       const typeSignals = overrideCategory ? [overrideCategory] : task.typeSignals;
-      const category = classifyBlockCategory(typeSignals, ctx.quotas);
+      const category = classifyBlockCategoryWithCatchAll(typeSignals, ctx.quotas);
       if (!category) continue;
       const withFlags: CandidateTask = {
         ...task,
@@ -54,16 +54,23 @@ export async function POST(request: NextRequest) {
         const existing = ctx.existingScheduledCounts[q.category] ?? 0;
         const list = (tasksByCategory.get(q.category) ?? []).slice();
         list.sort((a, b) => compareKeys(taskSortKey(a), taskSortKey(b)));
+        // An explicit maxSelection caps how many tasks the wizard may select,
+        // taking precedence over the no-quota / grouped "pick any" behavior (so a
+        // grouped category can still be capped, e.g. Deep Work "up to 3").
+        const maxSelection = ctx.config.taskQuotas[q.category]?.maxSelection;
+        const remainingQuota = resolveSelectionCap({ weeklyCount, grouped, maxSelection, existing });
         return {
           category: q.category,
           noQuota,
           grouped,
-          remainingQuota: noQuota || grouped ? null : Math.max(0, weeklyCount - existing),
+          hasMaxSelection: typeof maxSelection === 'number',
+          remainingQuota,
           autoSelect: noQuota ? false : ctx.config.taskQuotas[q.category]?.autoSelect === true,
           targetLengthMinutes: parseTargetLength(ctx.config.taskQuotas[q.category]?.targetLength) || 30,
           candidates: list.map(t => ({
             id: t.gid ?? t.adhocId ?? '',
             gid: t.gid,
+            integrationId: t.integrationId,
             title: t.title,
             dueDate: t.dueDate,
             deadlineType: t.deadlineType,

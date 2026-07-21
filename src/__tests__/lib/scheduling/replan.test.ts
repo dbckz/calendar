@@ -266,9 +266,11 @@ describe('planReplan - meeting prep blocks', () => {
     );
   });
 
-  it('honors mustEndBeforeMs: never re-slots a prep block past its meeting start', () => {
-    // Meeting is Wednesday 10:00; today is Wednesday 08:00. The only room before
-    // it is 08:00–10:00 today. A prep block must land entirely before 10:00.
+  it('honors mustEndBeforeMs + the morning exclusion when re-slotting a prep block', () => {
+    // Meeting is Wednesday 10:00; today is Wednesday 08:00. The only room before it
+    // is 08:00–10:00 today, but prep never starts a day: the first 90 minutes
+    // (08:00–09:30) are excluded, so the block re-slots to 09:30 (workStart+90) and
+    // still ends by 10:00.
     const cfg = makeConfig({
       quotas: { 'Meeting prep': { weeklyCount: 0, targetLength: '30min', preferredTimes: [] } },
       scheduling: { workingHours: { start: '08:00', end: '17:00' } },
@@ -289,6 +291,7 @@ describe('planReplan - meeting prep blocks', () => {
     });
     expect(stale).toHaveLength(0);
     expect(moves).toHaveLength(1);
+    expect(moves[0].newStart).toBe('09:30'); // workStart (08:00) + 90 min, not 08:00
     expect(ms(moves[0].newDate, moves[0].newStart) + 30 * 60 * 1000).toBeLessThanOrEqual(
       ms('2026-07-15', '10:00')
     );

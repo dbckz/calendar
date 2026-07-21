@@ -30,7 +30,7 @@
 // target to fill toward, so they emit no reserved blocks; instead they schedule
 // one block per SELECTED candidate task, placed after all quota'd categories.
 
-import { classifyBlockCategory, normalize, parseTargetLength, type CapacityQuota } from '@/lib/capacity';
+import { classifyBlockCategoryWithCatchAll, normalize, parseTargetLength, type CapacityQuota } from '@/lib/capacity';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 import type { BestTime } from '@/types';
 import type {
@@ -377,6 +377,33 @@ export function resolveWorkingWindow(
   return { workingHoursStart, workingHoursEnd, workingDayNames, workRun, workingDays };
 }
 
+// A working day must never START with meeting prep: deep work / todos / meetings
+// come first. Prep-block placement (and prep re-slotting in replan) excludes the
+// first N minutes of each working day from its candidate windows, so prep can
+// only land later in the day (or the day before). Shared so prep.ts and
+// replan.ts enforce the identical rule.
+export const MORNING_PREP_EXCLUSION_MINUTES = 90;
+
+// Raise each window's start to at least (its day's working-hours start +
+// exclusionMinutes), dropping any window left with no room. Windows on a date not
+// in `workingDays` are passed through unchanged.
+export function excludeMorningWindows(
+  windows: Window[],
+  workingDays: WorkingDay[],
+  exclusionMinutes: number
+): Window[] {
+  const earliestByDate = new Map(
+    workingDays.map(d => [d.dateStr, d.whStartMs + exclusionMinutes * MS_PER_MINUTE])
+  );
+  const out: Window[] = [];
+  for (const w of windows) {
+    const earliest = earliestByDate.get(w.dateStr);
+    const startMs = earliest !== undefined ? Math.max(w.startMs, earliest) : w.startMs;
+    if (startMs < w.endMs) out.push({ ...w, startMs });
+  }
+  return out;
+}
+
 // --- Spare-capacity assessment ---------------------------------------------
 //
 // After a plan is proposed, we want to tell the user how much *usable* free work
@@ -508,7 +535,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
   // Bucket candidate tasks by category (via the shared classifier).
   const tasksByCategory = new Map<string, CandidateTask[]>();
   for (const task of candidateTasks) {
-    const category = classifyBlockCategory(task.typeSignals, quotas);
+    const category = classifyBlockCategoryWithCatchAll(task.typeSignals, quotas);
     if (!category) continue;
     const list = tasksByCategory.get(category) ?? [];
     list.push(task);

@@ -74,6 +74,50 @@ export function classifyBlockCategory(
   return null;
 }
 
+// The "catch-all" category, if the config defines one: a category with no weekly
+// quota (weeklyCount falsy) AND no mapped types (empty list). It exists to absorb
+// whatever matches nothing else — e.g. "General Todos". Returns its name or null.
+// Multiple such categories would be unusual; the first in quota order wins.
+export function findCatchAllCategory(quotas: CapacityQuota[]): string | null {
+  const catchAll = quotas.find(q => !q.weeklyCount && q.types.length === 0);
+  return catchAll ? catchAll.category : null;
+}
+
+// Classify a block's type signals to a category, falling back to the config's
+// catch-all category (see findCatchAllCategory) when nothing else matches. This
+// is what the "Plan my week" selection pipeline uses so a task that maps to no
+// explicit category is still routed to the catch-all (e.g. "General Todos") in
+// EVERY path — the candidates display, the propose selection filter, and the
+// engine's bucketing — rather than being silently dropped. Kept separate from
+// classifyBlockCategory (which stays a pure "does it match" check) so the
+// dashboard capacity view is unaffected.
+export function classifyBlockCategoryWithCatchAll(
+  typeSignals: string[],
+  quotas: CapacityQuota[]
+): string | null {
+  return classifyBlockCategory(typeSignals, quotas) ?? findCatchAllCategory(quotas);
+}
+
+// Resolve the "Plan my week" wizard's selection cap for a category: how many
+// tasks the user may still select this week, or null for "pick any" (unlimited).
+//   * An explicit maxSelection caps selection at (maxSelection - already
+//     scheduled this week), floored at 0, and TAKES PRECEDENCE over the
+//     grouped/no-quota "pick any" behavior — so a grouped category (e.g. Deep
+//     Work) can still be capped at "up to N". The wizard never lifts this cap.
+//   * Otherwise a no-quota catch-all or a grouped category is uncapped (null).
+//   * A plain quota'd category caps at its unmet weekly quota.
+export function resolveSelectionCap(opts: {
+  weeklyCount?: number;
+  grouped?: boolean;
+  maxSelection?: number;
+  existing: number;
+}): number | null {
+  const { weeklyCount = 0, grouped, maxSelection, existing } = opts;
+  if (typeof maxSelection === 'number') return Math.max(0, maxSelection - existing);
+  if (weeklyCount <= 0 || grouped) return null;
+  return Math.max(0, weeklyCount - existing);
+}
+
 export function computeCapacity(
   quotas: CapacityQuota[],
   blocks: CapacityBlock[]

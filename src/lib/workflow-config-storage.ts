@@ -19,6 +19,11 @@ export interface TaskQuota {
   // selection cap is lifted) are distributed across those blocks round-robin and
   // listed inside each block's event as an agenda, rather than one task per block.
   grouped?: boolean;
+  // Optional hard cap on how many tasks the "Plan my week" wizard lets the user
+  // SELECT for this category. When set, it caps the selection even for grouped
+  // categories (which otherwise lift the cap) and is not lifted by "Add more
+  // tasks". Used e.g. to keep grouped Deep Work at "up to 3" agenda items.
+  maxSelection?: number;
 }
 
 // Continuous-work-run rule. The calendar should form busy runs of at most
@@ -42,6 +47,10 @@ export interface SchedulingConfig {
     start: string;
     end: string;
   };
+  // Optional Google integration id that daily ritual events (Lunch / Emails) are
+  // created on. When unset, rituals fall back to the default Google integration.
+  // Lets rituals live on a specific calendar (e.g. the OM work calendar).
+  ritualGoogleIntegrationId?: string;
 }
 
 // Budget policy for the delegation pacer (drains the queue at a sustainable
@@ -198,6 +207,13 @@ export async function getWorkflowConfig(): Promise<WorkflowConfig> {
     const taskQuotas = parsed.taskQuotas || DEFAULT_CONFIG.taskQuotas;
     for (const [category, quota] of Object.entries(taskQuotas)) {
       if (quota.autoSelect === undefined) quota.autoSelect = category === 'Batch';
+      // Tolerant load: keep maxSelection only when it's a positive integer,
+      // otherwise drop it so a malformed value can't break the selection cap.
+      if (quota.maxSelection !== undefined) {
+        const n = Number(quota.maxSelection);
+        if (Number.isFinite(n) && n > 0) quota.maxSelection = Math.floor(n);
+        else delete quota.maxSelection;
+      }
     }
 
     // Normalize scheduling: fill the work-run rule with defaults when a legacy
@@ -209,6 +225,13 @@ export async function getWorkflowConfig(): Promise<WorkflowConfig> {
             maxMinutes: parsed.scheduling.workRun?.maxMinutes ?? DEFAULT_WORK_RUN.maxMinutes,
             bufferMinutes: parsed.scheduling.workRun?.bufferMinutes ?? DEFAULT_WORK_RUN.bufferMinutes,
           },
+          // Tolerant load: keep a ritual integration id only when it's a non-empty
+          // string, otherwise drop it so rituals fall back to the default calendar.
+          ritualGoogleIntegrationId:
+            typeof parsed.scheduling.ritualGoogleIntegrationId === 'string' &&
+            parsed.scheduling.ritualGoogleIntegrationId.trim()
+              ? parsed.scheduling.ritualGoogleIntegrationId
+              : undefined,
         }
       : DEFAULT_CONFIG.scheduling;
 

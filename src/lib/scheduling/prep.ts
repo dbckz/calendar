@@ -16,6 +16,7 @@ import {
   localDateStr,
   resolveWorkingWindow,
   timeStr,
+  MORNING_PREP_EXCLUSION_MINUTES,
   type BusyMs,
   type Window,
 } from './engine';
@@ -133,23 +134,29 @@ export function proposePrepBlocks(
   return { placed, unplaced };
 
   // First-fit a prep-length slot within a working day, preferring the afternoon
-  // (12:00 → end) so mornings stay free for deep work, then the full
-  // working-hours window. An optional end cap (day-of case, so prep ends before
-  // the meeting) applies to BOTH windows, keeping day-of prep for morning
-  // meetings working.
+  // (12:00 → end) so mornings stay free for deep work, then the rest of the day.
+  // The first MORNING_PREP_EXCLUSION_MINUTES of the working day are excluded from
+  // BOTH windows so a day never STARTS with prep (deep work / todos / meetings go
+  // first). An optional end cap (day-of case, so prep ends before the meeting)
+  // also applies to both. If a meeting is so early that only the excluded window
+  // could hold day-of prep, no slot is returned here — prep then falls back to
+  // the day before (or unplaced), never violating the morning rule.
   function tryDay(
     day: { dateStr: string; whStartMs: number; whEndMs: number } | undefined,
     prepDuration: number,
     endCapMs?: number
   ): { startMs: number; endMs: number; dateStr: string; preferred: boolean } | null {
     if (!day) return null;
+    const earliestStartMs = day.whStartMs + MORNING_PREP_EXCLUSION_MINUTES * MS_PER_MINUTE;
     const endMs = endCapMs !== undefined ? Math.min(day.whEndMs, endCapMs) : day.whEndMs;
-    if (endMs <= day.whStartMs) return null;
+    if (endMs <= earliestStartMs) return null;
 
-    const afternoonStartMs = new Date(new Date(day.whStartMs).setHours(12, 0, 0, 0)).getTime();
+    const noonMs = new Date(new Date(day.whStartMs).setHours(12, 0, 0, 0)).getTime();
+    const afternoonStartMs = Math.max(noonMs, earliestStartMs);
     const windows: Window[] = [];
-    // Afternoon window first (only when it is non-empty and starts within hours).
-    if (afternoonStartMs > day.whStartMs && afternoonStartMs < endMs) {
+    // Afternoon window first (only when it starts after the excluded morning and
+    // is non-empty).
+    if (afternoonStartMs > earliestStartMs && afternoonStartMs < endMs) {
       windows.push({
         date: new Date(day.whStartMs),
         dateStr: day.dateStr,
@@ -159,11 +166,11 @@ export function proposePrepBlocks(
         bestTimeMatch: false,
       });
     }
-    // Full working-hours window as the fallback.
+    // Rest-of-day window (from the end of the excluded morning) as the fallback.
     windows.push({
       date: new Date(day.whStartMs),
       dateStr: day.dateStr,
-      startMs: day.whStartMs,
+      startMs: earliestStartMs,
       endMs,
       preferred: false,
       bestTimeMatch: false,

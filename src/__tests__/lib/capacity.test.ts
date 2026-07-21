@@ -4,6 +4,9 @@
 import {
   parseTargetLength,
   classifyBlockCategory,
+  classifyBlockCategoryWithCatchAll,
+  findCatchAllCategory,
+  resolveSelectionCap,
   computeCapacity,
   CapacityQuota,
   CapacityBlock,
@@ -72,6 +75,71 @@ describe('classifyBlockCategory', () => {
   it('does not create false matches across categories', () => {
     expect(classifyBlockCategory(['Deep Work'], quotas)).toBeNull();
     expect(classifyBlockCategory(['Blog'], quotas)).toBeNull();
+  });
+});
+
+describe('findCatchAllCategory / classifyBlockCategoryWithCatchAll', () => {
+  // Mirrors the user's real config shape: a "General Todos" category with no
+  // weeklyCount and an empty types list, alongside typed quota categories.
+  const quotas: CapacityQuota[] = [
+    { category: 'Writing/Deep Work', weeklyCount: 3, targetLength: '1.5h', types: ['writing'] },
+    { category: 'Batch', weeklyCount: 2, targetLength: '30min', types: ['batch'] },
+    { category: 'General Todos', targetLength: '30min', types: [] },
+  ];
+
+  it('identifies the no-weeklyCount, empty-types category as the catch-all', () => {
+    expect(findCatchAllCategory(quotas)).toBe('General Todos');
+  });
+
+  it('returns null when no catch-all category exists', () => {
+    const noCatchAll: CapacityQuota[] = [
+      { category: 'Writing/Deep Work', weeklyCount: 3, targetLength: '1.5h', types: ['writing'] },
+      { category: 'Blogs', weeklyCount: 2, targetLength: '1.5h', types: [] }, // has a quota
+    ];
+    expect(findCatchAllCategory(noCatchAll)).toBeNull();
+  });
+
+  it('routes a task that matches no explicit category to the catch-all', () => {
+    // A task typed "todo"/"errand" matches none of the mapped types, so the
+    // plain classifier drops it — but the catch-all classifier sends it to
+    // "General Todos" instead of returning null.
+    expect(classifyBlockCategory(['todo'], quotas)).toBeNull();
+    expect(classifyBlockCategoryWithCatchAll(['todo'], quotas)).toBe('General Todos');
+    expect(classifyBlockCategoryWithCatchAll(['errand'], quotas)).toBe('General Todos');
+    expect(classifyBlockCategoryWithCatchAll([], quotas)).toBe('General Todos');
+  });
+
+  it('still prefers an explicit category match over the catch-all', () => {
+    expect(classifyBlockCategoryWithCatchAll(['writing'], quotas)).toBe('Writing/Deep Work');
+    expect(classifyBlockCategoryWithCatchAll(['batch'], quotas)).toBe('Batch');
+    // A task explicitly categorised (via override) as General Todos still lands there.
+    expect(classifyBlockCategoryWithCatchAll(['General Todos'], quotas)).toBe('General Todos');
+  });
+});
+
+describe('resolveSelectionCap', () => {
+  it('caps a plain quota category at its unmet weekly quota', () => {
+    expect(resolveSelectionCap({ weeklyCount: 3, existing: 0 })).toBe(3);
+    expect(resolveSelectionCap({ weeklyCount: 3, existing: 1 })).toBe(2);
+    expect(resolveSelectionCap({ weeklyCount: 3, existing: 5 })).toBe(0); // floored
+  });
+
+  it('lifts the cap (null) for no-quota and grouped categories', () => {
+    expect(resolveSelectionCap({ weeklyCount: 0, existing: 0 })).toBeNull(); // no-quota catch-all
+    expect(resolveSelectionCap({ weeklyCount: 3, grouped: true, existing: 0 })).toBeNull();
+  });
+
+  it('maxSelection caps a grouped category (e.g. Deep Work "up to 3"), overriding "pick any"', () => {
+    // The Task 3 scenario: grouped Writing/Deep Work with maxSelection 3 must cap
+    // selection at 3 rather than lifting it to null.
+    expect(resolveSelectionCap({ weeklyCount: 3, grouped: true, maxSelection: 3, existing: 0 })).toBe(3);
+    // Already-scheduled blocks this week are subtracted, floored at 0.
+    expect(resolveSelectionCap({ weeklyCount: 3, grouped: true, maxSelection: 3, existing: 2 })).toBe(1);
+    expect(resolveSelectionCap({ weeklyCount: 3, grouped: true, maxSelection: 3, existing: 5 })).toBe(0);
+  });
+
+  it('maxSelection also caps a no-quota category', () => {
+    expect(resolveSelectionCap({ weeklyCount: 0, maxSelection: 2, existing: 0 })).toBe(2);
   });
 });
 

@@ -49,6 +49,10 @@ export interface ProposeWeekRequest {
   weekStart?: string;
   selections?: Record<string, string[]>; // category -> selected candidate ids
   priorityGids?: string[];
+  // Task ids (gid or adhocId) flagged "must do this week". Marked isPriority on
+  // the engine's candidates so they sort first within their category and are
+  // never dropped by a selection cap.
+  mustDoIds?: string[];
   categoryOverrides?: Record<string, string>; // candidate id -> category
   prepBlocks?: ProposedBlock[];
   durationOverrides?: Record<string, number>; // grouped category -> per-week block length (mins)
@@ -95,6 +99,9 @@ export interface PrepCandidatesResponse {
 export interface WeekCandidate {
   id: string;
   gid?: string;
+  // Asana integration id (present for Asana-backed tasks). Needed to mark the
+  // task done in Asana from the wizard.
+  integrationId?: string;
   title: string;
   dueDate?: string;
   deadlineType?: string;
@@ -109,6 +116,10 @@ export interface WeekCandidateCategory {
   // Grouped categories (e.g. Engagement / Outreach) also lift the selection cap
   // (remainingQuota is null); their picked tasks are spread across fixed blocks.
   grouped?: boolean;
+  // True when the category has an explicit maxSelection cap. Unlike a plain
+  // grouped/no-quota category, this cap is enforced even in "Add more tasks"
+  // mode (the cap is never lifted), and remainingQuota carries the cap value.
+  hasMaxSelection?: boolean;
   remainingQuota: number | null;
   autoSelect: boolean;
   // Category's configured target block length in minutes (parsed from the
@@ -873,6 +884,19 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items }),
     });
+  },
+
+  // Wizard step 3: mark an Asana task complete without leaving the planner.
+  async completeAsanaTaskInWizard(gid: string, integrationId: string): Promise<{ success: true }> {
+    return fetchWithRetry<{ success: true }>(
+      '/api/asana/complete',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gid, integrationId }),
+      },
+      { maxRetries: 0 }
+    );
   },
 
   // Wizard step 2: which meetings need prep, with proposed slots.

@@ -6,10 +6,13 @@ import {
   CalendarClock,
   Loader2,
   Check,
+  CheckCircle2,
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
   Star,
+  Flag,
+  ExternalLink,
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
@@ -22,6 +25,7 @@ import {
   type PriorityMatchRow,
   type PrepCandidatesResponse,
   type WeekCandidateCategory,
+  type WeekCandidate,
   type SpareCapacity,
 } from '@/lib/api';
 import type { ProposedBlock } from '@/lib/scheduling/types';
@@ -280,6 +284,14 @@ export function PlanWeekModal({
   // not present here uses its category's default block length.
   const [taskDurationOverrides, setTaskDurationOverrides] = useState<Record<string, number>>({});
 
+  // Step 3 — "Must do this week": task ids (gid/adhocId) the user flagged as
+  // must-do. Flagging auto-selects the task and bypasses the selection cap; the
+  // ids are sent to the propose route to mark them isPriority (sorted first,
+  // never dropped). Reset on open.
+  const [mustDoIds, setMustDoIds] = useState<Set<string>>(new Set());
+  // Ids of Asana tasks currently being marked done from the wizard (spinner).
+  const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
+
   // Step 3 — "Add more tasks": set when the user returns to the tasks step from
   // review to spend spare capacity. Lifts the per-category selection cap so
   // explicit over-quota picks are allowed, and shows a banner on the tasks step.
@@ -320,6 +332,8 @@ export function PlanWeekModal({
     setTasksEngaged(false);
     setTaskDurations({});
     setTaskDurationOverrides({});
+    setMustDoIds(new Set());
+    setCompletingIds(new Set());
     setAddMoreMode(false);
     setProposals([]);
     setQuotaSummary([]);
@@ -430,27 +444,27 @@ export function PlanWeekModal({
     }
   }, [prepDurations, prepDays]);
 
-  // Overriding one meeting's prep length re-proposes slots with the full maps so
-  // the proposed blocks re-flow around the new (possibly longer) block.
-  const changePrepDuration = useCallback(
-    (eventId: string, durationMinutes: number) => {
-      const next = { ...prepDurations, [eventId]: durationMinutes };
-      setPrepDurations(next);
-      fetchPrep(next, prepDays);
-    },
-    [prepDurations, prepDays, fetchPrep]
-  );
+  // Changing a prep row's length/day updates LOCAL state only — no refetch on
+  // every change (that felt like a page reload). The proposed slots are
+  // re-computed once, from both maps, when the user clicks Next off the prep step
+  // (see advancePrep). The per-row proposed-slot text may be briefly stale after
+  // a change; a note tells the user slots finalize on Next.
+  const changePrepDuration = useCallback((eventId: string, durationMinutes: number) => {
+    setPrepDurations(prev => ({ ...prev, [eventId]: durationMinutes }));
+  }, []);
 
-  // Overriding one meeting's prep DAY re-proposes slots with the full maps so the
-  // block moves to the chosen day (falling back if nothing fits there).
-  const changePrepDay = useCallback(
-    (eventId: string, date: string) => {
-      const next = { ...prepDays, [eventId]: date };
-      setPrepDays(next);
-      fetchPrep(prepDurations, next);
-    },
-    [prepDays, prepDurations, fetchPrep]
-  );
+  const changePrepDay = useCallback((eventId: string, date: string) => {
+    setPrepDays(prev => ({ ...prev, [eventId]: date }));
+  }, []);
+
+  // Next off the prep step: re-propose prep slots once with the full duration/day
+  // maps (showing the button's busy state while it runs) so acceptedPrepBlocks
+  // are fresh before advancing to the tasks step.
+  const advancePrep = useCallback(async () => {
+    await fetchPrep(prepDurations, prepDays);
+    setPrepEngaged(true);
+    setStep('tasks');
+  }, [fetchPrep, prepDurations, prepDays]);
 
   const fetchTasks = useCallback(async () => {
     setIsLoading(true);
@@ -496,6 +510,7 @@ export function PlanWeekModal({
     try {
       const body: ProposeWeekRequest = {};
       if (priorityIds.length) body.priorityGids = priorityIds;
+      if (mustDoIds.size) body.mustDoIds = Array.from(mustDoIds);
       if (Object.keys(categoryOverrides).length) body.categoryOverrides = categoryOverrides;
       if (prepEngaged) body.prepBlocks = acceptedPrepBlocks;
       if (tasksEngaged && taskCats) {
@@ -520,7 +535,7 @@ export function PlanWeekModal({
     } finally {
       setIsLoading(false);
     }
-  }, [priorityIds, categoryOverrides, prepEngaged, acceptedPrepBlocks, tasksEngaged, taskCats, selections, taskDurations, taskDurationOverrides]);
+  }, [priorityIds, mustDoIds, categoryOverrides, prepEngaged, acceptedPrepBlocks, tasksEngaged, taskCats, selections, taskDurations, taskDurationOverrides]);
 
   // Lazy-fetch on entering a step. Prep/tasks fetch once (cached); review
   // re-proposes each entry since it depends on prior steps' choices.
@@ -656,15 +671,78 @@ export function PlanWeekModal({
 
   // --- Step 3 actions ---
 
-  // remainingQuota === null means no cap (no-quota catch-all category).
+  // remainingQuota === null means no cap (no-quota catch-all category). A must-do
+  // task is always admissible even when the cap is hit.
   const toggleSelection = (category: string, id: string, remainingQuota: number | null) => {
     setSelections(prev => {
       const set = new Set(prev[category] ?? []);
       if (set.has(id)) set.delete(id);
-      else if (remainingQuota === null || set.size < remainingQuota) set.add(id);
+      else if (remainingQuota === null || set.size < remainingQuota || mustDoIds.has(id)) set.add(id);
       return { ...prev, [category]: set };
     });
   };
+
+  // Flag / unflag a task as "must do this week". Flagging auto-selects it,
+  // bypassing the category's selection cap; unflagging leaves the selection as-is.
+  const toggleMustDo = (category: string, id: string) => {
+    const wasFlagged = mustDoIds.has(id);
+    setMustDoIds(prev => {
+      const next = new Set(prev);
+      if (wasFlagged) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    if (!wasFlagged) {
+      setSelections(prev => {
+        const set = new Set(prev[category] ?? []);
+        set.add(id);
+        return { ...prev, [category]: set };
+      });
+    }
+  };
+
+  // Mark an Asana-backed candidate complete in Asana, then drop it from the wizard
+  // (candidates, selections, must-do, per-task overrides).
+  const completeAsana = useCallback(async (id: string, gid: string, integrationId: string) => {
+    setCompletingIds(prev => new Set(prev).add(id));
+    setError(null);
+    try {
+      await api.completeAsanaTaskInWizard(gid, integrationId);
+      setTaskCats(prev =>
+        prev
+          ? prev.map(c => ({ ...c, candidates: c.candidates.filter(cd => cd.id !== id) }))
+          : prev
+      );
+      setSelections(prev => {
+        const next: Record<string, Set<string>> = {};
+        for (const [cat, set] of Object.entries(prev)) {
+          const s = new Set(set);
+          s.delete(id);
+          next[cat] = s;
+        }
+        return next;
+      });
+      setMustDoIds(prev => {
+        const n = new Set(prev);
+        n.delete(id);
+        return n;
+      });
+      setTaskDurationOverrides(prev => {
+        if (!(id in prev)) return prev;
+        const rest = { ...prev };
+        delete rest[id];
+        return rest;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to mark task done in Asana');
+    } finally {
+      setCompletingIds(prev => {
+        const n = new Set(prev);
+        n.delete(id);
+        return n;
+      });
+    }
+  }, []);
 
   // Return to the tasks step from review to spend spare capacity. Selections are
   // preserved (kept in state); addMoreMode lifts the per-category selection cap so
@@ -744,8 +822,7 @@ export function PlanWeekModal({
         else confirmPriorities();
         break;
       case 'prep':
-        setPrepEngaged(true);
-        setStep('tasks');
+        advancePrep();
         break;
       case 'tasks':
         setTasksEngaged(true);
@@ -755,7 +832,7 @@ export function PlanWeekModal({
         confirm();
         break;
     }
-  }, [step, matchRows, runMatch, confirmPriorities, confirm, applyTypes]);
+  }, [step, matchRows, runMatch, confirmPriorities, confirm, applyTypes, advancePrep]);
 
   const handleSkip = useCallback(() => {
     switch (step) {
@@ -928,7 +1005,9 @@ export function PlanWeekModal({
                   }
                   className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
-                  {(isConfirming || isApplyingTypes || (isLoading && step === 'priorities')) && (
+                  {(isConfirming ||
+                    isApplyingTypes ||
+                    (isLoading && (step === 'priorities' || step === 'prep'))) && (
                     <Loader2 className="w-4 h-4 animate-spin" />
                   )}
                   {step === 'type' ? (
@@ -1297,6 +1376,11 @@ export function PlanWeekModal({
               })}
             </ul>
           )}
+          {suggested.length > 0 && (
+            <p className="mt-2 text-[11px] text-gray-400">
+              Slots finalize when you press Next.
+            </p>
+          )}
         </div>
 
         {prepData.unplaced.length > 0 && (
@@ -1364,6 +1448,71 @@ export function PlanWeekModal({
       );
     }
 
+    // Open-in-Asana + mark-done controls for an Asana-backed candidate (has a
+    // gid). Both stopPropagation so they don't toggle the row's checkbox.
+    const renderAsanaControls = (c: WeekCandidate) => {
+      if (!c.gid) return null;
+      const completing = completingIds.has(c.id);
+      return (
+        <>
+          <a
+            href={`https://app.asana.com/0/0/${c.gid}/f`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            title="Open in Asana"
+            aria-label={`Open "${c.title}" in Asana`}
+            className="p-1 text-gray-400 hover:text-gray-600 flex-shrink-0"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+          {c.integrationId && (
+            <button
+              type="button"
+              disabled={completing}
+              onClick={e => {
+                e.stopPropagation();
+                completeAsana(c.id, c.gid!, c.integrationId!);
+              }}
+              title="Mark done in Asana"
+              aria-label={`Mark "${c.title}" done in Asana`}
+              className="p-1 text-gray-400 hover:text-emerald-600 flex-shrink-0 disabled:opacity-50"
+            >
+              {completing ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="w-3.5 h-3.5" />
+              )}
+            </button>
+          )}
+        </>
+      );
+    };
+
+    // "Must do this week" toggle for a selectable row.
+    const renderMustDo = (category: string, id: string) => {
+      const on = mustDoIds.has(id);
+      return (
+        <button
+          type="button"
+          onClick={e => {
+            e.stopPropagation();
+            toggleMustDo(category, id);
+          }}
+          title={on ? 'Must do this week — flagged' : 'Flag as must do this week'}
+          aria-pressed={on}
+          className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border flex-shrink-0 transition-colors ${
+            on
+              ? 'bg-amber-100 text-amber-700 border-amber-300'
+              : 'text-gray-400 border-gray-200 hover:bg-gray-100'
+          }`}
+        >
+          <Flag className={`w-3 h-3 ${on ? 'fill-amber-500' : ''}`} />
+          Must do
+        </button>
+      );
+    };
+
     // Compact per-task block-length select for single-task category rows. Default
     // = the category's target length; only explicit picks are stored in
     // taskDurationOverrides.
@@ -1396,8 +1545,10 @@ export function PlanWeekModal({
             : Math.min(cat.remainingQuota, cat.candidates.length);
           const defaultDuration = cat.targetLengthMinutes || 30;
           // Effective selection cap: "Add more tasks" mode lifts every category's
-          // cap (null = unlimited) so the user can over-select beyond quota.
-          const cap = addMoreMode ? null : cat.remainingQuota;
+          // cap (null = unlimited) so the user can over-select beyond quota —
+          // EXCEPT a category with an explicit maxSelection, whose cap always
+          // holds (a shared-agenda category gains nothing from extra picks).
+          const cap = addMoreMode && !cat.hasMaxSelection ? null : cat.remainingQuota;
           return (
             <div key={cat.category} className="rounded-lg border border-gray-200 p-3">
               <div className="flex items-center justify-between gap-2 mb-2">
@@ -1452,6 +1603,7 @@ export function PlanWeekModal({
                   {cat.candidates.slice(0, autoN).map(c => (
                     <li key={c.id} className="flex items-center gap-2">
                       <span className="text-sm text-gray-500 truncate flex-1">{c.title}</span>
+                      {renderAsanaControls(c)}
                       {!cat.grouped && renderTaskDurationSelect(c.id, defaultDuration)}
                     </li>
                   ))}
@@ -1460,14 +1612,16 @@ export function PlanWeekModal({
                 <>
                   <ul className="space-y-1.5">
                     {cat.candidates.map(c => {
-                      const checked = picked.has(c.id);
+                      const isMustDo = mustDoIds.has(c.id);
+                      const checked = picked.has(c.id) || isMustDo;
                       const atCap = cap !== null && picked.size >= cap;
                       return (
                         <li key={c.id} className="flex items-center gap-2">
                           <input
                             type="checkbox"
                             checked={checked}
-                            disabled={!checked && atCap}
+                            // Must-do rows are force-selected; unflag to deselect.
+                            disabled={isMustDo || (!checked && atCap)}
                             onChange={() => toggleSelection(cat.category, c.id, cap)}
                             className="w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500 disabled:opacity-40"
                           />
@@ -1480,6 +1634,8 @@ export function PlanWeekModal({
                               {format(parseISO(c.dueDate), 'MMM d')}
                             </span>
                           )}
+                          {renderMustDo(cat.category, c.id)}
+                          {renderAsanaControls(c)}
                           {!cat.grouped && renderTaskDurationSelect(c.id, defaultDuration)}
                         </li>
                       );
@@ -1509,8 +1665,38 @@ export function PlanWeekModal({
         </p>
       );
     }
+    // Which must-do tasks made it into the plan, and which didn't (for a warning).
+    const idOf = (t: { gid?: string; adhocId?: string }) => t.gid ?? t.adhocId ?? '';
+    const blockIsMustDo = (p: EditableProposal): boolean =>
+      (!!p.task && mustDoIds.has(idOf(p.task))) ||
+      (Array.isArray(p.tasks) && p.tasks.some(t => mustDoIds.has(idOf(t))));
+    const placedMustDo = new Set<string>();
+    for (const p of proposals) {
+      if (p.task && mustDoIds.has(idOf(p.task))) placedMustDo.add(idOf(p.task));
+      if (p.tasks) for (const t of p.tasks) if (mustDoIds.has(idOf(t))) placedMustDo.add(idOf(t));
+    }
+    const titleById = new Map<string, string>();
+    for (const cat of taskCats ?? []) for (const c of cat.candidates) titleById.set(c.id, c.title);
+    const unplacedMustDo = [...mustDoIds].filter(id => !placedMustDo.has(id));
+
     return (
       <>
+        {unplacedMustDo.length > 0 && (
+          <div className="mb-4 flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-3">
+            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-red-500" />
+            <div className="text-xs text-red-700">
+              <p className="font-medium mb-1">
+                {unplacedMustDo.length} must-do task{unplacedMustDo.length === 1 ? '' : 's'} could not
+                be scheduled:
+              </p>
+              <ul className="space-y-0.5">
+                {unplacedMustDo.map(id => (
+                  <li key={id}>{titleById.get(id) ?? id}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
         {quotaSummary.some(q => q.unmet > 0) && (
           <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 p-3">
             <p className="text-xs font-medium text-amber-800 mb-1">Quota not fully met</p>
@@ -1589,6 +1775,12 @@ export function PlanWeekModal({
                           >
                             {label}
                           </span>
+                          {blockIsMustDo(p) && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700 flex-shrink-0">
+                              <Flag className="w-2.5 h-2.5 fill-amber-500" />
+                              Must do
+                            </span>
+                          )}
                         </div>
                         {/* Grouped block: list its assigned tasks as an agenda. */}
                         {isGrouped && p.tasks!.length > 0 && (

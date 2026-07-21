@@ -143,6 +143,40 @@ describe('proposeBlocks - no-quota catch-all categories', () => {
     expect(proposals.every(p => p.task !== undefined)).toBe(true);
   });
 
+  it('REGRESSION: schedules a selected General Todo whose type matches no category (catch-all)', () => {
+    // Mirrors the user's real config: "General Todos" has no weeklyCount and an
+    // EMPTY types list (typeMapping []), so a task typed "todo"/"errand" matches
+    // no category's mapped types. Before the catch-all fix, classifyBlockCategory
+    // returned null for such a task and the engine silently dropped it from
+    // tasksByCategory — so a selected General Todo never became a block. It must
+    // now route to the catch-all "General Todos" category and schedule.
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: {
+            'Writing/Deep Work': { weeklyCount: 1, targetLength: '1.5h', preferredTimes: ['08:30-11:00'] },
+            'General Todos': { targetLength: '30min', preferredTimes: [] },
+          },
+          // Note the EMPTY types list for General Todos — the crux of the bug.
+          typeMapping: { 'Writing/Deep Work': ['writing'], 'General Todos': [] },
+          scheduling: { workingHours: { start: '08:30', end: '17:00' } },
+        }),
+        // Two General Todos whose Asana "Type" is "todo"/"errand" — neither maps
+        // to any category. They arrive via the propose route's exact path (which
+        // now uses classifyBlockCategoryWithCatchAll before handing tasks here).
+        candidateTasks: [
+          task({ gid: 'todo-1', typeSignals: ['todo'] }),
+          task({ gid: 'todo-2', typeSignals: ['errand'] }),
+        ],
+      })
+    );
+    const todos = proposals.filter(p => p.category === 'General Todos');
+    expect(todos).toHaveLength(2);
+    expect(todos.map(p => p.task?.gid).sort()).toEqual(['todo-1', 'todo-2']);
+    // Each is a real single-task block, never a reserved filler.
+    expect(todos.every(p => p.task !== undefined)).toBe(true);
+  });
+
   it('processes no-quota categories AFTER quota\'d categories (filler cannot steal slots)', () => {
     const proposals = proposeBlocks(
       makeInput({
@@ -672,6 +706,39 @@ describe('proposeBlocks - grouped blocks', () => {
     expect(proposals).toHaveLength(2); // 3 - 1 already scheduled
     for (const p of proposals) {
       expect(p.tasks!.map(t => t.gid).sort()).toEqual(['a', 'b']);
+    }
+  });
+
+  it('composes grouped + autoSelect: N container blocks with all candidates as the shared agenda', () => {
+    // Batch becomes a grouped, auto-select category: 2 blocks/week, 30 min each,
+    // where every block shares the full agenda of ALL its candidates (auto-select
+    // means the engine receives every candidate — no manual selection filter).
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: {
+            Batch: {
+              weeklyCount: 2,
+              targetLength: '30min',
+              grouped: true,
+              autoSelect: true,
+              preferredTimes: [],
+            },
+          },
+          typeMapping: { Batch: ['batch'] },
+          scheduling: { workingHours: { start: '08:30', end: '18:00' } },
+        }),
+        candidateTasks: ['a', 'b', 'c'].map(g => task({ gid: g, typeSignals: ['batch'] })),
+      })
+    );
+    // Exactly weeklyCount (2) container blocks, 30 min each, never one-per-task.
+    expect(proposals).toHaveLength(2);
+    for (const p of proposals) {
+      expect(p.category).toBe('Batch');
+      expect(p.task).toBeUndefined();
+      expect(p.durationMinutes).toBe(30);
+      // Each block carries the identical full agenda of all candidates.
+      expect(p.tasks!.map(t => t.gid).sort()).toEqual(['a', 'b', 'c']);
     }
   });
 

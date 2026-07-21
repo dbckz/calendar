@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { classifyBlockCategory } from '@/lib/capacity';
+import { classifyBlockCategoryWithCatchAll } from '@/lib/capacity';
 import { gatherWeekContext } from '@/lib/scheduling/gather';
 import { proposeBlocks, localDateStr, computeSpareCapacity, resolveWorkingWindow } from '@/lib/scheduling/engine';
 import {
@@ -30,6 +30,10 @@ export async function POST(request: NextRequest) {
     const selections: Record<string, string[]> | undefined =
       body?.selections && typeof body.selections === 'object' ? body.selections : undefined;
     const priorityGids: string[] = Array.isArray(body?.priorityGids) ? body.priorityGids : [];
+    // Task ids (gid or adhocId) flagged "must do this week" in the wizard. Marked
+    // isPriority so they sort first within their category (taskSortKey) and are
+    // never dropped by a selection cap.
+    const mustDoIds: string[] = Array.isArray(body?.mustDoIds) ? body.mustDoIds : [];
     const categoryOverrides: Record<string, string> =
       body?.categoryOverrides && typeof body.categoryOverrides === 'object' ? body.categoryOverrides : {};
     const prepBlocks: ProposedBlock[] = Array.isArray(body?.prepBlocks) ? body.prepBlocks : [];
@@ -86,6 +90,7 @@ export async function POST(request: NextRequest) {
     ];
 
     const priorityIds = new Set(priorityGids);
+    const mustDoSet = new Set(mustDoIds);
     const autoSelectByCategory = new Map(
       Object.entries(ctx.config.taskQuotas).map(([category, quota]) => [category, quota.autoSelect === true])
     );
@@ -106,11 +111,12 @@ export async function POST(request: NextRequest) {
       const withFlags: CandidateTask = {
         ...task,
         typeSignals,
-        isPriority: task.gid ? priorityIds.has(task.gid) : task.isPriority,
+        isPriority:
+          mustDoSet.has(id) || (task.gid ? priorityIds.has(task.gid) : task.isPriority),
       };
 
       if (selectionSets) {
-        const category = classifyBlockCategory(typeSignals, ctx.quotas);
+        const category = classifyBlockCategoryWithCatchAll(typeSignals, ctx.quotas);
         if (category && !autoSelectByCategory.get(category)) {
           const picked = selectionSets.get(category);
           // Manual category the user didn't pick for at all → no candidates

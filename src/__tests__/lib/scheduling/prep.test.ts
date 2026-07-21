@@ -76,17 +76,38 @@ describe('proposePrepBlocks', () => {
     expect(placed[0].start).toBe('12:00'); // afternoon-first, before the 14:00 meeting
   });
 
-  it('fits a day-of prep before the meeting start (capped at the meeting, no flat buffer)', () => {
-    // Monday meeting at 09:40: day-of window is [09:00, 09:40]. A 15-min prep fits
-    // at 09:00 and ends before the meeting starts (the work-run rule governs runs,
-    // not a flat pre-meeting buffer).
-    const startMs = new Date(2026, 6, 13, 9, 40).getTime();
+  it('an early-morning day-of meeting falls back to the day before (never starts a day with prep)', () => {
+    // Tuesday meeting at 09:40: the day-of window [09:00, 09:40] sits entirely in
+    // the excluded first 90 minutes (workStart 09:00 → earliest prep 10:30), so no
+    // day-of prep is allowed. Placement falls back to Monday (the day before).
+    const startMs = new Date(2026, 6, 14, 9, 40).getTime(); // Tue 09:40
     const { placed, unplaced } = run({ meetings: [meeting({ startMs })] });
 
     expect(unplaced).toHaveLength(0);
     expect(placed).toHaveLength(1);
-    expect(placed[0].date).toBe('2026-07-13');
-    expect(placed[0].start).toBe('09:00');
+    expect(placed[0].date).toBe('2026-07-13'); // Monday, the day before
+    expect(placed[0].start).toBe('12:00'); // afternoon-first on the day before
+  });
+
+  it('never starts prep before workStart + 90 minutes (day-of, afternoon unavailable)', () => {
+    // Tuesday meeting at 11:00. Monday (day before) is fully busy, so prep must go
+    // day-of. The day-of window is capped at 11:00 and the afternoon (12:00) is
+    // past the cap, so the rest-of-day window from workStart+90 (10:30) is used:
+    // prep lands at 10:30, never in the excluded 09:00–10:30 morning.
+    const startMs = new Date(2026, 6, 14, 11, 0).getTime(); // Tue 11:00
+    const mondayFull: BusyInterval = {
+      start: new Date(2026, 6, 13, 9, 0),
+      end: new Date(2026, 6, 13, 17, 0),
+    };
+    const { placed, unplaced } = run({
+      meetings: [meeting({ startMs })],
+      busyIntervals: [mondayFull],
+    });
+
+    expect(unplaced).toHaveLength(0);
+    expect(placed).toHaveLength(1);
+    expect(placed[0].date).toBe('2026-07-14'); // Tuesday, day of
+    expect(placed[0].start).toBe('10:30'); // workStart (09:00) + 90 min
   });
 
   it('reports meetings that fit nowhere as unplaced', () => {
@@ -111,11 +132,11 @@ describe('proposePrepBlocks', () => {
     expect(new Set(starts).size).toBe(2);
   });
 
-  it('prefers the afternoon on the day before, but still fits a morning meeting day-of when the day before is full', () => {
-    // Meeting Tuesday 10:00. Monday (day before) is busy across all working
-    // hours, so no prep slot exists there. Day-of Tuesday morning must still
-    // fit prep before the 10:00 meeting (afternoon window is empty when capped
-    // before noon, so it falls through to the morning working-hours window).
+  it('leaves an early-morning meeting unplaced rather than starting the day with prep', () => {
+    // Meeting Tuesday 10:00. Monday (day before) is busy across all working hours,
+    // so no day-before slot exists. The only day-of room is [09:00, 10:00], which
+    // lies entirely within the excluded first 90 minutes (earliest prep 10:30), so
+    // the morning rule wins: the prep is left unplaced rather than violated.
     const startMs = new Date(2026, 6, 14, 10, 0).getTime(); // Tue 10:00
     const mondayFull: BusyInterval = {
       start: new Date(2026, 6, 13, 9, 0),
@@ -126,10 +147,8 @@ describe('proposePrepBlocks', () => {
       busyIntervals: [mondayFull],
     });
 
-    expect(unplaced).toHaveLength(0);
-    expect(placed).toHaveLength(1);
-    expect(placed[0].date).toBe('2026-07-14'); // Tuesday, day of
-    expect(placed[0].start).toBe('09:00'); // morning, before the 10:00 meeting
+    expect(placed).toHaveLength(0);
+    expect(unplaced).toHaveLength(1);
   });
 
   it('defaults a prep block to 15 minutes when the meeting has no durationMinutes', () => {
@@ -180,17 +199,18 @@ describe('proposePrepBlocks', () => {
     expect(placed[0].date).toBe('2026-07-13'); // Monday, the chosen day
   });
 
-  it('respects the before-meeting end-cap when preferredDate is the meeting day', () => {
-    // Monday meeting at 09:40, prep preferred on the day of. The day-of window is
-    // [09:00, 09:40]; a 15-min prep must fit before the meeting starts.
-    const startMs = new Date(2026, 6, 13, 9, 40).getTime(); // Mon 09:40
+  it('respects the before-meeting end-cap and the morning exclusion when preferredDate is the meeting day', () => {
+    // Monday meeting at 11:00, prep preferred on the day of. The day-of window is
+    // capped at 11:00; the excluded morning pushes the earliest start to 10:30, so
+    // a 15-min prep lands at 10:30 (after the exclusion, before the meeting).
+    const startMs = new Date(2026, 6, 13, 11, 0).getTime(); // Mon 11:00
     const { placed, unplaced } = run({
       meetings: [meeting({ startMs, preferredDate: '2026-07-13' })],
     });
     expect(unplaced).toHaveLength(0);
     expect(placed).toHaveLength(1);
     expect(placed[0].date).toBe('2026-07-13');
-    expect(placed[0].start).toBe('09:00'); // before the 09:40 meeting
+    expect(placed[0].start).toBe('10:30'); // workStart+90, before the 11:00 meeting
   });
 
   it('falls back to the default search when the preferred day is full', () => {

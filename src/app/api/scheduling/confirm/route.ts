@@ -13,6 +13,7 @@ import {
   addPrepBlock,
   addRitualBlock,
 } from '@/lib/user-data-storage';
+import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import type { GoogleCalendarCredentials, GoogleIntegration } from '@/types';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import { eventTitleForBlock } from '@/lib/scheduling/event-titles';
@@ -70,6 +71,12 @@ export async function POST(request: NextRequest) {
     // integration's primary calendar, with the integration's `eventTransparency`
     // (e.g. OM tasks → OM Google calendar, marked Free). Everything else uses the
     // default integration and opaque (busy) availability.
+    // Ritual events (Lunch / Emails) go on the configured ritual Google
+    // integration (e.g. the OM work calendar) when set, else the default. They
+    // stay opaque/busy so lunch blocks bookings.
+    const config = await getWorkflowConfig();
+    const ritualGoogleIntegrationId = config.scheduling.ritualGoogleIntegrationId;
+
     const asanaIntegrations = await getEnabledAsanaIntegrations();
     const asanaRouting = new Map(
       asanaIntegrations
@@ -116,7 +123,12 @@ export async function POST(request: NextRequest) {
       proposal: ProposedBlock
     ): { googleIntegrationId: string; transparency: 'opaque' | 'transparent' } => {
       const fallback = { googleIntegrationId: defaultGoogle!.id, transparency: 'opaque' as const };
-      if (proposal.kind === 'prep' || proposal.kind === 'ritual') return fallback;
+      if (proposal.kind === 'ritual') {
+        return ritualGoogleIntegrationId
+          ? { googleIntegrationId: ritualGoogleIntegrationId, transparency: 'opaque' as const }
+          : fallback;
+      }
+      if (proposal.kind === 'prep') return fallback;
       const tasks = Array.isArray(proposal.tasks)
         ? proposal.tasks
         : proposal.task
