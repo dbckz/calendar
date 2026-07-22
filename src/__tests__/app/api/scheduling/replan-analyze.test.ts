@@ -142,6 +142,69 @@ describe('replan analyze — daily review blocks', () => {
     expect(block!.tasks[0].completedInAsana).toBeUndefined();
   });
 
+  it('recovers a legacy single-task title from the calendar event title', async () => {
+    mockScheduled.mockResolvedValue([
+      {
+        id: 's1',
+        asanaTaskId: 'g-done',
+        scheduledDate: '2026-07-13',
+        scheduledTime: '09:00',
+        duration: 60,
+        googleEventId: 'evt-legacy',
+        googleIntegrationId: 'gi1',
+        // no taskName: entry predates title capture
+      },
+    ]);
+    setContext({
+      weekEvents: [
+        {
+          id: 'evt-legacy',
+          allDay: false,
+          title: '✍️ Write the report',
+          startTime: new Date(2026, 6, 13, 9, 0).toISOString(),
+          endTime: new Date(2026, 6, 13, 10, 0).toISOString(),
+        },
+      ],
+    });
+
+    const { reviewBlocks } = await analyze();
+    const block = reviewBlocks.find(b => b.googleEventId === 'evt-legacy');
+
+    expect(block!.titles).toEqual(['Write the report']);
+  });
+
+  it('recovers legacy grouped-task titles from the event description agenda', async () => {
+    const shared = {
+      scheduledDate: '2026-07-13',
+      scheduledTime: '09:00',
+      duration: 60,
+      googleEventId: 'evt-group',
+      googleIntegrationId: 'gi1',
+    };
+    mockScheduled.mockResolvedValue([
+      { id: 's1', asanaTaskId: '111', ...shared },
+      { id: 's2', asanaTaskId: '222', ...shared },
+    ]);
+    setContext({
+      weekEvents: [
+        {
+          id: 'evt-group',
+          allDay: false,
+          title: '🤝 Engagement / Outreach',
+          description:
+            'Grouped block\n\n• First task\n  https://app.asana.com/0/0/111/f\n• Second task\n  https://app.asana.com/0/0/222/f',
+          startTime: new Date(2026, 6, 13, 9, 0).toISOString(),
+          endTime: new Date(2026, 6, 13, 10, 0).toISOString(),
+        },
+      ],
+    });
+
+    const { reviewBlocks } = await analyze();
+    const block = reviewBlocks.find(b => b.googleEventId === 'evt-group');
+
+    expect(block!.titles).toEqual(['First task', 'Second task']);
+  });
+
   it('uses the matched calendar event interval for startMs (dragged event)', async () => {
     // Stored slot says 09:00; the live event was dragged to 14:00.
     const draggedStart = new Date(2026, 6, 13, 14, 0, 0, 0);

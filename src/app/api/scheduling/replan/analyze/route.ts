@@ -86,15 +86,38 @@ export async function POST(request: NextRequest) {
       asanaGroups.set(s.googleEventId, list);
     }
 
+    // Recover a task title from the app-created calendar event for legacy
+    // scheduled entries with no stored taskName: a single-task event is titled
+    // with the task name (category emoji prefix), and a grouped event's
+    // description carries a "• <title>\n  <asana url>" agenda line per task
+    // (see event-titles.ts).
+    const titleFromEvent = (eventId: string, gid: string, single: boolean): string | undefined => {
+      const ev = eventById.get(eventId);
+      if (!ev) return undefined;
+      if (single) {
+        const stripped = ev.title.replace(/^\s*\p{Extended_Pictographic}️?\s*/u, '').trim();
+        return stripped || undefined;
+      }
+      const m = (ev.description ?? '').match(
+        new RegExp(`•\\s*(.+)\\s*\\n\\s*https://app\\.asana\\.com/0/\\d+/${gid}\\b`)
+      );
+      return m?.[1]?.trim() || undefined;
+    };
+
     for (const [eventId, entries] of asanaGroups) {
       appEventIds.add(eventId);
       taskIdsByEvent.set(eventId, entries.map(e => e.asanaTaskId));
       const first = entries[0];
-      // Prefer the live Asana name; fall back to the title captured at scheduling
-      // time so a task already completed (and thus absent from the incomplete
-      // fetch) still shows its name rather than a generic placeholder.
+      // Prefer the live Asana name; then the title captured at scheduling time;
+      // then a title recovered from the calendar event — so a task already
+      // completed (and thus absent from the incomplete fetch) still shows its
+      // name rather than a generic placeholder.
       const titles = entries.map(
-        e => incompleteByGid.get(e.asanaTaskId)?.name ?? e.taskName ?? 'Scheduled task'
+        e =>
+          incompleteByGid.get(e.asanaTaskId)?.name ??
+          e.taskName ??
+          titleFromEvent(eventId, e.asanaTaskId, entries.length === 1) ??
+          'Scheduled task'
       );
       // Done when the Asana task(s) are complete, OR the user marked this block
       // "done for planning" in a prior replan (Asana task stays open).
