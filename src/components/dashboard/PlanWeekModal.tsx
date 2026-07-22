@@ -22,7 +22,7 @@ import {
   type SpareCapacity,
 } from '@/lib/api';
 import type { ProposedBlock } from '@/lib/scheduling/types';
-import type { AsanaProject, CalendarEvent } from '@/types';
+import type { AsanaProject, CalendarEvent, Reminder } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
 
 import {
@@ -33,9 +33,11 @@ import {
   type EditableProposal,
   type MatchRow,
   type MatchMeta,
+  type ReminderTriageRow,
 } from './plan-week/types';
 import { TypeStep } from './plan-week/TypeStep';
 import { PrioritiesStep } from './plan-week/PrioritiesStep';
+import { RemindersStep } from './plan-week/RemindersStep';
 import { PrepStep } from './plan-week/PrepStep';
 import { TasksStep } from './plan-week/TasksStep';
 import { ReviewStep } from './plan-week/ReviewStep';
@@ -48,6 +50,9 @@ interface PlanWeekModalProps {
   // unclassified tasks" pre-step to find untyped tasks and write labels back.
   asanaTasks?: CalendarEvent[];
   typeFieldInfoByIntegration?: Map<string, AsanaTypeFieldInfo>;
+  // Asana integrations/workspaces (id + name), used by the reminders-triage step
+  // to offer conversion destinations. Absent → the reminders step is skipped.
+  asanaIntegrations?: Array<{ id: string; name: string }>;
 }
 
 export function PlanWeekModal({
@@ -56,6 +61,7 @@ export function PlanWeekModal({
   onApplied,
   asanaTasks,
   typeFieldInfoByIntegration,
+  asanaIntegrations,
 }: PlanWeekModalProps) {
   const [step, setStep] = useState<Step>('priorities');
   const [isLoading, setIsLoading] = useState(false);
@@ -87,14 +93,29 @@ export function PlanWeekModal({
 
   const hasTypeStep = untypedTasks.length > 0;
 
-  // The type step is prepended only when there are untyped tasks to classify.
+  // Uncompleted Google Tasks reminders, fetched once on open. null = not yet
+  // loaded / Google Tasks not connected. The reminders-triage step is included
+  // only when there's at least one reminder AND an Asana workspace to file into.
+  const [reminderList, setReminderList] = useState<Reminder[] | null>(null);
+  const hasRemindersStep =
+    (reminderList?.length ?? 0) > 0 && (asanaIntegrations?.length ?? 0) > 0;
+
+  // The type step is prepended only when there are untyped tasks to classify; the
+  // reminders step is inserted after priorities only when there are reminders.
   const stepOrder = useMemo<Exclude<Step, 'done'>[]>(
-    () =>
-      hasTypeStep
-        ? ['type', 'priorities', 'prep', 'tasks', 'review']
-        : ['priorities', 'prep', 'tasks', 'review'],
-    [hasTypeStep]
+    () => [
+      ...(hasTypeStep ? (['type'] as const) : []),
+      'priorities',
+      ...(hasRemindersStep ? (['reminders'] as const) : []),
+      'prep',
+      'tasks',
+      'review',
+    ],
+    [hasTypeStep, hasRemindersStep]
   );
+
+  // The step that follows priorities — reminders when present, else prep.
+  const afterPriorities: Step = hasRemindersStep ? 'reminders' : 'prep';
 
   // Step 0 — type review
   const [typeRows, setTypeRows] = useState<TypeRow[] | null>(null); // null = not yet classified
@@ -116,6 +137,15 @@ export function PlanWeekModal({
   >([]);
   const [priorityIds, setPriorityIds] = useState<string[]>([]);
   const [categoryOverrides, setCategoryOverrides] = useState<Record<string, string>>({});
+
+  // Step 1b — reminders triage. rows = per-reminder keep/convert decisions
+  // (null until AI suggestions have been fetched). Projects are fetched once and
+  // shared by every row's destination dropdown.
+  const [reminderRows, setReminderRows] = useState<ReminderTriageRow[] | null>(null);
+  const [remindersLoading, setRemindersLoading] = useState(false);
+  const [remindersError, setRemindersError] = useState<string | null>(null);
+  const [reminderProjects, setReminderProjects] = useState<AsanaProject[]>([]);
+  const [isConvertingReminders, setIsConvertingReminders] = useState(false);
 
   // Step 2 — prep
   const [prepData, setPrepData] = useState<PrepCandidatesResponse | null>(null);
@@ -183,6 +213,22 @@ export function PlanWeekModal({
     setCreatedTasks([]);
     setPriorityIds([]);
     setCategoryOverrides({});
+    setReminderList(null);
+    setReminderRows(null);
+    setRemindersLoading(false);
+    setRemindersError(null);
+    setReminderProjects([]);
+    setIsConvertingReminders(false);
+    // Fetch reminders once to decide whether to show the triage step. A failure
+    // (e.g. Google Tasks not connected) silently omits the step.
+    if (asanaIntegrations && asanaIntegrations.length > 0) {
+      api
+        .getReminders()
+        .then(({ reminders }) => setReminderList(reminders.filter(r => !r.completed)))
+        .catch(() => setReminderList([]));
+    } else {
+      setReminderList([]);
+    }
     setPrepData(null);
     setPrepBusy(false);
     setShowOtherMeetings(false);
@@ -291,6 +337,83 @@ export function PlanWeekModal({
       setIsApplyingTypes(false);
     }
   }, [typeRows, typeFieldInfoByIntegration, onApplied]);
+
+  // --- Step 1b actions (reminders triage) ---
+
+  // Fetch AI suggestions for where each reminder could go, then build one editable
+  // row per reminder (default "keep"; convert-destination pre-filled from the
+  // suggestion). Projects are fetched alongside for the destination dropdowns. A
+  // classifier failure still yields usable rows (first workspace, blank details).
+  const runReminderSuggest = useCallback(async () => {
+    if (!reminderList || !asanaIntegrations || asanaIntegrations.length === 0) return;
+    setRemindersLoading(true);
+    setRemindersError(null);
+    const defaultIntegrationId = asanaIntegrations[0].id;
+    try {
+      const { projects } = await api
+        .getAsanaProjects()
+        .catch(() => ({ projects: [] as AsanaProject[] }));
+      setReminderProjects(projects);
+
+      const workspaces = asanaIntegrations.map(intg => ({
+        integrationId: intg.id,
+        name: intg.name,
+        projects: projects
+          .filter(p => p.integrationId === intg.id)
+          .map(p => ({ gid: p.gid, name: p.name })),
+        types: Array.from(typeFieldInfoByIntegration?.get(intg.id)?.enumOptions.keys() ?? []).sort(),
+      }));
+
+      const { suggestions } = await api.suggestReminderTriage(
+        reminderList.map(r => ({ id: r.id, title: r.text, notes: r.notes })),
+        workspaces
+      );
+      const byId = new Map(suggestions.map(s => [s.id, s]));
+
+      setReminderRows(
+        reminderList.map(r => {
+          const s = byId.get(r.id);
+          const integrationId =
+            s && asanaIntegrations.some(i => i.id === s.integrationId)
+              ? s.integrationId
+              : defaultIntegrationId;
+          const validProject =
+            !!s && projects.some(p => p.gid === s.projectGid && p.integrationId === integrationId);
+          const validType =
+            !!s &&
+            !!s.taskType &&
+            (typeFieldInfoByIntegration?.get(integrationId)?.enumOptions.has(s.taskType) ?? false);
+          return {
+            id: r.id,
+            name: r.text,
+            notes: r.notes ?? '',
+            action: 'keep' as const,
+            integrationId,
+            projectGid: validProject ? s!.projectGid : '',
+            taskType: validType ? s!.taskType : '',
+            dueOn: r.due ?? '',
+          };
+        })
+      );
+    } catch (err) {
+      // Degrade gracefully: no suggestions, but every reminder is still editable.
+      setReminderRows(
+        reminderList.map(r => ({
+          id: r.id,
+          name: r.text,
+          notes: r.notes ?? '',
+          action: 'keep' as const,
+          integrationId: defaultIntegrationId,
+          projectGid: '',
+          taskType: '',
+          dueOn: r.due ?? '',
+        }))
+      );
+      setRemindersError(err instanceof Error ? err.message : 'Failed to suggest destinations');
+    } finally {
+      setRemindersLoading(false);
+    }
+  }, [reminderList, asanaIntegrations, typeFieldInfoByIntegration]);
 
   // --- Data fetching per step ---
 
@@ -407,6 +530,7 @@ export function PlanWeekModal({
   useEffect(() => {
     if (!isOpen) return;
     if (step === 'type' && typeRows === null && !typeLoading) runTypeClassifier();
+    else if (step === 'reminders' && reminderRows === null && !remindersLoading) runReminderSuggest();
     else if (step === 'prep' && prepData === null) fetchPrep();
     else if (step === 'tasks' && taskCats === null) fetchTasks();
     else if (step === 'review') fetchReview();
@@ -421,7 +545,7 @@ export function PlanWeekModal({
       .map(s => s.trim())
       .filter(Boolean);
     if (items.length === 0) {
-      setStep('prep');
+      setStep(afterPriorities);
       return;
     }
     setIsLoading(true);
@@ -456,7 +580,7 @@ export function PlanWeekModal({
     } finally {
       setIsLoading(false);
     }
-  }, [priorityText]);
+  }, [priorityText, afterPriorities]);
 
   const confirmPriorities = useCallback(async () => {
     if (!matchRows) return;
@@ -507,13 +631,13 @@ export function PlanWeekModal({
       setPriorityIds(ids);
       setCategoryOverrides(overrides);
       setTaskCats(null); // priorities changed → re-fetch candidates
-      setStep('prep');
+      setStep(afterPriorities);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create Asana tasks');
     } finally {
       setIsLoading(false);
     }
-  }, [matchRows, createdTasks, matchMeta.projects]);
+  }, [matchRows, createdTasks, matchMeta.projects, afterPriorities]);
 
   // --- Step 2 actions ---
 
@@ -655,6 +779,36 @@ export function PlanWeekModal({
   const editStart = (id: string, start: string) =>
     setProposals(prev => prev.map(p => (p.id === id ? { ...p, start } : p)));
 
+  // Apply the reminders-triage decisions: for each "convert" row, create the
+  // Asana task (with notes/due/project/type), then delete the source Google Tasks
+  // reminder (mirrors the Reminders tab's convert-then-delete). Returns the number
+  // of conversions that failed so the caller can surface a partial-failure note.
+  const applyReminderConversions = useCallback(async (): Promise<{ succeeded: number; failed: number }> => {
+    const conversions = (reminderRows ?? []).filter(r => r.action === 'convert' && r.name.trim());
+    if (conversions.length === 0) return { succeeded: 0, failed: 0 };
+    setIsConvertingReminders(true);
+    try {
+      const outcomes = await Promise.allSettled(
+        conversions.map(async row => {
+          const info = typeFieldInfoByIntegration?.get(row.integrationId);
+          const optionGid = row.taskType ? info?.enumOptions.get(row.taskType) : undefined;
+          await api.createAsanaTask(row.integrationId, row.name.trim(), {
+            ...(row.notes.trim() ? { notes: row.notes.trim() } : {}),
+            ...(row.dueOn ? { dueOn: row.dueOn } : {}),
+            ...(row.projectGid ? { projectGid: row.projectGid } : {}),
+            ...(info && optionGid ? { customFields: { [info.fieldGid]: optionGid } } : {}),
+          });
+          // Only remove the reminder once its task exists.
+          await api.deleteReminder(row.id);
+        })
+      );
+      const failed = outcomes.filter(o => o.status === 'rejected').length;
+      return { succeeded: conversions.length - failed, failed };
+    } finally {
+      setIsConvertingReminders(false);
+    }
+  }, [reminderRows, typeFieldInfoByIntegration]);
+
   const confirm = useCallback(async () => {
     const accepted = proposals.filter(p => p.accepted);
     if (accepted.length === 0) return;
@@ -678,14 +832,22 @@ export function PlanWeekModal({
       const map: Record<string, ConfirmWeekResult> = {};
       for (const r of res) map[r.id] = r;
       setResults(map);
-      if (res.some(r => r.success)) onApplied?.();
+      // Apply reminder conversions alongside the plan. A partial failure surfaces
+      // a note but doesn't block completing the plan.
+      const { succeeded, failed } = await applyReminderConversions();
+      if (res.some(r => r.success) || succeeded > 0) onApplied?.();
+      if (failed > 0) {
+        setError(
+          `${failed} reminder conversion${failed === 1 ? '' : 's'} failed — those reminders were left untouched.`
+        );
+      }
       setStep('done');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to confirm plan');
     } finally {
       setIsConfirming(false);
     }
-  }, [proposals, onApplied]);
+  }, [proposals, onApplied, applyReminderConversions]);
 
   // --- Navigation ---
 
@@ -697,6 +859,9 @@ export function PlanWeekModal({
       case 'priorities':
         if (matchRows === null) runMatch();
         else confirmPriorities();
+        break;
+      case 'reminders':
+        setStep('prep');
         break;
       case 'prep':
         advancePrep();
@@ -720,6 +885,11 @@ export function PlanWeekModal({
         setPriorityIds([]);
         setCategoryOverrides({});
         setTaskCats(null);
+        setStep(afterPriorities);
+        break;
+      case 'reminders':
+        // Skip = convert nothing; leave every reminder as-is.
+        setReminderRows(prev => (prev ? prev.map(r => ({ ...r, action: 'keep' })) : prev));
         setStep('prep');
         break;
       case 'prep':
@@ -731,15 +901,18 @@ export function PlanWeekModal({
         setStep('review');
         break;
     }
-  }, [step]);
+  }, [step, afterPriorities]);
 
   const handleBack = useCallback(() => {
     switch (step) {
       case 'priorities':
         if (matchRows !== null) setMatchRows(null); // matched → input phase
         break;
-      case 'prep':
+      case 'reminders':
         setStep('priorities');
+        break;
+      case 'prep':
+        setStep(afterPriorities);
         break;
       case 'tasks':
         setStep('prep');
@@ -748,18 +921,23 @@ export function PlanWeekModal({
         setStep('tasks');
         break;
     }
-  }, [step, matchRows]);
+  }, [step, matchRows, afterPriorities]);
 
   if (!isOpen) return null;
 
   const activeIndex = step === 'done' ? stepOrder.length : stepOrder.indexOf(step);
   const canBack =
     (step === 'priorities' && matchRows !== null) ||
+    step === 'reminders' ||
     step === 'prep' ||
     step === 'tasks' ||
     step === 'review';
   const canSkip =
-    step === 'type' || step === 'priorities' || step === 'prep' || step === 'tasks';
+    step === 'type' ||
+    step === 'priorities' ||
+    step === 'reminders' ||
+    step === 'prep' ||
+    step === 'tasks';
 
   const projectsForIntegration = (integrationId: string) =>
     matchMeta.projects.filter(p => p.integrationId === integrationId);
@@ -847,6 +1025,17 @@ export function PlanWeekModal({
                   setPriorityText={setPriorityText}
                   matchMeta={matchMeta}
                   createdTasks={createdTasks}
+                />
+              )}
+              {step === 'reminders' && (
+                <RemindersStep
+                  rows={reminderRows}
+                  setRows={setReminderRows}
+                  loading={remindersLoading}
+                  error={remindersError}
+                  integrations={asanaIntegrations ?? []}
+                  projects={reminderProjects}
+                  typeFieldInfoByIntegration={typeFieldInfoByIntegration}
                 />
               )}
               {step === 'prep' && (
@@ -939,12 +1128,14 @@ export function PlanWeekModal({
                     isLoading ||
                     prepBusy ||
                     (step === 'type' && (typeLoading || isApplyingTypes)) ||
+                    (step === 'reminders' && remindersLoading) ||
                     (step === 'priorities' && !prioritiesReady) ||
-                    (step === 'review' && (acceptedCount === 0 || isConfirming))
+                    (step === 'review' && (acceptedCount === 0 || isConfirming || isConvertingReminders))
                   }
                   className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   {(isConfirming ||
+                    isConvertingReminders ||
                     isApplyingTypes ||
                     (isLoading && (step === 'priorities' || step === 'prep'))) && (
                     <Loader2 className="w-4 h-4 animate-spin" />

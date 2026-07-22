@@ -595,6 +595,29 @@ export const api = {
     );
   },
 
+  // Wizard "Reminders triage" step: suggest a destination Asana workspace/project/
+  // type for each reminder, in ONE headless call. Returns ids/gids the dropdowns
+  // use (blank where nothing valid fit). No retry — the call is expensive.
+  async suggestReminderTriage(
+    reminders: Array<{ id: string; title: string; notes?: string }>,
+    workspaces: Array<{
+      integrationId: string;
+      name: string;
+      projects: Array<{ gid: string; name: string }>;
+      types: string[];
+    }>
+  ): Promise<{ suggestions: Array<{ id: string; integrationId: string; projectGid: string; taskType: string }> }> {
+    return fetchWithRetry(
+      '/api/reminders/triage/suggest',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reminders, workspaces }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
   // "Keep active": snooze a task out of the stale list for a period (default 90 days).
   async keepTaskActive(asanaTaskGid: string, days?: number): Promise<{ success: boolean; keptUntil: string }> {
     return fetchWithRetry('/api/tasks/stale-keep', {

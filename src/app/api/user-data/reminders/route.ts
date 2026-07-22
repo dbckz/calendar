@@ -14,6 +14,8 @@ function toReminder(task: GoogleTask) {
     text: task.title,
     completed: task.status === 'completed',
     createdAt: task.updated,
+    ...(task.notes ? { notes: task.notes } : {}),
+    ...(task.due ? { due: task.due } : {}),
   };
 }
 

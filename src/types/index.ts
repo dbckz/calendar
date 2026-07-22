@@ -407,6 +407,10 @@ export interface Reminder {
   text: string;
   completed: boolean;
   createdAt: string;
+  // Optional free-text notes carried from the underlying Google Task.
+  notes?: string;
+  // Optional due date (yyyy-MM-dd) carried from the underlying Google Task.
+  due?: string;
 }
 
 // Groups for organizing task templates

@@ -1,15 +1,31 @@
 import type { PriorityMatchRow } from '@/lib/api';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 
-export type Step = 'type' | 'priorities' | 'prep' | 'tasks' | 'review' | 'done';
+export type Step = 'type' | 'priorities' | 'reminders' | 'prep' | 'tasks' | 'review' | 'done';
 
 export const STEP_LABELS: Record<Exclude<Step, 'done'>, string> = {
   type: 'Type',
   priorities: 'Priorities',
+  reminders: 'Reminders',
   prep: 'Prep',
   tasks: 'Tasks',
   review: 'Review',
 };
+
+// Row state for the reminders-triage step: one Google Tasks reminder plus the
+// user's (AI-seeded, fully editable) decision about whether to keep it as a
+// reminder or convert it into an Asana task, and — when converting — the
+// destination workspace/project/type/due and the editable name & notes.
+export interface ReminderTriageRow {
+  id: string; // Google Task id
+  name: string; // editable task name (prefilled from the reminder text)
+  notes: string; // editable notes (prefilled from the reminder's notes)
+  action: 'keep' | 'convert';
+  integrationId: string; // chosen Asana integration/workspace
+  projectGid: string; // '' = no project
+  taskType: string; // '' = no type / not applicable for this workspace
+  dueOn: string; // yyyy-MM-dd, '' = no due date
+}
 
 // A single untyped task, resolved with its integration's writable Type labels.
 export interface UntypedTask {

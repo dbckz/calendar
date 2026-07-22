@@ -204,6 +204,7 @@ export function DashboardContent({
         onClose={() => setShowPlanModal(false)}
         asanaTasks={asanaTasks}
         typeFieldInfoByIntegration={typeFieldInfoByIntegration}
+        asanaIntegrations={asanaIntegrations}
         onApplied={() => {
           refetch();
           onPlanApplied?.();

@@ -50,14 +50,20 @@ export interface GoogleTask {
   title: string;
   status: 'needsAction' | 'completed';
   updated: string;
+  notes?: string;
+  // Due date as yyyy-MM-dd (Google returns an RFC3339 timestamp; only the date
+  // component is meaningful for tasks).
+  due?: string;
 }
 
-function toGoogleTask(item: { id?: string | null; title?: string | null; status?: string | null; updated?: string | null }): GoogleTask {
+function toGoogleTask(item: { id?: string | null; title?: string | null; status?: string | null; updated?: string | null; notes?: string | null; due?: string | null }): GoogleTask {
   return {
     id: item.id!,
     title: item.title || '',
     status: item.status as 'needsAction' | 'completed',
     updated: item.updated || '',
+    ...(item.notes ? { notes: item.notes } : {}),
+    ...(item.due ? { due: item.due.slice(0, 10) } : {}),
   };
 }
 
