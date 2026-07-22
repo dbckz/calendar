@@ -118,8 +118,14 @@ export async function generateReviewMessage(outcome: ReviewOutcome, timeoutSecon
       timeoutSeconds,
       model: encouragementModel(),
     });
-    return sanitizeMessage(raw) ?? pickFallback(outcome);
-  } catch {
+    const message = sanitizeMessage(raw);
+    if (message === null) {
+      console.warn('[Review message] Model output rejected by sanitiser:', raw.slice(0, 200));
+      return pickFallback(outcome);
+    }
+    return message;
+  } catch (error) {
+    console.warn('[Review message] Generation failed, using fallback:', error);
     return pickFallback(outcome);
   }
 }
