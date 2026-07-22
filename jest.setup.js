@@ -29,10 +29,16 @@ const createLocalStorageMock = () => {
 
 const localStorageMock = createLocalStorageMock();
 
-Object.defineProperty(window, 'localStorage', {
-  value: localStorageMock,
-  writable: true,
-});
+// `window` only exists under the jsdom environment. Route tests run under the
+// node environment (they import next/server), so guard the browser-only setup.
+const hasWindow = typeof window !== 'undefined';
+
+if (hasWindow) {
+  Object.defineProperty(window, 'localStorage', {
+    value: localStorageMock,
+    writable: true,
+  });
+}
 
 // Mock crypto.randomUUID
 let uuidCounter = 0;

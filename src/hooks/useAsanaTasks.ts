@@ -53,7 +53,8 @@ interface UseAsanaTasksReturn {
     scheduledTime: string,
     duration: number,
     googleEventId?: string,
-    googleIntegrationId?: string
+    googleIntegrationId?: string,
+    taskName?: string
   ) => Promise<ScheduledAsanaTask | null>;
   updateScheduledAsana: (
     scheduleId: string,
@@ -445,7 +446,8 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
     scheduledTime: string,
     duration: number,
     googleEventId?: string,
-    googleIntegrationId?: string
+    googleIntegrationId?: string,
+    taskName?: string
   ): Promise<ScheduledAsanaTask | null> => {
     // Create optimistic scheduled task with temp ID
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -458,6 +460,7 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
       duration,
       googleEventId,
       googleIntegrationId,
+      ...(taskName ? { taskName } : {}),
     };
 
     // Add optimistically to state immediately
@@ -478,7 +481,8 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
         scheduledTime,
         duration,
         googleEventId,
-        googleIntegrationId
+        googleIntegrationId,
+        taskName
       );
       // Replace temp entry with real entry from server
       setScheduledAsanaTasks(prev => {

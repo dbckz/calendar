@@ -22,6 +22,12 @@ export function slotLabel(date: string, start: string): string {
   return `${format(parseISO(date), 'EEE MMM d')} ${start}`;
 }
 
+// Same shape as slotLabel but from an absolute ms instant, used where the actual
+// (possibly dragged) event interval is known rather than a stored yyyy-MM-dd slot.
+export function slotLabelMs(startMs: number): string {
+  return format(new Date(startMs), 'EEE MMM d HH:mm');
+}
+
 // Short human duration, e.g. 90 → "1h30", 60 → "1h", 45 → "45m".
 export function formatDuration(minutes: number): string {
   const h = Math.floor(minutes / 60);

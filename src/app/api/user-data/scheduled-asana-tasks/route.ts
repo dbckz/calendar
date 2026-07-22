@@ -42,7 +42,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { asanaTaskId, integrationId, scheduledDate, scheduledTime, duration, googleEventId, googleIntegrationId } = body;
+    const { asanaTaskId, integrationId, scheduledDate, scheduledTime, duration, googleEventId, googleIntegrationId, taskName } = body;
 
     if (!asanaTaskId || typeof asanaTaskId !== 'string') {
       return NextResponse.json({ error: 'asanaTaskId is required' }, { status: 400 });
@@ -67,7 +67,8 @@ export async function POST(request: NextRequest) {
       scheduledTime,
       duration,
       googleEventId,
-      googleIntegrationId
+      googleIntegrationId,
+      typeof taskName === 'string' ? taskName : undefined
     );
 
     return NextResponse.json({ scheduled });

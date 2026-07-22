@@ -13,6 +13,7 @@ function asanaBlock(
     date: '2026-07-21',
     start: '09:00',
     durationMinutes: 60,
+    startMs: 0,
     endMs: 0,
     done,
     titles: tasks.map((_, i) => `Task ${i}`),
@@ -33,6 +34,7 @@ function prepBlock(eventId: string, done: boolean): ReplanReviewBlock {
     date: '2026-07-21',
     start: '09:00',
     durationMinutes: 30,
+    startMs: 0,
     endMs: 0,
     done,
     titles: ['Prep'],
@@ -48,6 +50,7 @@ function adhocBlock(eventId: string, done: boolean): ReplanReviewBlock {
     date: '2026-07-21',
     start: '09:00',
     durationMinutes: 30,
+    startMs: 0,
     endMs: 0,
     done,
     titles: ['Errand'],
@@ -151,6 +154,19 @@ describe('buildReviewApplyPayload', () => {
   it('does not complete in Asana a task that is already done', () => {
     const blocks = [asanaBlock('e1', true, [{ gid: 'g1', done: true }])];
     const out = buildReviewApplyPayload(blocks, {
+      e1: mark({ done: true, completeInAsana: true }),
+    });
+    expect(out).toEqual({ done: [], notDone: [], completeAsana: [] });
+  });
+
+  it('emits nothing for a task already complete in Asana (completedInAsana)', () => {
+    // A task flagged completedInAsana arrives pre-done; even if the mark carries a
+    // (defensive) completeInAsana tick, nothing is re-completed or overridden.
+    const block: ReplanReviewBlock = {
+      ...asanaBlock('e1', true, [{ gid: 'g1', done: true }]),
+      tasks: [{ title: 'Task 0', done: true, gid: 'g1', integrationId: 'int1', completedInAsana: true }],
+    };
+    const out = buildReviewApplyPayload([block], {
       e1: mark({ done: true, completeInAsana: true }),
     });
     expect(out).toEqual({ done: [], notDone: [], completeAsana: [] });

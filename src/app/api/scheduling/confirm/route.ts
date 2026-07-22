@@ -255,7 +255,8 @@ export async function POST(request: NextRequest) {
                 proposal.start,
                 proposal.durationMinutes,
                 event.id,
-                googleIntegration.id
+                googleIntegration.id,
+                t.title
               );
               if (t.integrationId) {
                 await setGoogleEventAttribution(event.id, googleIntegration.id, t.integrationId);
@@ -280,7 +281,8 @@ export async function POST(request: NextRequest) {
               proposal.start,
               proposal.durationMinutes,
               event.id,
-              googleIntegration.id
+              googleIntegration.id,
+              proposal.task.title
             );
             // Attribute the Google event to the task's Asana workspace so
             // client-time tracking counts it.

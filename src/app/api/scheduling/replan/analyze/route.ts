@@ -72,7 +72,7 @@ export async function POST(request: NextRequest) {
     // carry what to defer. Preps have no deferrable task.
     const taskIdsByEvent = new Map<string, string[]>();
     const reviewBlocks: ReplanReviewBlock[] = [];
-    const pushReview = (b: Omit<ReplanReviewBlock, 'endMs'> & { endMs: number }) => {
+    const pushReview = (b: ReplanReviewBlock) => {
       if (b.endMs <= nowMs) reviewBlocks.push(b);
     };
 
@@ -90,7 +90,12 @@ export async function POST(request: NextRequest) {
       appEventIds.add(eventId);
       taskIdsByEvent.set(eventId, entries.map(e => e.asanaTaskId));
       const first = entries[0];
-      const titles = entries.map(e => incompleteByGid.get(e.asanaTaskId)?.name ?? 'Scheduled task');
+      // Prefer the live Asana name; fall back to the title captured at scheduling
+      // time so a task already completed (and thus absent from the incomplete
+      // fetch) still shows its name rather than a generic placeholder.
+      const titles = entries.map(
+        e => incompleteByGid.get(e.asanaTaskId)?.name ?? e.taskName ?? 'Scheduled task'
+      );
       // Done when the Asana task(s) are complete, OR the user marked this block
       // "done for planning" in a prior replan (Asana task stays open).
       const done =
@@ -127,15 +132,23 @@ export async function POST(request: NextRequest) {
         date: first.scheduledDate,
         start: first.scheduledTime,
         durationMinutes: first.duration,
+        startMs,
         endMs,
         done,
         titles,
-        tasks: entries.map((e, i) => ({
-          title: titles[i],
-          done: !incompleteByGid.has(e.asanaTaskId),
-          gid: e.asanaTaskId,
-          ...(e.integrationId ? { integrationId: e.integrationId } : {}),
-        })),
+        tasks: entries.map((e, i) => {
+          // Done here means "complete in Asana": the gid is absent from the live
+          // incomplete fetch. Distinct from a block-level "done for planning"
+          // override, which never marks the individual task done.
+          const asanaComplete = !incompleteByGid.has(e.asanaTaskId);
+          return {
+            title: titles[i],
+            done: asanaComplete,
+            gid: e.asanaTaskId,
+            ...(e.integrationId ? { integrationId: e.integrationId } : {}),
+            ...(asanaComplete ? { completedInAsana: true } : {}),
+          };
+        }),
       });
     }
 
@@ -169,6 +182,7 @@ export async function POST(request: NextRequest) {
         date: t.dueDate!,
         start: t.dueTime,
         durationMinutes: duration,
+        startMs,
         endMs,
         done: adhocDone,
         titles: [t.title],
@@ -206,6 +220,7 @@ export async function POST(request: NextRequest) {
         date: p.date,
         start: p.start,
         durationMinutes: p.durationMinutes,
+        startMs,
         endMs,
         done: prepDone,
         titles: [prepTitleStr],

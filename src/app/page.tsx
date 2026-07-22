@@ -549,10 +549,10 @@ export default function Home() {
           { transparency: routed.transparency }
         ).then(googleEvent => {
           if (googleEvent) {
-            scheduleAsana(dragItem.id, routedTask.integrationId, dateStr, timeStr, duration, googleEvent.id, routed.googleIntegrationId);
+            scheduleAsana(dragItem.id, routedTask.integrationId, dateStr, timeStr, duration, googleEvent.id, routed.googleIntegrationId, routedTask.title);
             toast.success('Task scheduled and synced to Google Calendar');
           } else {
-            scheduleAsana(dragItem.id, routedTask.integrationId, dateStr, timeStr, duration);
+            scheduleAsana(dragItem.id, routedTask.integrationId, dateStr, timeStr, duration, undefined, undefined, routedTask.title);
             toast.error('Failed to sync with Google Calendar');
           }
         });
@@ -599,7 +599,8 @@ export default function Home() {
               timeStr,
               duration,
               googleEvent.id,
-              integrationId
+              integrationId,
+              asanaTask.title
             );
             toast.success('Task scheduled and synced to Google Calendar');
           } else {
@@ -608,7 +609,10 @@ export default function Home() {
               asanaTask.integrationId,
               dateStr,
               timeStr,
-              duration
+              duration,
+              undefined,
+              undefined,
+              asanaTask.title
             );
             toast.error('Failed to sync with Google Calendar');
           }
@@ -619,7 +623,10 @@ export default function Home() {
           asanaTask?.integrationId,
           dateStr,
           timeStr,
-          duration
+          duration,
+          undefined,
+          undefined,
+          asanaTask?.title
         );
       }
     } else if (dragItem.type === 'task-template') {
@@ -692,7 +699,8 @@ export default function Home() {
               timeStr,
               duration,
               googleEvent.id,
-              integrationId
+              integrationId,
+              asanaTask.title
             );
             toast.success('Task scheduled and synced to Google Calendar');
           } else {
@@ -701,7 +709,10 @@ export default function Home() {
               asanaTask.integrationId,
               dateStr,
               timeStr,
-              duration
+              duration,
+              undefined,
+              undefined,
+              asanaTask.title
             );
             toast.error('Failed to sync with Google Calendar');
           }

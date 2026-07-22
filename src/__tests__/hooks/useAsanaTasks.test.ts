@@ -390,7 +390,7 @@ describe('useAsanaTasks hook', () => {
         returned = await result.current.scheduleAsana('task-1', 'int-1', '2024-01-15', '09:00', 60);
       });
 
-      expect(mockApi.scheduleAsanaTask).toHaveBeenCalledWith('task-1', 'int-1', '2024-01-15', '09:00', 60, undefined, undefined);
+      expect(mockApi.scheduleAsanaTask).toHaveBeenCalledWith('task-1', 'int-1', '2024-01-15', '09:00', 60, undefined, undefined, undefined);
       expect(returned).toEqual(scheduledTask);
     });
 

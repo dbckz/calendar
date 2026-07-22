@@ -7,7 +7,7 @@ import { format, parseISO } from 'date-fns';
 import { api, type ReplanAnalyzeResponse } from '@/lib/api';
 import type { ReplanReviewBlock } from '@/lib/scheduling/replan';
 import { buildReviewApplyPayload, type ReviewTaskMark } from '@/lib/scheduling/daily-review';
-import { categoryColor, slotLabel, titleLabel } from './replanFormat';
+import { categoryColor, slotLabelMs, titleLabel } from './replanFormat';
 import { ReplanSections, replanHasWork } from './ReplanSections';
 import { useReplanActions } from './useReplanActions';
 
@@ -22,7 +22,12 @@ type Marks = Record<string, ReviewTaskMark[]>; // eventId -> per-task marks
 function initMarks(blocks: ReplanReviewBlock[]): Marks {
   const marks: Marks = {};
   for (const b of blocks) {
-    marks[b.googleEventId] = b.tasks.map(t => ({ done: t.done, completeInAsana: !!t.gid }));
+    marks[b.googleEventId] = b.tasks.map(t => ({
+      done: t.done,
+      // Default the "complete in Asana" box on for Asana tasks the user might tick
+      // done — but not for ones already complete in Asana (nothing to complete).
+      completeInAsana: !!t.gid && !t.completedInAsana,
+    }));
   }
   return marks;
 }
@@ -307,7 +312,7 @@ function ReviewRow({
               {titleLabel(block.titles)}
             </span>
           </div>
-          <div className="mt-0.5 text-xs text-gray-400">{slotLabel(block.date, block.start)}</div>
+          <div className="mt-0.5 text-xs text-gray-400">{slotLabelMs(block.startMs)}</div>
         </div>
 
         {/* Single-task blocks: Done / Didn't-do segmented control. */}
@@ -349,24 +354,33 @@ function ReviewRow({
               <span className={`text-sm ${marks[i]?.done ? 'text-gray-800' : 'text-gray-500'} truncate flex-1`}>
                 {t.title}
               </span>
-              {t.gid && marks[i]?.done && (
-                <label className="flex items-center gap-1 text-[11px] text-gray-500 flex-shrink-0">
-                  <input
-                    type="checkbox"
-                    checked={marks[i]?.completeInAsana ?? false}
-                    onChange={e => onToggleAsana(i, e.target.checked)}
-                    className="w-3.5 h-3.5 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                  />
-                  Complete in Asana
-                </label>
+              {t.completedInAsana ? (
+                <span className="text-[11px] text-emerald-600 flex-shrink-0">Already completed in Asana</span>
+              ) : (
+                t.gid && marks[i]?.done && (
+                  <label className="flex items-center gap-1 text-[11px] text-gray-500 flex-shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={marks[i]?.completeInAsana ?? false}
+                      onChange={e => onToggleAsana(i, e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                    />
+                    Complete in Asana
+                  </label>
+                )
               )}
             </li>
           ))}
         </ul>
       )}
 
-      {/* Single Asana task marked done: complete-in-Asana affordance. */}
-      {!grouped && block.tasks[0]?.gid && marks[0]?.done && (
+      {/* Single Asana task already complete in Asana: explain the pre-ticked Done. */}
+      {!grouped && block.tasks[0]?.completedInAsana && (
+        <div className="mt-2 text-[11px] text-emerald-600">Already completed in Asana</div>
+      )}
+
+      {/* Single Asana task marked done (and not already complete): complete-in-Asana affordance. */}
+      {!grouped && block.tasks[0]?.gid && !block.tasks[0]?.completedInAsana && marks[0]?.done && (
         <label className="mt-2 flex items-center gap-1.5 text-[11px] text-gray-500">
           <input
             type="checkbox"

@@ -173,6 +173,11 @@ export interface ReplanReviewTask {
   gid?: string;
   integrationId?: string;
   adhocId?: string;
+  // True when this Asana task is `done` because it is already complete in Asana
+  // (absent from the live incomplete fetch), as opposed to a "done for planning"
+  // override. The review UI explains the pre-ticked state and hides the
+  // "Complete in Asana" affordance (there is nothing left to complete).
+  completedInAsana?: boolean;
 }
 
 // A PAST app block (task or prep, never ritual/break) surfaced in the daily
@@ -184,9 +189,14 @@ export interface ReplanReviewBlock {
   googleIntegrationId?: string;
   kind: 'task' | 'prep';
   category: string;
-  date: string; // yyyy-MM-dd
-  start: string; // HH:mm
+  date: string; // stored yyyy-MM-dd
+  start: string; // stored HH:mm
   durationMinutes: number;
+  // The block's ACTUAL interval (matched from the calendar event where possible,
+  // else derived from the stored slot). `date`/`start` above are the STORED slot,
+  // kept for the apply payload; `startMs`/`endMs` are what the review displays so
+  // a dragged event shows its real time rather than a stale stored one.
+  startMs: number;
   endMs: number;
   done: boolean;
   titles: string[];

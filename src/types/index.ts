@@ -259,6 +259,11 @@ export interface ScheduledAsanaTask {
   // Link to Google Calendar event (for unified display)
   googleEventId?: string;
   googleIntegrationId?: string;
+  // The Asana task's name captured at scheduling time. Lets consumers (e.g. the
+  // daily-review step) label a scheduled block even after the task has been
+  // completed and dropped out of the live incomplete-tasks fetch. Optional for
+  // backward compatibility with entries stored before this field existed.
+  taskName?: string;
 }
 
 export interface GoogleCalendarCredentials {

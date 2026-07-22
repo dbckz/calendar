@@ -732,7 +732,8 @@ export const api = {
     scheduledTime: string,
     duration: number,
     googleEventId?: string,
-    googleIntegrationId?: string
+    googleIntegrationId?: string,
+    taskName?: string
   ): Promise<{ scheduled: ScheduledAsanaTask }> {
     return fetchWithRetry<{ scheduled: ScheduledAsanaTask }>('/api/user-data/scheduled-asana-tasks', {
       method: 'POST',
@@ -745,6 +746,7 @@ export const api = {
         duration,
         googleEventId,
         googleIntegrationId,
+        taskName,
       }),
     });
   },
