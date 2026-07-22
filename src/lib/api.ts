@@ -1094,6 +1094,26 @@ export const api = {
     );
   },
 
+  // Daily-review closing message: a short, warm reflection on how the day went.
+  // Best-effort — the route always returns a message (model or canned fallback),
+  // and the UI shows it without blocking the review apply. No retry.
+  async getReviewMessage(outcome: {
+    doneCount: number;
+    totalCount: number;
+    doneTitles: string[];
+    notDoneTitles: string[];
+  }): Promise<{ message: string }> {
+    return fetchWithRetry<{ message: string }>(
+      '/api/scheduling/replan/review-message',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(outcome),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
   // "Start the week from scratch": delete this week's upcoming app-created blocks
   // from the calendar and clear the week's planning records.
   async resetWeek(weekStart?: string): Promise<ResetWeekResponse> {

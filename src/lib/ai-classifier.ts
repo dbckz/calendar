@@ -86,13 +86,18 @@ export function extractJsonArray(text: string): Record<string, unknown>[] {
 
 interface ClaudeEnvelope { result?: unknown; is_error?: boolean }
 
-// Run a single headless `claude -p` reasoning call and return the parsed JSON
-// array from its output. No tools are needed (pure reasoning over the supplied
-// text), so the runner passes an empty allowlist. Shared by every task
-// classifier (AI-suitability, staleness, …).
-export async function runClaudeJsonArray(prompt: string, timeoutSeconds = 180): Promise<Record<string, unknown>[]> {
+// Run a single headless `claude -p` reasoning call and return its result TEXT.
+// No tools are needed (pure reasoning over the supplied text), so the runner
+// passes an empty allowlist. The model defaults to claudeModel() (Opus) but can
+// be overridden per-call — the review-encouragement helper pins a fast model.
+// Shared low-level runner; callers layer their own parsing on the returned text.
+export async function runClaudeText(
+  prompt: string,
+  opts: { timeoutSeconds?: number; model?: string } = {},
+): Promise<string> {
+  const timeoutSeconds = opts.timeoutSeconds ?? 180;
   const bin = claudeBin();
-  const args = ['-p', prompt, '--model', claudeModel(), '--output-format', 'json', '--allowedTools', ''];
+  const args = ['-p', prompt, '--model', opts.model ?? claudeModel(), '--output-format', 'json', '--allowedTools', ''];
   const env = {
     ...process.env,
     PATH: `/opt/homebrew/bin:/usr/local/bin:${path.join(homedir(), '.local', 'bin')}:${process.env.PATH || '/usr/bin:/bin'}`,
@@ -103,7 +108,7 @@ export async function runClaudeJsonArray(prompt: string, timeoutSeconds = 180): 
     let err = '';
     let settled = false;
     const child = spawn(bin, args, { env });
-    const timer = setTimeout(() => { settled = true; child.kill('SIGKILL'); reject(new Error(`Claude classifier timed out after ${timeoutSeconds}s.`)); }, timeoutSeconds * 1000);
+    const timer = setTimeout(() => { settled = true; child.kill('SIGKILL'); reject(new Error(`Claude call timed out after ${timeoutSeconds}s.`)); }, timeoutSeconds * 1000);
 
     child.stdout.on('data', (c: Buffer) => { out += c.toString('utf8'); });
     child.stderr.on('data', (c: Buffer) => { err += c.toString('utf8'); });
@@ -128,10 +133,17 @@ export async function runClaudeJsonArray(prompt: string, timeoutSeconds = 180): 
   try {
     envelope = JSON.parse(stdout) as ClaudeEnvelope;
   } catch {
-    // Some CLI configs stream plain text; fall back to parsing stdout directly.
-    return extractJsonArray(stdout);
+    // Some CLI configs stream plain text; fall back to the raw stdout.
+    return stdout;
   }
-  return extractJsonArray(typeof envelope.result === 'string' ? envelope.result : stdout);
+  return typeof envelope.result === 'string' ? envelope.result : stdout;
+}
+
+// Run a single headless `claude -p` reasoning call and return the parsed JSON
+// array from its output. Shared by every task classifier (AI-suitability,
+// staleness, …).
+export async function runClaudeJsonArray(prompt: string, timeoutSeconds = 180): Promise<Record<string, unknown>[]> {
+  return extractJsonArray(await runClaudeText(prompt, { timeoutSeconds }));
 }
 
 // Classify a batch of tasks for AI-suitability in one headless call.

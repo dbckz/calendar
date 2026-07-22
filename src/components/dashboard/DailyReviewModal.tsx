@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { X, ClipboardCheck, Loader2, Check, AlertTriangle, ArrowRight } from 'lucide-react';
+import { X, ClipboardCheck, Loader2, Check, AlertTriangle, ArrowRight, Sparkles } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
 import { api, type ReplanAnalyzeResponse } from '@/lib/api';
@@ -39,6 +39,10 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
   const [data, setData] = useState<ReplanAnalyzeResponse | null>(null);
   const [marks, setMarks] = useState<Marks>({});
   const [isApplying, setIsApplying] = useState(false);
+  // Closing "how your day went" message, shown at the top of the replan step.
+  // Fired (best-effort) when the review is confirmed; never blocks the apply.
+  const [reviewMessage, setReviewMessage] = useState<string | null>(null);
+  const [reviewMessageLoading, setReviewMessageLoading] = useState(false);
 
   // Step 2 reuses the exact replan review + confirm behaviour.
   const actions = useReplanActions(step === 2 ? data : null, onApplied);
@@ -66,6 +70,8 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
     setMarks({});
     setError(null);
     setIsApplying(false);
+    setReviewMessage(null);
+    setReviewMessageLoading(false);
     analyze().then(res => {
       if (res) setMarks(initMarks(res.reviewBlocks ?? []));
     });
@@ -101,10 +107,40 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
       return { ...prev, [eventId]: list };
     });
 
+  // Summarise the final marks into done/total + task titles. A block counts done
+  // only if every one of its tasks is marked done (matching the apply logic).
+  const summariseOutcome = useCallback(() => {
+    let doneCount = 0;
+    const doneTitles: string[] = [];
+    const notDoneTitles: string[] = [];
+    for (const block of reviewBlocks) {
+      const list = marks[block.googleEventId] ?? [];
+      const allDone =
+        block.tasks.length > 0 &&
+        block.tasks.every((t, i) => list[i]?.done ?? t.done);
+      const label = titleLabel(block.titles);
+      if (allDone) doneTitles.push(label);
+      else notDoneTitles.push(label);
+    }
+    doneCount = doneTitles.length;
+    return { doneCount, totalCount: reviewBlocks.length, doneTitles, notDoneTitles };
+  }, [reviewBlocks, marks]);
+
   // Apply the step-1 marks, then re-analyze and advance to the replan step.
   const applyAndContinue = useCallback(async () => {
     setIsApplying(true);
     setError(null);
+    // Fire the closing-message request now (from the marks the user just
+    // confirmed) but don't await it — it must not delay or block the apply. If
+    // the modal closes before it resolves, the setState is simply ignored.
+    if (reviewBlocks.length > 0) {
+      setReviewMessage(null);
+      setReviewMessageLoading(true);
+      api.getReviewMessage(summariseOutcome())
+        .then(res => setReviewMessage(res.message))
+        .catch(() => setReviewMessage(null))
+        .finally(() => setReviewMessageLoading(false));
+    }
     try {
       const payload = buildReviewApplyPayload(
         reviewBlocks,
@@ -138,7 +174,7 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
     } finally {
       setIsApplying(false);
     }
-  }, [reviewBlocks, marks, analyze, onApplied]);
+  }, [reviewBlocks, marks, analyze, onApplied, summariseOutcome]);
 
   if (!isOpen) return null;
 
@@ -210,16 +246,23 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
                 ))}
               </ul>
             )
-          ) : nothingToReplan ? (
-            <div className="flex flex-col items-center justify-center py-16 gap-2 text-center">
-              <Check className="w-8 h-8 text-emerald-500" />
-              <p className="text-sm font-medium text-gray-700">Nothing left to reschedule.</p>
-              <p className="text-xs text-gray-400">
-                Everything unfinished either has no home this week or is already handled.
-              </p>
-            </div>
           ) : (
-            <ReplanSections data={data} actions={actions} />
+            <>
+              {(reviewMessageLoading || reviewMessage) && (
+                <ReviewMessageCard message={reviewMessage} loading={reviewMessageLoading} />
+              )}
+              {nothingToReplan ? (
+                <div className="flex flex-col items-center justify-center py-16 gap-2 text-center">
+                  <Check className="w-8 h-8 text-emerald-500" />
+                  <p className="text-sm font-medium text-gray-700">Nothing left to reschedule.</p>
+                  <p className="text-xs text-gray-400">
+                    Everything unfinished either has no home this week or is already handled.
+                  </p>
+                </div>
+              ) : (
+                <ReplanSections data={data} actions={actions} />
+              )}
+            </>
           )}
         </div>
 
@@ -275,6 +318,25 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// The closing "how your day went" reflection, shown at the top of the replan
+// step. A soft emerald card; while the message is still generating it shows a
+// subtle shimmer placeholder so the space doesn't jump when the text arrives.
+function ReviewMessageCard({ message, loading }: { message: string | null; loading: boolean }) {
+  return (
+    <div className="mb-4 flex items-start gap-2.5 rounded-lg border border-emerald-200 bg-emerald-50 p-3.5">
+      <Sparkles className="w-4 h-4 mt-0.5 flex-shrink-0 text-emerald-500" />
+      {message ? (
+        <p className="text-sm text-emerald-900 leading-relaxed">{message}</p>
+      ) : loading ? (
+        <div className="flex-1 space-y-1.5 py-0.5" aria-hidden>
+          <div className="h-3 w-full rounded bg-emerald-200/70 animate-pulse" />
+          <div className="h-3 w-2/3 rounded bg-emerald-200/70 animate-pulse" />
+        </div>
+      ) : null}
     </div>
   );
 }
