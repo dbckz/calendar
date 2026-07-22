@@ -103,6 +103,24 @@ describe('integration-storage', () => {
 
       expect(mockFs.mkdir).toHaveBeenCalled();
     });
+
+    it('throws loudly for legacy v1-shaped config (googleCalendar/asana keys)', async () => {
+      const v1Config = {
+        googleCalendar: { enabled: false, clientId: '', clientSecret: '' },
+        asana: { enabled: false, clientId: '', clientSecret: '' },
+      };
+      mockFs.readFile.mockResolvedValue(JSON.stringify(v1Config));
+
+      await expect(getIntegrations()).rejects.toThrow(/predates v2/);
+    });
+
+    it('throws loudly for config explicitly marked version 1', async () => {
+      mockFs.readFile.mockResolvedValue(
+        JSON.stringify({ version: 1, googleCalendar: {}, asana: {} })
+      );
+
+      await expect(getIntegrations()).rejects.toThrow(/not in the expected v2/);
+    });
   });
 
   describe('saveIntegrations', () => {

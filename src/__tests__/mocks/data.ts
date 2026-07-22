@@ -106,36 +106,3 @@ export const createMockCustomTaskType = (
   ...overrides,
 });
 
-// Settings helpers
-export const createLegacySettings = () => ({
-  googleCalendar: {
-    enabled: false,
-    clientId: '',
-    clientSecret: '',
-  },
-  asana: {
-    enabled: false,
-    clientId: '',
-    clientSecret: '',
-  },
-});
-
-export const createLegacySettingsV1 = () => ({
-  version: 1 as const,
-  googleCalendar: {
-    enabled: false,
-    clientId: '',
-    clientSecret: '',
-  },
-  asana: {
-    enabled: false,
-    clientId: '',
-    clientSecret: '',
-  },
-});
-
-export const createMultiIntegrationSettings = () => ({
-  version: 2 as const,
-  googleIntegrations: [],
-  asanaIntegrations: [],
-});

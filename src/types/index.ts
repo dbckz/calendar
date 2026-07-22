@@ -273,24 +273,6 @@ export interface AsanaCredentials {
   expiresAt?: number;
 }
 
-// Legacy single-integration settings (v1)
-export interface LegacyAppSettings {
-  version?: 1;
-  googleCalendar: {
-    enabled: boolean;
-    clientId: string;
-    clientSecret: string;
-    credentials?: GoogleCalendarCredentials;
-  };
-  asana: {
-    enabled: boolean;
-    clientId: string;
-    clientSecret: string;
-    credentials?: AsanaCredentials;
-    workspaceId?: string;
-  };
-}
-
 // Multi-integration types (v2)
 export interface IntegrationBase {
   id: string;
@@ -335,18 +317,6 @@ export interface MultiIntegrationSettings {
   version: 2;
   googleIntegrations: GoogleIntegration[];
   asanaIntegrations: AsanaIntegration[];
-}
-
-// Union type - can be either legacy or new format
-export type AppSettings = LegacyAppSettings | MultiIntegrationSettings;
-
-// Type guard helpers
-export function isMultiIntegrationSettings(settings: AppSettings): settings is MultiIntegrationSettings {
-  return 'version' in settings && settings.version === 2;
-}
-
-export function isLegacySettings(settings: AppSettings): settings is LegacyAppSettings {
-  return !('version' in settings) || settings.version === 1;
 }
 
 // Drag and drop types

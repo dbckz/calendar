@@ -1,19 +1,11 @@
 import {
   isCustomTaskType,
   getCustomTaskTypeId,
-  isMultiIntegrationSettings,
-  isLegacySettings,
   BUILT_IN_TASK_TYPE_EMOJIS,
   BUILT_IN_TASK_TYPE_LABELS,
   TaskType,
   BuiltInTaskType,
-  AppSettings,
 } from '@/types';
-import {
-  createLegacySettings,
-  createLegacySettingsV1,
-  createMultiIntegrationSettings,
-} from '../mocks/data';
 
 describe('Type Guards', () => {
   describe('isCustomTaskType', () => {
@@ -63,40 +55,6 @@ describe('Type Guards', () => {
 
     it('handles IDs with colons', () => {
       expect(getCustomTaskTypeId('custom:type:with:colons')).toBe('type:with:colons');
-    });
-  });
-
-  describe('isMultiIntegrationSettings', () => {
-    it('returns true for v2 settings', () => {
-      const settings = createMultiIntegrationSettings();
-      expect(isMultiIntegrationSettings(settings as AppSettings)).toBe(true);
-    });
-
-    it('returns false for legacy settings without version', () => {
-      const settings = createLegacySettings();
-      expect(isMultiIntegrationSettings(settings as AppSettings)).toBe(false);
-    });
-
-    it('returns false for legacy settings with version 1', () => {
-      const settings = createLegacySettingsV1();
-      expect(isMultiIntegrationSettings(settings as AppSettings)).toBe(false);
-    });
-  });
-
-  describe('isLegacySettings', () => {
-    it('returns true for settings without version field', () => {
-      const settings = createLegacySettings();
-      expect(isLegacySettings(settings as AppSettings)).toBe(true);
-    });
-
-    it('returns true for settings with version 1', () => {
-      const settings = createLegacySettingsV1();
-      expect(isLegacySettings(settings as AppSettings)).toBe(true);
-    });
-
-    it('returns false for v2 settings', () => {
-      const settings = createMultiIntegrationSettings();
-      expect(isLegacySettings(settings as AppSettings)).toBe(false);
     });
   });
 });

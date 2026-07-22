@@ -1,12 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { migrateFromCookie } from '@/lib/migration';
 import { getIntegrations, deleteIntegration, sanitizeIntegrations } from '@/lib/integration-storage';
 
 export async function GET() {
   try {
-    // Attempt migration from old cookie format on first access
-    await migrateFromCookie();
-
     // Get current settings from file storage
     const settings = await getIntegrations();
 

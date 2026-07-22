@@ -26,13 +26,47 @@ async function ensureDataDir(): Promise<void> {
 }
 
 export async function getIntegrations(): Promise<MultiIntegrationSettings> {
+  let data: string;
   try {
     await ensureDataDir();
-    const data = await fs.readFile(STORAGE_FILE, 'utf-8');
-    return JSON.parse(data) as MultiIntegrationSettings;
+    data = await fs.readFile(STORAGE_FILE, 'utf-8');
   } catch {
     // File doesn't exist yet, return defaults
     return { ...DEFAULT_SETTINGS };
+  }
+
+  // Parse and validate. A malformed or pre-v2 (v1) file must fail loudly
+  // rather than be silently coerced into a broken v2 object — the v1->v2
+  // migration path has been removed, so old configs can no longer be
+  // upgraded automatically.
+  const parsed = JSON.parse(data) as unknown;
+  assertV2Settings(parsed);
+  return parsed;
+}
+
+// Throws a clear, actionable error if the stored config is the legacy v1
+// shape (single `googleCalendar`/`asana` object, or `version: 1`) instead of
+// the v2 multi-integration shape. v1 support was removed; there is no
+// automatic migration anymore.
+function assertV2Settings(parsed: unknown): asserts parsed is MultiIntegrationSettings {
+  const obj = (parsed ?? {}) as Record<string, unknown>;
+  const looksLegacy =
+    obj.version === 1 ||
+    'googleCalendar' in obj ||
+    'asana' in obj ||
+    !Array.isArray(obj.googleIntegrations) ||
+    !Array.isArray(obj.asanaIntegrations);
+
+  if (obj.version !== 2 || looksLegacy) {
+    throw new Error(
+      `Integrations config at ${STORAGE_FILE} is not in the expected v2 ` +
+        `multi-integration format (found ${JSON.stringify(
+          obj.version ?? 'no version field'
+        )}). This config predates v2 and can no longer be migrated ` +
+        `automatically. Back up the file, then delete it and re-add your ` +
+        `Google/Asana integrations via the settings UI to regenerate it in ` +
+        `the v2 format.`
+    );
   }
 }
 
