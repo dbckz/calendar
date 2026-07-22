@@ -22,7 +22,7 @@ import { useToast } from '@/hooks/useToast';
 import { useGoogleEventModal } from '@/hooks/useGoogleEventModal';
 import { CalendarEvent, DragItem, TaskType, SettingsResponse, AsanaFilterState } from '@/types';
 import { api } from '@/lib/api';
-import { asanaTaskUrl } from '@/lib/asana-url';
+import { asanaTaskUrl, asanaTaskGidsFromText } from '@/lib/asana-url';
 import { DEFAULT_ROLLOVER_HOUR, logicalToday, logicalTodayDate, formatLocalDate } from '@/lib/date-utils';
 
 function formatMinutes(minutes: number): string {
@@ -265,6 +265,20 @@ export default function Home() {
     return startDateStr === targetDate;
   }, []);
 
+  // Incomplete Asana task titles → gids, for linking planner blocks created
+  // before descriptions carried task URLs. Those blocks are titled
+  // "<category emoji> <task title>" (or just the task title when it already led
+  // with its own emoji), so an exact title match identifies the task.
+  const asanaGidsByTitle = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const t of allAsanaTasks) {
+      if (t.completed) continue;
+      const key = t.title.trim();
+      map.set(key, [...(map.get(key) ?? []), t.id]);
+    }
+    return map;
+  }, [allAsanaTasks]);
+
   // Combine calendar events for a given date, filtering out duplicates from synced Google events
   const buildEventsForDate = useCallback((dateStr: string): CalendarEvent[] => {
     const filteredGoogleEvents = googleEvents.filter(event => isEventOnDate(event, dateStr));
@@ -279,6 +293,26 @@ export default function Home() {
           // Use Asana color for linked events
           color: '#f06a6a',
         };
+      }
+      // No schedule-store link: fall back to a task URL in the description. Only
+      // link when exactly one distinct task is referenced — grouped blocks with
+      // several task URLs are ambiguous about which task to open, so stay
+      // unlinked. Description-only links keep the event's own color and leave
+      // linkedAsanaIntegrationId unset (unknown from the URL alone).
+      const descGids = event.description ? asanaTaskGidsFromText(event.description) : [];
+      if (descGids.length === 1) {
+        return { ...event, linkedAsanaTaskId: descGids[0] };
+      }
+      // Last resort, for planner blocks that predate description links: match
+      // the title against incomplete Asana tasks, tolerating the planner's
+      // category-emoji prefix. Only an unambiguous (single-task) match links.
+      const strippedTitle = event.title
+        .replace(/^\s*\p{Extended_Pictographic}\uFE0F?\s+/u, '')
+        .trim();
+      const titleGids =
+        asanaGidsByTitle.get(strippedTitle) ?? asanaGidsByTitle.get(event.title.trim()) ?? [];
+      if (titleGids.length === 1) {
+        return { ...event, linkedAsanaTaskId: titleGids[0] };
       }
       return event;
     });
