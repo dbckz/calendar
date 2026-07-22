@@ -1,7 +1,9 @@
 /**
  * Tests for the shared event-title builder (emoji conventions + prep parsing).
  */
+import { asanaTaskUrl } from '@/lib/asana-url';
 import {
+  blockEventDescription,
   categoryBlockTitle,
   categoryEmoji,
   colorIdForBlock,
@@ -134,6 +136,70 @@ describe('eventTitleForBlock', () => {
   it('passes a break title through unchanged', () => {
     const block: ProposedBlock = { ...base, category: 'Break', kind: 'break', title: '☕ Break' };
     expect(eventTitleForBlock(block)).toBe('☕ Break');
+  });
+});
+
+describe('blockEventDescription', () => {
+  const base: ProposedBlock = {
+    id: 'b1',
+    category: 'Blogs',
+    date: '2026-07-15',
+    start: '09:00',
+    durationMinutes: 30,
+    reason: 'Because reasons',
+  };
+
+  it('appends the Asana task link for a single Asana task block', () => {
+    const block: ProposedBlock = { ...base, kind: 'task', task: { gid: '12345', title: 'Draft post' } };
+    expect(blockEventDescription(block)).toBe(`Because reasons\n\n${asanaTaskUrl('12345')}`);
+  });
+
+  it('leaves an ad-hoc single-task block (no gid) as just the reason', () => {
+    const block: ProposedBlock = { ...base, kind: 'task', task: { adhocId: 'a1', title: 'Draft post' } };
+    expect(blockEventDescription(block)).toBe('Because reasons');
+  });
+
+  it('lists a grouped block agenda with a link under each Asana task', () => {
+    const block: ProposedBlock = {
+      ...base,
+      category: 'Engagement/Outreach',
+      tasks: [
+        { gid: '111', title: 'Email Alice' },
+        { gid: '222', title: 'Call Bob' },
+      ],
+    };
+    expect(blockEventDescription(block)).toBe(
+      `Because reasons\n\n` +
+        `• Email Alice\n  ${asanaTaskUrl('111')}\n` +
+        `• Call Bob\n  ${asanaTaskUrl('222')}`
+    );
+  });
+
+  it('omits the link for ad-hoc tasks inside a grouped agenda', () => {
+    const block: ProposedBlock = {
+      ...base,
+      category: 'Engagement/Outreach',
+      tasks: [
+        { gid: '111', title: 'Email Alice' },
+        { adhocId: 'a1', title: 'Tidy inbox' },
+      ],
+    };
+    expect(blockEventDescription(block)).toBe(
+      `Because reasons\n\n` + `• Email Alice\n  ${asanaTaskUrl('111')}\n` + `• Tidy inbox`
+    );
+  });
+
+  it('falls back to just the reason for reserved / prep / ritual / break blocks', () => {
+    expect(blockEventDescription({ ...base, kind: 'reserved' })).toBe('Because reasons');
+    expect(blockEventDescription({ ...base, kind: 'prep' })).toBe('Because reasons');
+    expect(blockEventDescription({ ...base, kind: 'ritual', title: '🍽️ Lunch' })).toBe('Because reasons');
+    expect(blockEventDescription({ ...base, tasks: [] })).toBe('Because reasons'); // empty grouped
+  });
+});
+
+describe('asanaTaskUrl', () => {
+  it('builds the canonical Asana task permalink from a gid', () => {
+    expect(asanaTaskUrl('1209876543210')).toBe('https://app.asana.com/0/0/1209876543210/f');
   });
 });
 

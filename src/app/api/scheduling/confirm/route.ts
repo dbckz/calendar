@@ -18,7 +18,7 @@ import {
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import type { GoogleCalendarCredentials, GoogleIntegration } from '@/types';
 import type { ProposedBlock } from '@/lib/scheduling/types';
-import { colorIdForBlock, eventTitleForBlock } from '@/lib/scheduling/event-titles';
+import { blockEventDescription, colorIdForBlock, eventTitleForBlock } from '@/lib/scheduling/event-titles';
 import { createRitualEvent } from '@/lib/scheduling/ritual-events';
 import { ritualIntegrationIdForBlock } from '@/lib/scheduling/rituals';
 
@@ -196,12 +196,11 @@ export async function POST(request: NextRequest) {
         // by category / prep / ritual, one source of truth).
         const title = eventTitleForBlock(proposal);
 
-        // Grouped blocks list their assigned tasks as a bulleted agenda beneath
-        // the reason; everything else just uses the reason as the description.
-        const description =
-          isGrouped && proposal.tasks!.length > 0
-            ? `${proposal.reason}\n\n${proposal.tasks!.map(t => `• ${t.title}`).join('\n')}`
-            : proposal.reason;
+        // Descriptions are built centrally: grouped blocks list their assigned
+        // tasks as a bulleted agenda beneath the reason, and every Asana-backed
+        // task (single or grouped) gets a direct link to its Asana task;
+        // everything else just uses the reason.
+        const description = blockEventDescription(proposal);
 
         // Route this proposal to its target Google integration + availability.
         const route = routeProposal(proposal);

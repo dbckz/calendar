@@ -22,6 +22,7 @@ import { useToast } from '@/hooks/useToast';
 import { useGoogleEventModal } from '@/hooks/useGoogleEventModal';
 import { CalendarEvent, DragItem, TaskType, SettingsResponse, AsanaFilterState } from '@/types';
 import { api } from '@/lib/api';
+import { asanaTaskUrl } from '@/lib/asana-url';
 import { DEFAULT_ROLLOVER_HOUR, logicalToday, logicalTodayDate, formatLocalDate } from '@/lib/date-utils';
 
 function formatMinutes(minutes: number): string {
@@ -508,7 +509,7 @@ export default function Home() {
           routedTask.title,
           startTime,
           endTime,
-          undefined,
+          asanaTaskUrl(routedTask.id),
           undefined,
           undefined,
           { transparency: routed.transparency }
@@ -555,7 +556,7 @@ export default function Home() {
       const asanaTask = allAsanaTasks.find(t => t.id === dragItem.id);
 
       if (integrationId && asanaTask) {
-        createGoogleEvent(integrationId, asanaTask.title, startTime, endTime).then(googleEvent => {
+        createGoogleEvent(integrationId, asanaTask.title, startTime, endTime, asanaTaskUrl(asanaTask.id)).then(googleEvent => {
           if (googleEvent) {
             scheduleAsana(
               dragItem.id,
@@ -648,7 +649,7 @@ export default function Home() {
 
       if (asanaTask) {
         // Create Google event first, then link to Asana schedule
-        createGoogleEvent(integrationId, asanaTask.title, startTime, endTime).then(googleEvent => {
+        createGoogleEvent(integrationId, asanaTask.title, startTime, endTime, asanaTaskUrl(asanaTask.id)).then(googleEvent => {
           if (googleEvent) {
             scheduleAsana(
               dragItem.id,

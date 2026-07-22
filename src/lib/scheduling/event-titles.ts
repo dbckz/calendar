@@ -12,6 +12,7 @@
 //  * rituals → already emoji'd in rituals.ts ("🍽️ Lunch" / "📧 Emails"); their
 //    titles are routed through eventTitleForBlock so this stays the one path.
 
+import { asanaTaskUrl } from '@/lib/asana-url';
 import { normalize } from '@/lib/capacity';
 
 import { isBreakTitle } from './rituals';
@@ -100,6 +101,27 @@ export function categoryBlockTitle(category: string): string {
 // Title for a reserved block ("✍️ Writing/Deep Work block").
 export function reservedBlockTitle(category: string): string {
   return `${categoryEmoji(category)} ${category} block`;
+}
+
+// The calendar-event description for a proposed block. The single place that
+// turns a ProposedBlock into its event description, used by the confirm route so
+// every Asana-backed event carries a direct link back to its task:
+//  * grouped block → the reason, then a bulleted agenda; each Asana task in the
+//    agenda is followed by its link (ad-hoc tasks have no gid, so no link).
+//  * single Asana task block → the reason, then the task's link.
+//  * everything else (reserved / prep / ritual / break / ad-hoc task) → just the
+//    reason, unchanged.
+export function blockEventDescription(block: ProposedBlock): string {
+  if (Array.isArray(block.tasks) && block.tasks.length > 0) {
+    const agenda = block.tasks
+      .map(t => (t.gid ? `• ${t.title}\n  ${asanaTaskUrl(t.gid)}` : `• ${t.title}`))
+      .join('\n');
+    return `${block.reason}\n\n${agenda}`;
+  }
+  if (block.task?.gid) {
+    return `${block.reason}\n\n${asanaTaskUrl(block.task.gid)}`;
+  }
+  return block.reason;
 }
 
 // The calendar-event title for any proposed block. The single place that turns a
