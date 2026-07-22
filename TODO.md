@@ -13,3 +13,4 @@
 - During planning, if there's any daily reminders in my calendar, potentially convert them to tasks and schedule that week
 - Add cross-tab sync using BroadcastChannel API so changes in one browser tab are reflected in other tabs in near real-time (broadcast mutations, other tabs refetch)
 - Schedule a "new bookies" slot each week
+- Get time tracking working: "Time Worked Today" currently sums the full scheduled durations of today's Asana-attributed events regardless of the clock, so it shows a day's workload at 5am. Clamp to elapsed time (count only the already-past portion of each event) so the widget and the time-tracking.json longitudinal record reflect time actually worked.
