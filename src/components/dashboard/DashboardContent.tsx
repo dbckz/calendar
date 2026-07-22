@@ -155,7 +155,7 @@ export function DashboardContent({
       <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
         {/* Left: Today (single box, internal scroll) */}
         <div className="min-h-0 min-w-0 h-full">
-          <TodayColumn events={todayEvents} rolloverHour={rolloverHour} />
+          <TodayColumn events={todayEvents} rolloverHour={rolloverHour} onTaskClick={onOpenTask} />
         </div>
 
         {/* Middle: Top Tasks + AI-runnable, each half height, paginated */}

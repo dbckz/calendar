@@ -1,6 +1,7 @@
 'use client';
 
 import { Fragment, forwardRef, useEffect, useRef, useState } from 'react';
+import type { KeyboardEvent } from 'react';
 import { format } from 'date-fns';
 import { Clock } from 'lucide-react';
 import { CalendarEvent } from '@/types';
@@ -9,6 +10,7 @@ import { DEFAULT_ROLLOVER_HOUR, logicalTodayDate } from '@/lib/date-utils';
 interface TodayColumnProps {
   events: CalendarEvent[]; // today's timed events, any order
   rolloverHour?: number; // logical-day rollover hour, for the date label
+  onTaskClick?: (taskId: string) => void; // open the task dialog for events backed by an Asana task
 }
 
 // A red current-time line, like a calendar's "now" indicator. Rendered between
@@ -25,7 +27,7 @@ const NowLine = forwardRef<HTMLLIElement, { now: Date }>(function NowLine({ now 
   );
 });
 
-export function TodayColumn({ events, rolloverHour = DEFAULT_ROLLOVER_HOUR }: TodayColumnProps) {
+export function TodayColumn({ events, rolloverHour = DEFAULT_ROLLOVER_HOUR, onTaskClick }: TodayColumnProps) {
   const sorted = [...events].sort(
     (a, b) => a.startTime.getTime() - b.startTime.getTime()
   );
@@ -77,13 +79,28 @@ export function TodayColumn({ events, rolloverHour = DEFAULT_ROLLOVER_HOUR }: To
           {sorted.map((event, i) => {
             const isPast = nowMs !== undefined && event.endTime.getTime() < nowMs;
             const isNow = nowMs !== undefined && event.startTime.getTime() <= nowMs && event.endTime.getTime() >= nowMs;
+            const taskId = event.linkedAsanaTaskId || (event.source === 'asana' ? event.id : null);
+            const activatable = taskId && onTaskClick ? () => onTaskClick(taskId) : null;
             return (
               <Fragment key={event.id}>
                 {now && i === nowIndex && <NowLine now={now} ref={nowRef} />}
                 <li
+                  {...(activatable && {
+                    role: 'button',
+                    tabIndex: 0,
+                    onClick: activatable,
+                    onKeyDown: (e: KeyboardEvent) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        activatable();
+                      }
+                    },
+                  })}
                   className={`flex items-start gap-3 p-2 rounded-lg border ${
                     isNow ? 'border-orange-300 bg-orange-50' : 'border-gray-100'
-                  } ${isPast ? 'opacity-50' : ''}`}
+                  } ${isPast ? 'opacity-50' : ''} ${
+                    activatable ? `cursor-pointer ${isNow ? 'hover:bg-orange-100' : 'hover:bg-gray-50'}` : ''
+                  }`}
                 >
                   <span
                     className="mt-1 w-1.5 h-8 rounded-full flex-shrink-0"
