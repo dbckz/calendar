@@ -926,6 +926,7 @@ export default function Home() {
         <div className="flex-1 overflow-hidden min-h-0 bg-gray-50">
           <DashboardContent
             todayEvents={todayTimedEvents}
+            rolloverHour={rolloverHour}
             asanaTasks={allAsanaTasks}
             metadataByGid={metadataByGid}
             timeWorkedByIntegration={timeWorkedByIntegration}

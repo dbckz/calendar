@@ -28,6 +28,7 @@ interface DashboardContentProps {
   asanaTasks: CalendarEvent[]; // incomplete Asana tasks
   metadataByGid: Record<string, TaskMetadata>;
   timeWorkedByIntegration: Record<string, number>;
+  rolloverHour?: number; // logical-day rollover hour, for the Today column label
   asanaIntegrations: Integration[];
   // Per-integration Type field info, for the Plan-my-week "type unclassified
   // tasks" pre-step (find untyped tasks + write chosen Types back to Asana).
@@ -52,6 +53,7 @@ export function DashboardContent({
   asanaTasks,
   metadataByGid,
   timeWorkedByIntegration,
+  rolloverHour,
   asanaIntegrations,
   typeFieldInfoByIntegration,
   onOpenTask,
@@ -153,7 +155,7 @@ export function DashboardContent({
       <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
         {/* Left: Today (single box, internal scroll) */}
         <div className="min-h-0 min-w-0 h-full">
-          <TodayColumn events={todayEvents} />
+          <TodayColumn events={todayEvents} rolloverHour={rolloverHour} />
         </div>
 
         {/* Middle: Top Tasks + AI-runnable, each half height, paginated */}

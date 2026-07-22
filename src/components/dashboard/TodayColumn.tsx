@@ -4,9 +4,11 @@ import { Fragment, forwardRef, useEffect, useRef, useState } from 'react';
 import { format } from 'date-fns';
 import { Clock } from 'lucide-react';
 import { CalendarEvent } from '@/types';
+import { DEFAULT_ROLLOVER_HOUR, logicalTodayDate } from '@/lib/date-utils';
 
 interface TodayColumnProps {
   events: CalendarEvent[]; // today's timed events, any order
+  rolloverHour?: number; // logical-day rollover hour, for the date label
 }
 
 // A red current-time line, like a calendar's "now" indicator. Rendered between
@@ -23,7 +25,7 @@ const NowLine = forwardRef<HTMLLIElement, { now: Date }>(function NowLine({ now 
   );
 });
 
-export function TodayColumn({ events }: TodayColumnProps) {
+export function TodayColumn({ events, rolloverHour = DEFAULT_ROLLOVER_HOUR }: TodayColumnProps) {
   const sorted = [...events].sort(
     (a, b) => a.startTime.getTime() - b.startTime.getTime()
   );
@@ -65,7 +67,7 @@ export function TodayColumn({ events }: TodayColumnProps) {
     <div className="bg-white rounded-xl border border-gray-200 p-5 h-full flex flex-col min-h-0">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-gray-900">Today</h2>
-        <span className="text-sm text-gray-500">{now ? format(now, 'EEEE, MMM d') : ''}</span>
+        <span className="text-sm text-gray-500">{now ? format(logicalTodayDate(now, rolloverHour), 'EEEE, MMM d') : ''}</span>
       </div>
 
       {sorted.length === 0 ? (
