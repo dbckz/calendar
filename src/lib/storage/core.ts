@@ -97,6 +97,15 @@ export interface UserData {
   // resume as a candidate (next Monday). Deferrals whose resume date has arrived
   // are pruned lazily by gatherWeekContext.
   taskDeferrals?: Record<string, string>;
+  // Daily-review state: when the review was last completed (so the next review
+  // only covers what has finished SINCE then) and the bare calendar-event titles
+  // the user has dismissed as "not a task" (so they never resurface in review).
+  dailyReviewState?: DailyReviewState;
+}
+
+export interface DailyReviewState {
+  lastReviewedAt?: string; // ISO timestamp of the last completed daily review
+  dismissedTitles?: string[]; // exact event titles to skip in calendar review
 }
 
 const DEFAULT_USER_DATA: UserData = {
@@ -117,6 +126,7 @@ const DEFAULT_USER_DATA: UserData = {
   ritualBlocks: [],
   blockDoneOverrides: {},
   taskDeferrals: {},
+  dailyReviewState: {},
 };
 
 export async function getUserData(): Promise<UserData> {
@@ -154,6 +164,7 @@ export async function getUserData(): Promise<UserData> {
           ([k, v]) => typeof k === 'string' && typeof v === 'string'
         )
       ),
+      dailyReviewState: parsed.dailyReviewState || {},
     };
   } catch {
     // Deep clone so callers that mutate nested collections (e.g. upserting into

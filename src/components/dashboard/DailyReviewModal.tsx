@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { X, ClipboardCheck, Loader2, Check, AlertTriangle, ArrowRight, Sparkles } from 'lucide-react';
+import { X, ClipboardCheck, Loader2, Check, AlertTriangle, ArrowRight, Sparkles, Ban } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
 import { api, type ReplanAnalyzeResponse } from '@/lib/api';
@@ -107,6 +107,24 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
       return { ...prev, [eventId]: list };
     });
 
+  // Dismiss a bare calendar event as "not a task": remove it from the current
+  // review and remember its title so it never resurfaces. Optimistic — the
+  // remember call is best-effort (if it fails, the row simply returns next time).
+  const dismissCalendarBlock = useCallback((block: ReplanReviewBlock) => {
+    const title = block.titles[0] ?? '';
+    setData(prev =>
+      prev
+        ? { ...prev, reviewBlocks: (prev.reviewBlocks ?? []).filter(b => b.googleEventId !== block.googleEventId) }
+        : prev
+    );
+    setMarks(prev => {
+      const next = { ...prev };
+      delete next[block.googleEventId];
+      return next;
+    });
+    if (title) api.dismissReviewTitle(title).catch(() => {});
+  }, []);
+
   // Summarise the final marks into done/total + task titles. A block counts done
   // only if every one of its tasks is marked done (matching the apply logic).
   const summariseOutcome = useCallback(() => {
@@ -172,6 +190,9 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
         if (failed > 0) setError(`${failed} update${failed === 1 ? '' : 's'} could not be saved.`);
         onApplied?.();
       }
+      // Stamp the review as completed so the next one only covers what finishes
+      // after now. Best-effort — a failure here must not block the replan step.
+      await api.completeDailyReview().catch(() => {});
       // Re-gather so the replan step sees the just-applied done/not-done state
       // (Asana-completed tasks drop out of the fresh incomplete fetch).
       await analyze();
@@ -199,9 +220,11 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
               <h2 className="text-lg font-semibold text-gray-900">
                 Daily review{step === 2 ? ' — replan' : ''}
               </h2>
-              {weekLabel && (
+              {data && (
                 <p className="text-xs text-gray-400">
-                  {step === 1 ? 'What got done?' : 'Reschedule what didn’t'} · {weekLabel}
+                  {step === 1
+                    ? 'What got done since your last review?'
+                    : `Reschedule what didn’t · ${weekLabel}`}
                 </p>
               )}
             </div>
@@ -249,6 +272,7 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
                     marks={marks[block.googleEventId] ?? []}
                     onToggleDone={(idx, done) => setTaskDone(block.googleEventId, idx, done)}
                     onToggleAsana={(idx, v) => setTaskCompleteAsana(block.googleEventId, idx, v)}
+                    onDismiss={block.source === 'calendar' ? () => dismissCalendarBlock(block) : undefined}
                   />
                 ))}
               </ul>
@@ -357,11 +381,14 @@ function ReviewRow({
   marks,
   onToggleDone,
   onToggleAsana,
+  onDismiss,
 }: {
   block: ReplanReviewBlock;
   marks: ReviewTaskMark[];
   onToggleDone: (idx: number, done: boolean) => void;
   onToggleAsana: (idx: number, v: boolean) => void;
+  // Present only for bare calendar events: dismiss the row as "not a task".
+  onDismiss?: () => void;
 }) {
   const color = categoryColor(block.category);
   const grouped = block.tasks.length > 1;
@@ -386,7 +413,19 @@ function ReviewRow({
               </span>
             )}
           </div>
-          <div className="mt-0.5 text-xs text-gray-400">{slotLabelMs(block.startMs)}</div>
+          <div className="mt-0.5 flex items-center gap-2 text-xs text-gray-400">
+            <span>{slotLabelMs(block.startMs)}</span>
+            {onDismiss && (
+              <button
+                onClick={onDismiss}
+                className="inline-flex items-center gap-0.5 text-gray-400 hover:text-gray-600 transition-colors"
+                title="Not a task — hide this event and don’t show it again"
+              >
+                <Ban className="w-3 h-3" />
+                Not a task
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Single-task blocks: Done / Didn't-do segmented control. */}

@@ -25,6 +25,7 @@ jest.mock('@/lib/user-data-storage', () => ({
   getPrepBlocks: jest.fn(),
   getRitualBlocks: jest.fn(),
   getBlockDoneOverrides: jest.fn(),
+  getDailyReviewState: jest.fn(),
 }));
 
 import { POST } from '@/app/api/scheduling/replan/analyze/route';
@@ -36,6 +37,7 @@ import {
   getPrepBlocks,
   getRitualBlocks,
   getBlockDoneOverrides,
+  getDailyReviewState,
 } from '@/lib/user-data-storage';
 import type { ReplanReviewBlock } from '@/lib/scheduling/replan';
 
@@ -46,6 +48,7 @@ const mockCustomTypes = getCustomTaskTypes as jest.Mock;
 const mockPrep = getPrepBlocks as jest.Mock;
 const mockRitual = getRitualBlocks as jest.Mock;
 const mockOverrides = getBlockDoneOverrides as jest.Mock;
+const mockReviewState = getDailyReviewState as jest.Mock;
 
 const WEEK_START = new Date(2026, 6, 13, 0, 0, 0, 0); // Monday 2026-07-13
 const NOW = new Date(2026, 6, 15, 8, 0, 0, 0); // Wednesday 08:00 (after Monday blocks)
@@ -89,6 +92,10 @@ beforeEach(() => {
   mockPrep.mockResolvedValue([]);
   mockRitual.mockResolvedValue([]);
   mockOverrides.mockResolvedValue({});
+  // A last-review well before the week's blocks, so the "since last review"
+  // window includes them (these tests exercise title/interval logic, not the
+  // window itself — see the dedicated window test below).
+  mockReviewState.mockResolvedValue({ lastReviewedAt: '2026-07-01T00:00:00.000Z', dismissedTitles: [] });
 });
 
 describe('replan analyze — daily review blocks', () => {
@@ -240,5 +247,52 @@ describe('replan analyze — daily review blocks', () => {
     expect(block!.start).toBe('09:00');
     // …but the displayed interval is the actual (dragged) event time.
     expect(block!.startMs).toBe(draggedStart.getTime());
+  });
+
+  it('excludes blocks that ended before the last review (since-last-review window)', async () => {
+    // A Monday 09:00–10:00 block; last review was Monday 12:00 → already covered.
+    mockScheduled.mockResolvedValue([
+      {
+        id: 's1',
+        asanaTaskId: 'g-done',
+        scheduledDate: '2026-07-13',
+        scheduledTime: '09:00',
+        duration: 60,
+        googleEventId: 'evt-old',
+        googleIntegrationId: 'gi1',
+        taskName: 'Already reviewed',
+      },
+    ]);
+    mockReviewState.mockResolvedValue({
+      lastReviewedAt: new Date(2026, 6, 13, 12, 0, 0).toISOString(),
+      dismissedTitles: [],
+    });
+    setContext({ asanaCandidates: [] });
+
+    const { reviewBlocks } = await analyze();
+    expect(reviewBlocks.find(b => b.googleEventId === 'evt-old')).toBeUndefined();
+  });
+
+  it('drops a bare calendar event whose title was dismissed as "not a task"', async () => {
+    // A solo, ended, unowned calendar event that the user dismissed by title.
+    mockReviewState.mockResolvedValue({
+      lastReviewedAt: '2026-07-01T00:00:00.000Z',
+      dismissedTitles: ['300k review'],
+    });
+    setContext({
+      weekEvents: [
+        {
+          id: 'cal-1',
+          title: '300k review',
+          allDay: false,
+          startTime: new Date(2026, 6, 13, 9, 0, 0).toISOString(),
+          endTime: new Date(2026, 6, 13, 10, 0, 0).toISOString(),
+          integrationId: 'gi1',
+        },
+      ],
+    });
+
+    const { reviewBlocks } = await analyze();
+    expect(reviewBlocks.find(b => b.googleEventId === 'cal-1')).toBeUndefined();
   });
 });

@@ -1055,6 +1055,30 @@ export const api = {
     );
   },
 
+  // Daily review: stamp the review as completed now, so the next review only
+  // covers blocks that finished after this moment.
+  async completeDailyReview(): Promise<{ lastReviewedAt: string }> {
+    return fetchWithRetry<{ lastReviewedAt: string }>(
+      '/api/scheduling/daily-review/complete',
+      { method: 'POST' },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Daily review: dismiss a bare calendar-event title as "not a task" so it
+  // never resurfaces in the review.
+  async dismissReviewTitle(title: string): Promise<{ ok: boolean }> {
+    return fetchWithRetry<{ ok: boolean }>(
+      '/api/scheduling/daily-review/dismiss',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
   // Mid-week replan: apply the accepted moves (patch each Google event's time +
   // update the stored schedule) and/or mark selected blocks "done".
   async confirmReplan(

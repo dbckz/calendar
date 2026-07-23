@@ -11,7 +11,9 @@ import {
   getPrepBlocks,
   getRitualBlocks,
   getBlockDoneOverrides,
+  getDailyReviewState,
 } from '@/lib/user-data-storage';
+import { logicalTodayDate, normalizeRolloverHour } from '@/lib/date-utils';
 import { ritualKindForTitle, isBreakTitle, existingRitualTitlesByDateFromEvents, RITUAL_TITLES } from '@/lib/scheduling/rituals';
 import { selectCalendarReviewBlocks } from '@/lib/scheduling/calendar-review';
 import { prepTitle } from '@/lib/scheduling/event-titles';
@@ -29,13 +31,14 @@ export async function POST(request: NextRequest) {
     const weekStartParam = typeof body?.weekStart === 'string' ? body.weekStart : undefined;
 
     const ctx = await gatherWeekContext(weekStartParam);
-    const [scheduledAsana, adHocTasks, customTypes, prepBlocks, ritualBlocks, doneOverrides] = await Promise.all([
+    const [scheduledAsana, adHocTasks, customTypes, prepBlocks, ritualBlocks, doneOverrides, reviewState] = await Promise.all([
       getScheduledAsanaTasks(),
       getAdHocTasks(),
       getCustomTaskTypes(),
       getPrepBlocks(),
       getRitualBlocks(),
       getBlockDoneOverrides(),
+      getDailyReviewState(),
     ]);
 
     const inWeek = (d?: string) => !!d && d >= ctx.weekStartStr && d <= ctx.weekEndStr;
@@ -66,15 +69,28 @@ export async function POST(request: NextRequest) {
     const appEventIds = new Set<string>();
 
     // Past app blocks (task/prep, never ritual) for the daily-review step. Built
-    // here where each block's task refs are still in hand; filtered to blocks that
-    // have already ended (endMs <= now).
+    // here where each block's task refs are still in hand; filtered to blocks
+    // that ended within the review window: after the last completed review (or
+    // the start of the logical day when none) and at/before now. This keeps the
+    // review to "what happened since you last reviewed" rather than the whole
+    // week — the replan planning below still spans the full week.
     const nowMs = ctx.now.getTime();
+    const rolloverHour = normalizeRolloverHour(ctx.config.scheduling?.dayRolloverHour);
+    const logicalDayStart = logicalTodayDate(ctx.now, rolloverHour);
+    logicalDayStart.setHours(rolloverHour, 0, 0, 0);
+    const lastReviewedMs = reviewState.lastReviewedAt
+      ? Date.parse(reviewState.lastReviewedAt)
+      : NaN;
+    const reviewStartMs = Number.isNaN(lastReviewedMs)
+      ? logicalDayStart.getTime()
+      : lastReviewedMs;
+    const dismissedTitles = new Set(reviewState.dismissedTitles);
     // eventId → backing task ids (Asana gid / ad-hoc id), so unplaceable rows can
     // carry what to defer. Preps have no deferrable task.
     const taskIdsByEvent = new Map<string, string[]>();
     const reviewBlocks: ReplanReviewBlock[] = [];
     const pushReview = (b: ReplanReviewBlock) => {
-      if (b.endMs <= nowMs) reviewBlocks.push(b);
+      if (b.endMs > reviewStartMs && b.endMs <= nowMs) reviewBlocks.push(b);
     };
 
     // Group scheduled Asana tasks by their Google event: a grouped block records
@@ -294,7 +310,9 @@ export async function POST(request: NextRequest) {
       events: ctx.weekEvents,
       appEventIds,
       ritualTitles: new Set(RITUAL_TITLES),
+      dismissedTitles,
       nowMs,
+      reviewStartMs,
       inWeek,
       doneOverrides,
       asanaTasks: ctx.asanaCandidates.map(c => ({

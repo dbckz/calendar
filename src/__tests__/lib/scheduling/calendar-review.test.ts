@@ -85,6 +85,25 @@ describe('selectCalendarReviewBlocks', () => {
     expect(run([event({ id: 'e1', title: '🍽️ Lunch' })])).toHaveLength(0);
   });
 
+  it('skips titles the user dismissed as "not a task"', () => {
+    const out = run([
+      event({ id: 'e1', title: '300k review' }),
+      event({ id: 'e2', title: 'Draft memo' }),
+    ], { dismissedTitles: new Set(['300k review']) });
+    expect(out.map(b => b.googleEventId)).toEqual(['e2']);
+  });
+
+  it('skips events that ended before the review window start', () => {
+    // Event ends 14:45; a reviewStart at 16:00 excludes it.
+    const reviewStartMs = new Date(2026, 6, 21, 16, 0, 0).getTime();
+    expect(run([event({ id: 'e1' })], { reviewStartMs })).toHaveLength(0);
+  });
+
+  it('keeps events that ended after the review window start', () => {
+    const reviewStartMs = new Date(2026, 6, 21, 10, 0, 0).getTime();
+    expect(run([event({ id: 'e1' })], { reviewStartMs })).toHaveLength(1);
+  });
+
   it('pre-ticks an event with a done override', () => {
     const out = run([event({ id: 'e1' })], { doneOverrides: { e1: true } });
     expect(out[0].done).toBe(true);

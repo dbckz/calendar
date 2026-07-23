@@ -25,3 +25,4 @@ export * from './storage/delegation-queue';
 export * from './storage/asana-filters';
 export * from './storage/attributions';
 export * from './storage/deferrals';
+export * from './storage/daily-review';

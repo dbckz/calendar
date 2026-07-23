@@ -146,7 +146,12 @@ export async function getWorkspaces(accessToken: string): Promise<AsanaWorkspace
 
 export async function getMyTasks(
   accessToken: string,
-  workspaceId: string
+  workspaceId: string,
+  // When set (ISO 8601), also return tasks completed since this time. Asana
+  // otherwise defaults to `completed_since=now`, i.e. incomplete tasks only.
+  // Callers that need completed tasks (e.g. the capacity type map, so finished
+  // work still counts) pass the start of the window they care about.
+  completedSince?: string
 ): Promise<AsanaTask[]> {
   // First get the user's gid
   const meResponse = await fetch(`${ASANA_API_BASE}/users/me`, {
@@ -182,8 +187,11 @@ export async function getMyTasks(
 
   const taskListData: AsanaApiResponse<{ gid: string }> = await taskListResponse.json();
 
+  const completedSinceParam = completedSince
+    ? `&completed_since=${encodeURIComponent(completedSince)}`
+    : '';
   const tasksResponse = await fetch(
-    `${ASANA_API_BASE}/user_task_lists/${taskListData.data.gid}/tasks?opt_fields=${TASK_OPT_FIELDS_WITH_PARENT}`,
+    `${ASANA_API_BASE}/user_task_lists/${taskListData.data.gid}/tasks?opt_fields=${TASK_OPT_FIELDS_WITH_PARENT}${completedSinceParam}`,
     {
       headers: {
         'Authorization': `Bearer ${accessToken}`,

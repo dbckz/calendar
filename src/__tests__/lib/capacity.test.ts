@@ -9,8 +9,10 @@ import {
   resolveSelectionCap,
   computeCapacity,
   dedupeByEventId,
+  mergeBlocksByEventId,
   CapacityQuota,
   CapacityBlock,
+  EventScopedBlock,
 } from '@/lib/capacity';
 
 describe('parseTargetLength', () => {
@@ -220,5 +222,87 @@ describe('dedupeByEventId', () => {
     ];
     const result = dedupeByEventId(records, r => r.eventId);
     expect(result.map(r => r.id)).toEqual(['a', 'c', 'd', 'e']);
+  });
+});
+
+describe('mergeBlocksByEventId', () => {
+  const block = (
+    typeSignals: string[],
+    completed = false,
+    minutes = 45
+  ): CapacityBlock => ({ typeSignals, minutes, completed });
+
+  it('collapses a grouped block (N records, 1 event) to one', () => {
+    const records: EventScopedBlock[] = [
+      { googleEventId: 'evt-1', block: block(['Batch']) },
+      { googleEventId: 'evt-1', block: block(['Batch']) },
+      { googleEventId: 'evt-1', block: block(['Batch']) },
+    ];
+    expect(mergeBlocksByEventId(records)).toHaveLength(1);
+  });
+
+  it('unions type signals so a completed first member does not strip classification', () => {
+    // First member is completed and dropped out of the Asana fetch (no signal);
+    // a later member still carries the Batch type. The merged block must classify.
+    const records: EventScopedBlock[] = [
+      { googleEventId: 'evt-1', block: block([], true) },
+      { googleEventId: 'evt-1', block: block(['Batch'], false) },
+      { googleEventId: 'evt-1', block: block([], true) },
+    ];
+    const [merged] = mergeBlocksByEventId(records);
+    expect(merged.typeSignals).toContain('Batch');
+  });
+
+  it('marks the block completed only when every member is done', () => {
+    const allDone: EventScopedBlock[] = [
+      { googleEventId: 'evt-1', block: block(['Batch'], true) },
+      { googleEventId: 'evt-1', block: block(['Batch'], true) },
+    ];
+    const someOpen: EventScopedBlock[] = [
+      { googleEventId: 'evt-2', block: block(['Batch'], true) },
+      { googleEventId: 'evt-2', block: block(['Batch'], false) },
+    ];
+    expect(mergeBlocksByEventId(allDone)[0].completed).toBe(true);
+    expect(mergeBlocksByEventId(someOpen)[0].completed).toBe(false);
+  });
+
+  it('keeps the first member minutes (the container event duration)', () => {
+    const records: EventScopedBlock[] = [
+      { googleEventId: 'evt-1', block: block(['Batch'], false, 45) },
+      { googleEventId: 'evt-1', block: block(['Batch'], false, 45) },
+    ];
+    expect(mergeBlocksByEventId(records)[0].minutes).toBe(45);
+  });
+
+  it('keeps records with no event id as their own blocks', () => {
+    const records: EventScopedBlock[] = [
+      { googleEventId: undefined, block: block(['general']) },
+      { googleEventId: null, block: block(['general']) },
+    ];
+    expect(mergeBlocksByEventId(records)).toHaveLength(2);
+  });
+
+  it('does not mutate the input blocks', () => {
+    const original = block(['Batch']);
+    const records: EventScopedBlock[] = [
+      { googleEventId: 'evt-1', block: original },
+      { googleEventId: 'evt-1', block: block(['batch']) },
+    ];
+    mergeBlocksByEventId(records);
+    expect(original.typeSignals).toEqual(['Batch']);
+  });
+
+  it('a fully-completed grouped block still classifies and counts', () => {
+    // The core regression: completing every Batch task must not zero the count.
+    const quotas: CapacityQuota[] = [
+      { category: 'Batch', weeklyCount: 2, targetLength: '45min', types: ['batch'] },
+    ];
+    const records: EventScopedBlock[] = [
+      { googleEventId: 'evt-1', block: block(['Batch'], true) },
+      { googleEventId: 'evt-1', block: block(['Batch'], true) },
+    ];
+    const rows = computeCapacity(quotas, mergeBlocksByEventId(records));
+    expect(rows[0].scheduledCount).toBe(1);
+    expect(rows[0].completedCount).toBe(1);
   });
 });

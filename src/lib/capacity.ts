@@ -123,8 +123,9 @@ export function resolveSelectionCap(opts: {
 // record per agenda task, all pointing at the SAME Google event; the weekly
 // quota counts BLOCKS, not tasks. So records sharing a Google event id collapse
 // to their first occurrence, while records with no event id (each its own
-// block) always pass through. Used by both the dashboard capacity route and
-// gatherWeekContext so counting stays identical.
+// block) always pass through. Used by gatherWeekContext's block counting. (The
+// dashboard capacity route uses mergeBlocksByEventId below, which additionally
+// unions type signals across a group.)
 export function dedupeByEventId<T>(
   items: T[],
   getEventId: (item: T) => string | null | undefined
@@ -138,6 +139,46 @@ export function dedupeByEventId<T>(
       seen.add(eventId);
     }
     result.push(item);
+  }
+  return result;
+}
+
+// A CapacityBlock paired with the Google event id its source record points at.
+export interface EventScopedBlock {
+  googleEventId?: string | null;
+  block: CapacityBlock;
+}
+
+// Collapse records sharing a Google event id into ONE block. Grouped categories
+// (e.g. Batch, Engagement) store one record per agenda task, all pointing at the
+// SAME container event; the weekly quota counts BLOCKS, not tasks. Unlike a
+// plain dedupe — which kept only the FIRST record's fields — we UNION the type
+// signals across EVERY member. That matters because a member task that has been
+// completed drops out of the live Asana fetch and carries no type signal; if the
+// first member happens to be that completed task, keeping only its (empty)
+// signal left the whole block unclassified and uncounted. Merging lets any
+// member's type classify the block. The block counts as completed only when
+// EVERY member task is done; its minutes are the first member's (the container
+// event's duration), matching the prior dedupe behavior. Records with no event
+// id are each their own block.
+export function mergeBlocksByEventId(records: EventScopedBlock[]): CapacityBlock[] {
+  const byEvent = new Map<string, CapacityBlock>();
+  const result: CapacityBlock[] = [];
+  for (const { googleEventId, block } of records) {
+    if (!googleEventId) {
+      // No-event blocks are never merged into later, so no defensive clone.
+      result.push(block);
+      continue;
+    }
+    const existing = byEvent.get(googleEventId);
+    if (!existing) {
+      const merged: CapacityBlock = { ...block, typeSignals: [...block.typeSignals] };
+      byEvent.set(googleEventId, merged);
+      result.push(merged);
+    } else {
+      existing.typeSignals.push(...block.typeSignals);
+      existing.completed = existing.completed && block.completed;
+    }
   }
   return result;
 }

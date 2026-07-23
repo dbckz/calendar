@@ -5,12 +5,12 @@ import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import { getScheduledAsanaTasks, getAdHocTasks, getCustomTaskTypes } from '@/lib/user-data-storage';
 import { getDailyRecord } from '@/lib/time-tracking-storage';
 import { getEnabledAsanaIntegrations, updateIntegration } from '@/lib/integration-storage';
-import { getIncompleteTasks, refreshAsanaToken } from '@/lib/asana';
+import { getMyTasks, refreshAsanaToken } from '@/lib/asana';
 import {
   CapacityQuota,
-  CapacityBlock,
   computeCapacity,
-  dedupeByEventId,
+  mergeBlocksByEventId,
+  EventScopedBlock,
 } from '@/lib/capacity';
 import {
   AsanaIntegration,
@@ -21,9 +21,14 @@ import {
   getCustomTaskTypeId,
 } from '@/types';
 
-// Build a gid -> { typeValue, completed } map from incomplete Asana tasks.
+// Build a gid -> { typeValue, completed } map from the user's Asana tasks.
+// Includes tasks COMPLETED since `completedSince` (Asana otherwise returns only
+// incomplete tasks) so finished work still classifies and counts — completing a
+// task must not drop it out of the weekly capacity totals.
 // Best-effort: if Asana can't be reached, Asana blocks are left unclassified.
-async function buildAsanaTypeMap(): Promise<Map<string, { typeValue: string | null; completed: boolean }>> {
+async function buildAsanaTypeMap(
+  completedSince: string
+): Promise<Map<string, { typeValue: string | null; completed: boolean }>> {
   const map = new Map<string, { typeValue: string | null; completed: boolean }>();
   try {
     const integrations = await getEnabledAsanaIntegrations();
@@ -39,7 +44,11 @@ async function buildAsanaTypeMap(): Promise<Map<string, { typeValue: string | nu
           );
           await updateIntegration(integration.id, { credentials });
         }
-        const tasks = await getIncompleteTasks(credentials.accessToken, integration.workspaceId);
+        const tasks = await getMyTasks(
+          credentials.accessToken,
+          integration.workspaceId,
+          completedSince
+        );
         for (const task of tasks) {
           const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
           map.set(task.gid, {
@@ -81,7 +90,7 @@ export async function GET() {
       getScheduledAsanaTasks(),
       getAdHocTasks(),
       getCustomTaskTypes(),
-      buildAsanaTypeMap(),
+      buildAsanaTypeMap(`${weekStart}T00:00:00.000Z`),
     ]);
 
     const quotas: CapacityQuota[] = Object.entries(config.taskQuotas).map(
@@ -96,17 +105,14 @@ export async function GET() {
     // App-scheduled blocks in the current ISO week. Grouped categories (e.g.
     // Batch, Engagement) store one record per agenda task — Asana tasks AND
     // ad-hoc tasks alike — all pointing at the SAME container event id; the
-    // weekly quota counts BLOCKS. So we combine both record types and dedupe by
-    // googleEventId across the COMBINED set (matching gatherWeekContext):
-    // records sharing an event id collapse to one block, records with no event
-    // id (each its own block) always count. Deduping per-type would over-count a
-    // Batch block that carries several ad-hoc tasks (N ad-hoc → N blocks) and
-    // could double-count an event carrying both an Asana and an ad-hoc record.
-    interface WeekRecord {
-      googleEventId?: string | null;
-      block: CapacityBlock;
-    }
-    const records: WeekRecord[] = [];
+    // weekly quota counts BLOCKS. So we combine both record types and merge by
+    // googleEventId across the COMBINED set: records sharing an event id collapse
+    // to one block (unioning their type signals so a completed member can't
+    // strip the block's classification), records with no event id (each its own
+    // block) always count. Merging per-type would over-count a Batch block that
+    // carries several ad-hoc tasks (N ad-hoc → N blocks) and could double-count
+    // an event carrying both an Asana and an ad-hoc record.
+    const records: EventScopedBlock[] = [];
 
     for (const s of scheduledAsana) {
       if (s.scheduledDate < weekStart || s.scheduledDate > weekEnd) continue;
@@ -132,7 +138,7 @@ export async function GET() {
       });
     }
 
-    const blocks = dedupeByEventId(records, r => r.googleEventId).map(r => r.block);
+    const blocks = mergeBlocksByEventId(records);
 
     const capacity = computeCapacity(quotas, blocks);
 

@@ -43,9 +43,15 @@ export interface CalendarReviewInput {
   // Exact ritual titles (e.g. "🍽️ Lunch") so a manually-added ritual event with
   // no local record is still skipped.
   ritualTitles: ReadonlySet<string>;
+  // Exact event titles the user has dismissed as "not a task": skipped so they
+  // never resurface in the review. Defaults to none.
+  dismissedTitles?: ReadonlySet<string>;
   nowMs: number;
-  // Whether a yyyy-MM-dd falls in the reviewed week — matches the scope the other
-  // review sources use (in-week + already ended).
+  // Only review events that ended AFTER this instant (the last completed review,
+  // or the start of the logical day when none). Defaults to no lower bound.
+  reviewStartMs?: number;
+  // Whether a yyyy-MM-dd falls in the reviewed week — an outer bound matching the
+  // events the route fetched (this week).
   inWeek: (dateStr: string) => boolean;
   // Events already marked done for planning: kept in the review but pre-ticked so
   // they don't re-prompt (and won't be re-adopted).
@@ -96,11 +102,16 @@ export function selectCalendarReviewBlocks(input: CalendarReviewInput): ReplanRe
     gidsByTitle.set(key, [...(gidsByTitle.get(key) ?? []), t.gid]);
   }
 
+  const reviewStartMs = input.reviewStartMs ?? Number.NEGATIVE_INFINITY;
+  const dismissedTitles = input.dismissedTitles ?? new Set<string>();
+
   const blocks: ReplanReviewBlock[] = [];
   for (const event of input.events) {
     if (event.allDay) continue;
     if (input.appEventIds.has(event.id)) continue;
     if (input.ritualTitles.has(event.title.trim())) continue;
+    // Titles the user marked "not a task" never come back.
+    if (dismissedTitles.has(event.title.trim())) continue;
     // Meetings (anyone else invited) are not solo work → skip. attendeeCount is
     // undefined for events with no attendee list (solo, owned) and 1 for
     // self-only; both are reviewable. 2+ means other attendees.
@@ -109,9 +120,10 @@ export function selectCalendarReviewBlocks(input: CalendarReviewInput): ReplanRe
     const startMs = event.startTime.getTime();
     const endMs = event.endTime.getTime();
     if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) continue;
-    // Same scope as the other review sources: in-week and already ended.
+    // Same scope as the other review sources: within the fetched week, already
+    // ended, and not before the review window start (since the last review).
     if (!input.inWeek(formatLocalDate(event.startTime))) continue;
-    if (endMs > input.nowMs) continue;
+    if (endMs > input.nowMs || endMs <= reviewStartMs) continue;
 
     const done = !!input.doneOverrides[event.id];
     const match = matchAsanaTask(event, byGid, gidsByTitle);
