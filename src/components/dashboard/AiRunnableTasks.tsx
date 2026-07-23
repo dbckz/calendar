@@ -11,7 +11,7 @@ const ROW_PX = 46; // approx height of one compact task row incl. gap
 interface AiRunnableTasksProps {
   tasks: CalendarEvent[];                      // incomplete Asana tasks
   metadataByGid: Record<string, TaskMetadata>;
-  onTaskClick?: (taskId: string) => void;      // open the task dialog in-place
+  onTaskClick?: (taskId: string, navIds?: string[]) => void; // open the task dialog in-place
   onDelegate?: (task: CalendarEvent) => void;  // open the compose-brief modal directly
 }
 
@@ -52,7 +52,7 @@ export function AiRunnableTasks({ tasks, metadataByGid, onTaskClick, onDelegate 
           {pageItems.map(task => (
             <li
               key={task.id}
-              onClick={() => onTaskClick?.(task.id)}
+              onClick={() => onTaskClick?.(task.id, runnable.map(t => t.id))}
               className={`group flex items-center gap-2 px-2 py-1 rounded-lg ${
                 onTaskClick ? 'cursor-pointer hover:bg-gray-50' : ''
               }`}

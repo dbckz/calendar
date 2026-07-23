@@ -86,6 +86,11 @@ export interface TaskDetailDialogProps {
   ) => Promise<void>;
   delegationEntry?: DelegationQueueEntry;
   onDelegated?: () => void;
+  // Step to the previous/next task in the originating list (Command Center
+  // panels). Each is provided only when such a neighbour exists, so the
+  // corresponding chevron renders only at a non-end position.
+  onPrevTask?: () => void;
+  onNextTask?: () => void;
 }
 
 export interface TaskItemProps {

@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { AsanaStory } from '@/types';
-import { X, ExternalLink, Send, Check, ArrowLeft, Clock, Folder, Tag, PlayCircle, Trash2, MessageSquare, Loader2, Layers, Bot } from 'lucide-react';
+import { X, ExternalLink, Send, Check, ArrowLeft, Clock, Folder, Tag, PlayCircle, Trash2, MessageSquare, Loader2, Layers, Bot, ChevronLeft, ChevronRight } from 'lucide-react';
 import { format, parseISO, isToday, isPast } from 'date-fns';
 import { getAsanaTaskUrl } from '@/lib/asana';
 import { api } from '@/lib/api';
@@ -36,6 +36,8 @@ export function TaskDetailDialog({
   onSaveMetadata,
   delegationEntry,
   onDelegated,
+  onPrevTask,
+  onNextTask,
 }: TaskDetailDialogProps) {
   const [comment, setComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -109,16 +111,30 @@ export function TaskDetailDialog({
     }
   }, [task.id, task.integrationId]);
 
-  // Close dialog on Escape key
+  // Close on Escape; step through the originating list on ArrowLeft/ArrowRight.
+  // Arrow keys are ignored while typing into a form control so they still move
+  // the caret / adjust date inputs as expected.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onClose();
+        return;
+      }
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) return;
+      if (e.key === 'ArrowLeft' && onPrevTask) {
+        e.preventDefault();
+        onPrevTask();
+      } else if (e.key === 'ArrowRight' && onNextTask) {
+        e.preventDefault();
+        onNextTask();
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  }, [onClose, onPrevTask, onNextTask]);
 
   const handleSubmitComment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -243,6 +259,24 @@ export function TaskDetailDialog({
               <h3 className="font-semibold text-gray-900 line-clamp-2">{task.title}</h3>
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
+              {onPrevTask && (
+                <button
+                  onClick={onPrevTask}
+                  className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+                  title="Previous task"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+              )}
+              {onNextTask && (
+                <button
+                  onClick={onNextTask}
+                  className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+                  title="Next task"
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </button>
+              )}
               {onUpdateTask && task.integrationId && !isEditing && (
                 <button
                   onClick={() => setIsEditing(true)}

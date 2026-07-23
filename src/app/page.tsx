@@ -169,6 +169,10 @@ export default function Home() {
 
   const [highlightedAsanaTaskId, setHighlightedAsanaTaskId] = useState<string | null>(null);
   const [openTaskDialogId, setOpenTaskDialogId] = useState<string | null>(null);
+  // Ordered id list backing the task dialog's prev/next navigation. Set only
+  // when the dialog is opened from a Command Center panel (Top Tasks /
+  // AI-runnable); null for every other open path, so no nav chevrons appear.
+  const [taskNavIds, setTaskNavIds] = useState<string[] | null>(null);
   const [staleModalOpen, setStaleModalOpen] = useState(false);
   const googleEventModal = useGoogleEventModal();
   const {
@@ -833,6 +837,7 @@ export default function Home() {
     const asanaTaskId = event.linkedAsanaTaskId || (event.source === 'asana' ? event.id : null);
     if (asanaTaskId) {
       setOpenTaskDialogId(asanaTaskId);
+      setTaskNavIds(null);
     } else if (event.source === 'google') {
       setSelectedGoogleEvent(event);
     }
@@ -840,6 +845,7 @@ export default function Home() {
 
   const handleClearOpenTaskDialog = useCallback(() => {
     setOpenTaskDialogId(null);
+    setTaskNavIds(null);
   }, []);
 
   const handleDeleteEventRequest = useCallback((event: CalendarEvent) => {
@@ -930,13 +936,15 @@ export default function Home() {
     setActiveTab('calendar');
     window.location.hash = 'calendar';
     setOpenTaskDialogId(taskId);
+    setTaskNavIds(null);
   }, []);
 
   // Open a task from the Command Center WITHOUT leaving it (a page-level dialog
   // renders over the dashboard). Distinct from handleOpenAsanaTask, which is for
   // calendar-originated opens.
-  const handleOpenTaskInPlace = useCallback((taskId: string) => {
+  const handleOpenTaskInPlace = useCallback((taskId: string, navIds?: string[]) => {
     setOpenTaskDialogId(taskId);
+    setTaskNavIds(navIds ?? null);
   }, []);
 
   const dashboardDialogTask = useMemo(
@@ -945,6 +953,19 @@ export default function Home() {
       : null),
     [activeTab, openTaskDialogId, allAsanaTasks],
   );
+
+  // Resolve the previous/next navigable task ids from the panel's ordered list,
+  // skipping any id that no longer resolves to a live task. Each is null at the
+  // corresponding end of the list, which suppresses that chevron in the dialog.
+  const { prevTaskId, nextTaskId } = useMemo(() => {
+    if (!taskNavIds || !openTaskDialogId) return { prevTaskId: null, nextTaskId: null };
+    const idx = taskNavIds.indexOf(openTaskDialogId);
+    if (idx === -1) return { prevTaskId: null, nextTaskId: null };
+    const liveIds = new Set(allAsanaTasks.map(t => t.id));
+    const prevTaskId = taskNavIds.slice(0, idx).reverse().find(id => liveIds.has(id)) ?? null;
+    const nextTaskId = taskNavIds.slice(idx + 1).find(id => liveIds.has(id)) ?? null;
+    return { prevTaskId, nextTaskId };
+  }, [taskNavIds, openTaskDialogId, allAsanaTasks]);
 
   // One-click delegate from the AI-runnable section (compose-brief modal).
   const [delegateTask, setDelegateTask] = useState<CalendarEvent | null>(null);
@@ -998,11 +1019,14 @@ export default function Home() {
           {/* Open a task over the Command Center without switching to calendar */}
           {dashboardDialogTask && (
             <TaskDetailDialog
+              key={dashboardDialogTask.id}
               task={dashboardDialogTask}
               formatDuration={formatMinutes}
               onClose={handleClearOpenTaskDialog}
               elevated={staleModalOpen}
               onBack={staleModalOpen ? handleClearOpenTaskDialog : undefined}
+              onPrevTask={prevTaskId ? () => setOpenTaskDialogId(prevTaskId) : undefined}
+              onNextTask={nextTaskId ? () => setOpenTaskDialogId(nextTaskId) : undefined}
               onToggleComplete={handleSidebarAsanaComplete}
               onAddComment={handleSidebarAsanaComment}
               onUpdateTask={handleSidebarAsanaUpdate}

@@ -33,7 +33,7 @@ interface DashboardContentProps {
   // Per-integration Type field info, for the Plan-my-week "type unclassified
   // tasks" pre-step (find untyped tasks + write chosen Types back to Asana).
   typeFieldInfoByIntegration?: Map<string, AsanaTypeFieldInfo>;
-  onOpenTask?: (taskId: string) => void;
+  onOpenTask?: (taskId: string, navIds?: string[]) => void;
   onDelegateTask?: (task: CalendarEvent) => void; // open the compose-brief modal directly
   onReloadMetadata?: () => Promise<void> | void; // refresh aiDelegable flags after re-assessment
   onDeleteTask?: (taskId: string, integrationId: string) => void; // optimistic delete (stale triage)

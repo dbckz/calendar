@@ -13,7 +13,7 @@ const ROW_PX = 46; // approx height of one compact task row incl. gap
 interface TopTasksProps {
   tasks: CalendarEvent[]; // incomplete Asana tasks
   metadataByGid: Record<string, TaskMetadata>;
-  onTaskClick?: (taskId: string) => void;
+  onTaskClick?: (taskId: string, navIds?: string[]) => void;
 }
 
 function dueColor(dueOn?: string): string {
@@ -45,7 +45,7 @@ export function TopTasks({ tasks, metadataByGid, onTaskClick }: TopTasksProps) {
           {pageItems.map(task => (
             <li
               key={task.id}
-              onClick={() => onTaskClick?.(task.id)}
+              onClick={() => onTaskClick?.(task.id, ranked.map(t => t.id))}
               className={`flex items-center gap-2 px-2 py-1 rounded-lg ${
                 onTaskClick ? 'cursor-pointer hover:bg-gray-50' : ''
               }`}
