@@ -239,18 +239,16 @@ export function TaskDetailDialog({
 
   return (
     <div className={`fixed inset-0 bg-black/50 flex items-center justify-center ${elevated ? 'z-[70]' : 'z-50'}`} onClick={onClose}>
-      <div
-        className="relative bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden max-h-[90vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
+      {/* Relative wrapper (no overflow clipping) so the prev/next controls can
+          float just outside the panel's left/right edges, over the backdrop. */}
+      <div className="relative w-full max-w-md mx-4" onClick={(e) => e.stopPropagation()}>
         {/* Prev/next task navigation — carousel-style buttons vertically centred
-            on the dialog's left/right edges. Positioned just inside the edges so
-            they aren't clipped by the dialog's overflow-hidden. Each renders only
-            when its neighbour exists. */}
+            just outside the panel edges. Each renders only when its neighbour
+            exists. stopPropagation keeps clicks off the backdrop-close handler. */}
         {onPrevTask && (
           <button
-            onClick={onPrevTask}
-            className="absolute left-2 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center w-9 h-9 rounded-full bg-white border border-gray-200 text-gray-500 shadow-md hover:bg-gray-50 hover:text-gray-700"
+            onClick={(e) => { e.stopPropagation(); onPrevTask(); }}
+            className="absolute top-1/2 -translate-y-1/2 right-full mr-3 z-10 flex items-center justify-center w-9 h-9 rounded-full bg-white border border-gray-200 text-gray-500 shadow-md hover:bg-gray-50 hover:text-gray-700"
             title="Previous task"
           >
             <ChevronLeft className="w-5 h-5" />
@@ -258,14 +256,17 @@ export function TaskDetailDialog({
         )}
         {onNextTask && (
           <button
-            onClick={onNextTask}
-            className="absolute right-2 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center w-9 h-9 rounded-full bg-white border border-gray-200 text-gray-500 shadow-md hover:bg-gray-50 hover:text-gray-700"
+            onClick={(e) => { e.stopPropagation(); onNextTask(); }}
+            className="absolute top-1/2 -translate-y-1/2 left-full ml-3 z-10 flex items-center justify-center w-9 h-9 rounded-full bg-white border border-gray-200 text-gray-500 shadow-md hover:bg-gray-50 hover:text-gray-700"
             title="Next task"
           >
             <ChevronRight className="w-5 h-5" />
           </button>
         )}
 
+        <div
+          className="bg-white rounded-lg shadow-xl w-full overflow-hidden max-h-[90vh] flex flex-col"
+        >
         {/* Header */}
         <div className="p-4 border-b border-gray-200 flex-shrink-0">
           <div className="flex items-start justify-between gap-3">
@@ -635,6 +636,7 @@ export function TaskDetailDialog({
               Delete Task
             </button>
           )}
+        </div>
         </div>
       </div>
 
