@@ -491,6 +491,15 @@ export async function POST(request: NextRequest) {
           const adhoc = adHocTasks.find(t => t.googleEventId === move.googleEventId);
           if (adhoc) {
             await updateAdHocTask(adhoc.id, { dueDate: move.date, dueTime: move.start });
+          } else {
+            const prep = prepBlocks.find(p => p.googleEventId === move.googleEventId);
+            if (prep) {
+              await updatePrepBlock(prep.id, {
+                date: move.date,
+                start: move.start,
+                durationMinutes: move.durationMinutes,
+              });
+            }
           }
         }
 

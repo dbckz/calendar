@@ -22,9 +22,11 @@ function londonDate(instant: Date): string {
 //   - date: yyyy-MM-dd (defaults to today in Europe/London)
 // Response:
 //   { date, prepBlocksToday, prepBlocksForMeetingsOn }
-// where `prepBlocksToday` are blocks scheduled on `date`, and
+// where `prepBlocksToday` are the not-yet-done blocks scheduled on `date`
+// (done blocks already happened and must not be re-briefed), and
 // `prepBlocksForMeetingsOn` are blocks preparing for a meeting whose day is
-// `date`. A block can appear in both when its prep day equals its meeting day.
+// `date` (kept unfiltered so the day-of-update flow knows prep occurred).
+// A block can appear in both when its prep day equals its meeting day.
 export async function GET(request: NextRequest) {
   const dateParam = request.nextUrl.searchParams.get('date');
   const date = dateParam ?? londonDate(new Date());
@@ -39,7 +41,7 @@ export async function GET(request: NextRequest) {
   try {
     const prepBlocks = await getPrepBlocks();
 
-    const prepBlocksToday = prepBlocks.filter(block => block.date === date);
+    const prepBlocksToday = prepBlocks.filter(block => block.date === date && !block.done);
     const prepBlocksForMeetingsOn = prepBlocks.filter(
       block => londonDate(new Date(block.meetingStart)) === date
     );
