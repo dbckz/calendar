@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DelegationQueueEntry, OrchestratorStatus } from '@/types';
 import { api } from '@/lib/api';
+import type { AgentPacingConfig } from '@/lib/workflow-config-storage';
+import { estimateQueueEtas } from '@/lib/delegation-eta';
 import { Bot, CheckCircle2, XCircle, Loader2, Clock, PauseCircle } from 'lucide-react';
 
 interface DelegationWidgetProps {
@@ -49,15 +51,29 @@ function timeUntil(iso: string): string {
   return `${Math.round(mins / 60)}h`;
 }
 
+// Compact estimated-start label for a queued row, e.g. "~19:40" today,
+// "~tomorrow 02:10" next day, or "~Mon 02:10" further out. The ~ marks it an
+// estimate. Day comparison is by local calendar date, so an overnight ETA that
+// crosses midnight reads as tomorrow.
+function formatEta(eta: Date, now: Date): string {
+  const hhmm = `${String(eta.getHours()).padStart(2, '0')}:${String(eta.getMinutes()).padStart(2, '0')}`;
+  const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const dayDiff = Math.round((dayStart(eta) - dayStart(now)) / (24 * 60 * 60_000));
+  if (dayDiff <= 0) return `~${hhmm}`;
+  if (dayDiff === 1) return `~tomorrow ${hhmm}`;
+  return `~${eta.toLocaleDateString(undefined, { weekday: 'short' })} ${hhmm}`;
+}
+
 export function DelegationWidget({
   delegationByGid,
   onTaskClick,
   completedTaskGids,
 }: DelegationWidgetProps) {
-  // The queue entries come from the page-level store (prop). Only the
-  // orchestrator status (pacer pause) is polled locally here — it's separate
-  // data the delegation store doesn't carry.
+  // The queue entries come from the page-level store (prop). The orchestrator
+  // status (pacer pause + run history) is polled locally here, and the pacing
+  // budget is fetched once — both feed the queued-entry ETA estimate.
   const [status, setStatus] = useState<OrchestratorStatus | null>(null);
+  const [pacing, setPacing] = useState<AgentPacingConfig | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,6 +83,10 @@ export function DelegationWidget({
         .catch(() => { /* keep last known state on transient errors */ });
     };
     load();
+    // Pacing rarely changes; fetch it once (best-effort — no ETA if it fails).
+    api.getWorkflowConfig()
+      .then(cfg => { if (!cancelled && cfg.agentPacing) setPacing(cfg.agentPacing); })
+      .catch(() => { /* ETA simply won't render without a budget */ });
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') load();
     }, REFRESH_MS);
@@ -81,10 +101,36 @@ export function DelegationWidget({
 
   const list = useMemo(() => Object.values(delegationByGid), [delegationByGid]);
   const running = useMemo(() => list.filter(e => e.state === 'running'), [list]);
+  // Match the pacer's claim order exactly: priority asc, then enqueuedAt asc.
   const queued = useMemo(
-    () => list.filter(e => e.state === 'queued').sort((a, b) => a.enqueuedAt.localeCompare(b.enqueuedAt)),
+    () => list.filter(e => e.state === 'queued').sort((a, b) => {
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      return a.enqueuedAt.localeCompare(b.enqueuedAt);
+    }),
     [list]
   );
+
+  // Estimated start time per queued entry, by replaying the pacer forward from
+  // now over the pacing budget, seeded with recent real runs + any active
+  // pause. Recomputed when the queue, status poll, or pacing changes.
+  const etaByGid = useMemo(() => {
+    if (!pacing || queued.length === 0) return new Map<string, Date>();
+    const now = new Date();
+    const recentRunTimes = (status?.history ?? [])
+      .filter(h => h.taskGid)
+      .map(h => Date.parse(h.ranAt))
+      .filter(ms => !Number.isNaN(ms));
+    // A currently-running entry occupies this pacer tick, so treat it as a run
+    // just now — it delays the first queued estimate honestly.
+    if (running.length > 0) recentRunTimes.push(now.getTime());
+    return estimateQueueEtas({
+      orderedQueued: queued,
+      pacing,
+      now,
+      pausedUntil: status?.pausedUntil,
+      recentRunTimes,
+    });
+  }, [pacing, queued, running, status]);
   // Finished runs the user hasn't triaged yet form the "For review" inbox.
   // Old finished entries predating reviewedAt (no reviewedAt) still show up.
   // Entries whose task is already completed in Asana are excluded — completed
@@ -149,16 +195,29 @@ export function DelegationWidget({
             </div>
             {queued.length > 0 ? (
               <ul className="space-y-0.5">
-                {queued.map(e => (
-                  <li
-                    key={e.asanaTaskGid}
-                    onClick={() => onTaskClick?.(e.asanaTaskGid)}
-                    className={`text-sm text-gray-700 truncate px-2 py-1 rounded ${onTaskClick ? 'cursor-pointer hover:bg-gray-50' : ''}`}
-                  >
-                    {e.title || 'Task'}
-                    {e.mode === 'now' && <span className="ml-1.5 text-xs text-indigo-500">run now</span>}
-                  </li>
-                ))}
+                {queued.map(e => {
+                  const eta = etaByGid.get(e.asanaTaskGid);
+                  return (
+                    <li
+                      key={e.asanaTaskGid}
+                      onClick={() => onTaskClick?.(e.asanaTaskGid)}
+                      className={`text-sm text-gray-700 px-2 py-1 rounded ${onTaskClick ? 'cursor-pointer hover:bg-gray-50' : ''}`}
+                    >
+                      <span className="truncate block">
+                        {e.title || 'Task'}
+                        {e.mode === 'now' && <span className="ml-1.5 text-xs text-indigo-500">run now</span>}
+                      </span>
+                      {eta && (
+                        <span
+                          className="text-xs text-gray-400 flex items-center gap-1 mt-0.5"
+                          title="Estimated start time (based on the pacing budget)"
+                        >
+                          <Clock className="w-3 h-3" /> est. start {formatEta(eta, new Date())}
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             ) : (
               <p className="text-xs text-gray-400 italic px-2">Nothing queued.</p>
