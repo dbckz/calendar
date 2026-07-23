@@ -240,9 +240,32 @@ export function TaskDetailDialog({
   return (
     <div className={`fixed inset-0 bg-black/50 flex items-center justify-center ${elevated ? 'z-[70]' : 'z-50'}`} onClick={onClose}>
       <div
-        className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden max-h-[90vh] flex flex-col"
+        className="relative bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden max-h-[90vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Prev/next task navigation — carousel-style buttons vertically centred
+            on the dialog's left/right edges. Positioned just inside the edges so
+            they aren't clipped by the dialog's overflow-hidden. Each renders only
+            when its neighbour exists. */}
+        {onPrevTask && (
+          <button
+            onClick={onPrevTask}
+            className="absolute left-2 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center w-9 h-9 rounded-full bg-white border border-gray-200 text-gray-500 shadow-md hover:bg-gray-50 hover:text-gray-700"
+            title="Previous task"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+        )}
+        {onNextTask && (
+          <button
+            onClick={onNextTask}
+            className="absolute right-2 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center w-9 h-9 rounded-full bg-white border border-gray-200 text-gray-500 shadow-md hover:bg-gray-50 hover:text-gray-700"
+            title="Next task"
+          >
+            <ChevronRight className="w-5 h-5" />
+          </button>
+        )}
+
         {/* Header */}
         <div className="p-4 border-b border-gray-200 flex-shrink-0">
           <div className="flex items-start justify-between gap-3">
@@ -259,24 +282,6 @@ export function TaskDetailDialog({
               <h3 className="font-semibold text-gray-900 line-clamp-2">{task.title}</h3>
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
-              {onPrevTask && (
-                <button
-                  onClick={onPrevTask}
-                  className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
-                  title="Previous task"
-                >
-                  <ChevronLeft className="w-5 h-5" />
-                </button>
-              )}
-              {onNextTask && (
-                <button
-                  onClick={onNextTask}
-                  className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
-                  title="Next task"
-                >
-                  <ChevronRight className="w-5 h-5" />
-                </button>
-              )}
               {onUpdateTask && task.integrationId && !isEditing && (
                 <button
                   onClick={() => setIsEditing(true)}
