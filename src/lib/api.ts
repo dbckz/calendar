@@ -517,6 +517,23 @@ export const api = {
     });
   },
 
+  // Mark a finished run as reviewed (persists reviewedAt), so it leaves the
+  // "For review" inbox and stays out across reloads.
+  async markDelegationReviewed(
+    asanaTaskGid: string,
+    integrationId: string
+  ): Promise<{ entry: DelegationQueueEntry }> {
+    return fetchWithRetry<{ entry: DelegationQueueEntry }>('/api/orchestrator/queue', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        asanaTaskGid,
+        integrationId,
+        reviewedAt: new Date().toISOString(),
+      }),
+    });
+  },
+
   async deleteDelegationEntry(asanaTaskGid: string): Promise<{ success: boolean }> {
     return fetchWithRetry<{ success: boolean }>(
       `/api/orchestrator/queue?asanaTaskGid=${encodeURIComponent(asanaTaskGid)}`,

@@ -63,6 +63,51 @@ describe('delegation queue storage', () => {
     expect(await claimNextDelegationEntry()).toBeNull();
   });
 
+  it('persists reviewedAt and reads it back', async () => {
+    await upsertDelegationEntry('rev-1', 'int-1', { state: 'done' });
+    const reviewedAt = '2026-07-23T10:00:00.000Z';
+    await upsertDelegationEntry('rev-1', 'int-1', { reviewedAt });
+
+    const entry = await getDelegationEntry('rev-1');
+    expect(entry?.reviewedAt).toBe(reviewedAt);
+    expect(entry?.state).toBe('done'); // unchanged by the review write
+  });
+
+  it('clears reviewedAt when an entry is re-queued', async () => {
+    await upsertDelegationEntry('rev-2', 'int-1', {
+      state: 'done',
+      reviewedAt: '2026-07-23T10:00:00.000Z',
+    });
+    // "Continue with AI" / re-delegate sends the entry back to queued.
+    await upsertDelegationEntry('rev-2', 'int-1', { state: 'queued' });
+
+    const entry = await getDelegationEntry('rev-2');
+    expect(entry?.state).toBe('queued');
+    expect(entry?.reviewedAt).toBeUndefined();
+  });
+
+  it('preserves a prior result when re-queued (Continue with AI)', async () => {
+    await upsertDelegationEntry('rev-3', 'int-1', {
+      state: 'done',
+      result: {
+        status: 'successful',
+        summary: 'first run',
+        outputs: [],
+        next: '',
+        reportMarkdown: '',
+        sessionId: null,
+        traceFile: null,
+        finishedAt: '2026-07-23T09:00:00.000Z',
+      },
+    });
+    await upsertDelegationEntry('rev-3', 'int-1', { state: 'queued', brief: 'follow-up' });
+
+    const entry = await getDelegationEntry('rev-3');
+    expect(entry?.state).toBe('queued');
+    expect(entry?.brief).toBe('follow-up');
+    expect(entry?.result?.summary).toBe('first run'); // last result stays accessible
+  });
+
   it('deletes an entry by GID', async () => {
     await upsertDelegationEntry('gid-3', 'int-1', {});
     expect(await deleteDelegationEntry('gid-3')).toBe(true);

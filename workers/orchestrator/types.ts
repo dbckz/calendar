@@ -75,6 +75,7 @@ export interface DelegationQueueEntry {
   enqueuedAt: string;
   startedAt?: string;
   result?: DelegationRunResult;
+  reviewedAt?: string; // set when the user has triaged this finished run
   updatedAt: string;
 }
 

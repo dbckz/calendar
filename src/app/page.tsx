@@ -21,7 +21,7 @@ import { useDelegationQueue } from '@/hooks/useDelegationQueue';
 import { useDashboard } from '@/hooks/useDashboard';
 import { useToast } from '@/hooks/useToast';
 import { useGoogleEventModal } from '@/hooks/useGoogleEventModal';
-import { CalendarEvent, DragItem, TaskType, SettingsResponse, AsanaFilterState } from '@/types';
+import { CalendarEvent, DelegationQueueEntry, DragItem, TaskType, SettingsResponse, AsanaFilterState } from '@/types';
 import { api } from '@/lib/api';
 import { asanaTaskUrl, asanaTaskGidsFromText } from '@/lib/asana-url';
 import { stripLeadingEmoji } from '@/lib/scheduling/calendar-review';
@@ -985,6 +985,46 @@ export default function Home() {
     refetchCapacity();
   }, [refreshDelegation, refetchCapacity]);
 
+  // "For review" inbox triage (DelegationWidget). Each action persists
+  // reviewedAt server-side so the entry leaves the inbox across reloads, then
+  // refreshes the shared delegation store so the UI updates instantly.
+  const markReviewed = useCallback((entry: DelegationQueueEntry) => {
+    api.markDelegationReviewed(entry.asanaTaskGid, entry.integrationId)
+      .then(() => refreshDelegation())
+      .catch(err => {
+        toast.error('Failed to clear from review');
+        console.error('Error marking delegation reviewed:', err);
+      });
+  }, [refreshDelegation, toast]);
+
+  const handleReviewDone = useCallback((entry: DelegationQueueEntry) => {
+    // Complete the underlying Asana task via the existing complete flow.
+    handleSidebarAsanaComplete(entry.asanaTaskGid, entry.integrationId, true);
+    markReviewed(entry);
+  }, [handleSidebarAsanaComplete, markReviewed]);
+
+  const handleReviewNeedsHuman = useCallback((entry: DelegationQueueEntry) => {
+    // Drop the AI-delegable flag (task stays open in the backlog), then mark reviewed.
+    saveMetadata(entry.asanaTaskGid, entry.integrationId, { aiDelegable: false })
+      .catch(err => console.error('Error clearing aiDelegable:', err));
+    markReviewed(entry);
+    toast.success('Marked for a human');
+  }, [saveMetadata, markReviewed, toast]);
+
+  const handleReviewContinue = useCallback((entry: DelegationQueueEntry) => {
+    // Reopen the compose-brief modal prefilled from this entry (its brief seeds
+    // the textarea). Submitting re-queues (or runs now), which clears reviewedAt
+    // in storage so a fresh run re-enters the inbox; the prior result is kept.
+    setDelegateTask({
+      id: entry.asanaTaskGid,
+      title: entry.title,
+      integrationId: entry.integrationId,
+      source: 'asana',
+      startTime: new Date(),
+      endTime: new Date(),
+    });
+  }, []);
+
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
       <Header
@@ -1018,6 +1058,9 @@ export default function Home() {
             typeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
             onOpenTask={handleOpenTaskInPlace}
             onDelegateTask={setDelegateTask}
+            onReviewDone={handleReviewDone}
+            onReviewNeedsHuman={handleReviewNeedsHuman}
+            onReviewContinue={handleReviewContinue}
             onReloadMetadata={reloadMetadata}
             onDeleteTask={handleSidebarAsanaDelete}
             onPlanApplied={fetchAllEvents}

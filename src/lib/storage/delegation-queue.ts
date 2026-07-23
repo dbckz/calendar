@@ -46,6 +46,13 @@ export async function upsertDelegationEntry(
     updatedAt: now,
   };
 
+  // Re-queueing a task (e.g. "Continue with AI", a fresh delegation, or a
+  // usage-limit backoff) clears any prior triage, so the next finished run
+  // re-enters the "For review" inbox instead of staying hidden as reviewed.
+  if (updates.state === 'queued') {
+    delete merged.reviewedAt;
+  }
+
   data.delegationQueue[asanaTaskGid] = merged;
   await saveUserData(data);
   return merged;

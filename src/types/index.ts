@@ -155,6 +155,11 @@ export interface DelegationQueueEntry {
   enqueuedAt: string;
   startedAt?: string;
   result?: DelegationRunResult;
+  // Set when the user has triaged a finished run in the "For review" inbox
+  // (Done / Needs human / Continue with AI). Persisted so a reviewed entry
+  // stays out of the inbox across reloads. Cleared automatically when the
+  // entry is re-queued so a fresh run re-enters the inbox.
+  reviewedAt?: string;
   updatedAt: string;
 }
 

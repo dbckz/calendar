@@ -43,6 +43,10 @@ interface DashboardContentProps {
   typeFieldInfoByIntegration?: Map<string, AsanaTypeFieldInfo>;
   onOpenTask?: (taskId: string, navIds?: string[]) => void;
   onDelegateTask?: (task: CalendarEvent) => void; // open the compose-brief modal directly
+  // Triage actions for the DelegationWidget's "For review" inbox.
+  onReviewDone?: (entry: DelegationQueueEntry) => void;
+  onReviewNeedsHuman?: (entry: DelegationQueueEntry) => void;
+  onReviewContinue?: (entry: DelegationQueueEntry) => void;
   onReloadMetadata?: () => Promise<void> | void; // refresh aiDelegable flags after re-assessment
   onDeleteTask?: (taskId: string, integrationId: string) => void; // optimistic delete (stale triage)
   onPlanApplied?: () => void; // refresh calendar/asana data after applying a plan
@@ -70,6 +74,9 @@ export function DashboardContent({
   typeFieldInfoByIntegration,
   onOpenTask,
   onDelegateTask,
+  onReviewDone,
+  onReviewNeedsHuman,
+  onReviewContinue,
   onReloadMetadata,
   onDeleteTask,
   onPlanApplied,
@@ -200,7 +207,13 @@ export function DashboardContent({
             />
           </div>
           <div className="flex-1 min-h-0 min-w-0">
-            <DelegationWidget delegationByGid={delegationByGid} onTaskClick={onOpenTask} />
+            <DelegationWidget
+              delegationByGid={delegationByGid}
+              onTaskClick={onOpenTask}
+              onReviewDone={onReviewDone}
+              onReviewNeedsHuman={onReviewNeedsHuman}
+              onReviewContinue={onReviewContinue}
+            />
           </div>
         </div>
       </div>
