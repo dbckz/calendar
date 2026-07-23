@@ -233,6 +233,80 @@ describe('Asana API Functions', () => {
     });
   });
 
+  describe('getMyTasks', () => {
+    // /users/me and user_task_list are fetched first; helper mocks them so each
+    // test only has to describe the paginated tasks responses that follow.
+    const mockPreamble = () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: { gid: 'user-gid' } }),
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: { gid: 'task-list-gid' } }),
+      });
+    };
+
+    it('follows next_page.offset until exhausted, accumulating tasks', async () => {
+      const { getMyTasks } = await import('@/lib/asana');
+
+      mockPreamble();
+      // Page 1 -> has next_page; page 2 -> has next_page; page 3 -> null.
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          data: [{ gid: 't1', name: 'Task 1' }],
+          next_page: { offset: 'off-2', path: '/p', uri: 'https://x/p' },
+        }),
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          data: [{ gid: 't2', name: 'Task 2' }],
+          next_page: { offset: 'off-3', path: '/p', uri: 'https://x/p' },
+        }),
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          data: [{ gid: 't3', name: 'Task 3' }],
+          next_page: null,
+        }),
+      });
+
+      const tasks = await getMyTasks('access-token', 'workspace-1');
+
+      expect(tasks.map(t => t.gid)).toEqual(['t1', 't2', 't3']);
+      // 2 preamble + 3 task pages
+      expect(mockFetch).toHaveBeenCalledTimes(5);
+
+      // First task page requests an explicit limit; subsequent pages carry offset.
+      const firstPageUrl = mockFetch.mock.calls[2][0] as string;
+      expect(firstPageUrl).toContain('limit=100');
+      expect(firstPageUrl).not.toContain('offset=');
+      expect(mockFetch.mock.calls[3][0]).toContain('offset=off-2');
+      expect(mockFetch.mock.calls[4][0]).toContain('offset=off-3');
+    });
+
+    it('stops after a single page when next_page is null', async () => {
+      const { getMyTasks } = await import('@/lib/asana');
+
+      mockPreamble();
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          data: [{ gid: 't1', name: 'Task 1' }],
+          next_page: null,
+        }),
+      });
+
+      const tasks = await getMyTasks('access-token', 'workspace-1');
+
+      expect(tasks.map(t => t.gid)).toEqual(['t1']);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+  });
+
   describe('completeTask', () => {
     it('updates task completion status', async () => {
       const { completeTask } = await import('@/lib/asana');

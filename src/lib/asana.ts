@@ -190,23 +190,35 @@ export async function getMyTasks(
   const completedSinceParam = completedSince
     ? `&completed_since=${encodeURIComponent(completedSince)}`
     : '';
-  const tasksResponse = await fetch(
-    `${ASANA_API_BASE}/user_task_lists/${taskListData.data.gid}/tasks?opt_fields=${TASK_OPT_FIELDS_WITH_PARENT}${completedSinceParam}`,
-    {
+
+  // Paginate: Asana caps a single page (and `completed_since` inflates the list
+  // with completed tasks), so follow `next_page.offset` until exhausted. Without
+  // this a large My Tasks list silently truncates, dropping tasks from the
+  // capacity/gather type maps and unclassifying their blocks.
+  const baseUrl = `${ASANA_API_BASE}/user_task_lists/${taskListData.data.gid}/tasks?opt_fields=${TASK_OPT_FIELDS_WITH_PARENT}&limit=100${completedSinceParam}`;
+  const allTasks: Record<string, unknown>[] = [];
+  let offset: string | undefined;
+
+  do {
+    const pageUrl = offset ? `${baseUrl}&offset=${encodeURIComponent(offset)}` : baseUrl;
+    const tasksResponse = await fetch(pageUrl, {
       headers: {
         'Authorization': `Bearer ${accessToken}`,
       },
+    });
+
+    if (!tasksResponse.ok) {
+      const errorBody = await tasksResponse.text();
+      console.error('Asana tasks error:', tasksResponse.status, errorBody);
+      throw new Error(`Failed to fetch tasks: ${tasksResponse.status} - ${errorBody.substring(0, 200)}`);
     }
-  );
 
-  if (!tasksResponse.ok) {
-    const errorBody = await tasksResponse.text();
-    console.error('Asana tasks error:', tasksResponse.status, errorBody);
-    throw new Error(`Failed to fetch tasks: ${tasksResponse.status} - ${errorBody.substring(0, 200)}`);
-  }
+    const tasksData = await tasksResponse.json();
+    allTasks.push(...tasksData.data);
+    offset = tasksData.next_page?.offset ?? undefined;
+  } while (offset);
 
-  const tasksData = await tasksResponse.json();
-  return tasksData.data.map(mapAsanaTaskResponse);
+  return allTasks.map(mapAsanaTaskResponse);
 }
 
 export async function getTaskByName(

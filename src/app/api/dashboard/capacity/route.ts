@@ -81,7 +81,8 @@ function adHocTypeSignals(taskType: string, customTypes: CustomTaskType[]): stri
 export async function GET() {
   try {
     const now = new Date();
-    const weekStart = format(startOfWeek(now, { weekStartsOn: 1 }), 'yyyy-MM-dd');
+    const weekStartDate = startOfWeek(now, { weekStartsOn: 1 });
+    const weekStart = format(weekStartDate, 'yyyy-MM-dd');
     const weekEnd = format(endOfWeek(now, { weekStartsOn: 1 }), 'yyyy-MM-dd');
     const today = format(now, 'yyyy-MM-dd');
 
@@ -90,7 +91,10 @@ export async function GET() {
       getScheduledAsanaTasks(),
       getAdHocTasks(),
       getCustomTaskTypes(),
-      buildAsanaTypeMap(`${weekStart}T00:00:00.000Z`),
+      // Use the local week-start instant, not the local date stamped as UTC: in
+      // BST `${weekStart}T00:00:00.000Z` would exclude tasks completed in the
+      // local 00:00–01:00 Monday window.
+      buildAsanaTypeMap(weekStartDate.toISOString()),
     ]);
 
     const quotas: CapacityQuota[] = Object.entries(config.taskQuotas).map(
