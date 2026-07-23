@@ -1,12 +1,15 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarEvent, DelegationQueueEntry, OrchestratorStatus } from '@/types';
+import { DelegationQueueEntry, OrchestratorStatus } from '@/types';
 import { api } from '@/lib/api';
 import { Bot, CheckCircle2, XCircle, Loader2, Clock, PauseCircle } from 'lucide-react';
 
 interface DelegationWidgetProps {
-  tasks: CalendarEvent[]; // kept for API compatibility; queue drives the view now
+  // The delegation queue is owned by the page-level useDelegationQueue store and
+  // passed in, so a delegate action (which refreshes that store) shows here at
+  // once instead of waiting for a separate widget-local poll.
+  delegationByGid: Record<string, DelegationQueueEntry>;
   onTaskClick?: (taskId: string) => void;
 }
 
@@ -41,19 +44,17 @@ function timeUntil(iso: string): string {
   return `${Math.round(mins / 60)}h`;
 }
 
-export function DelegationWidget({ onTaskClick }: DelegationWidgetProps) {
-  const [entries, setEntries] = useState<Record<string, DelegationQueueEntry>>({});
+export function DelegationWidget({ delegationByGid, onTaskClick }: DelegationWidgetProps) {
+  // The queue entries come from the page-level store (prop). Only the
+  // orchestrator status (pacer pause) is polled locally here — it's separate
+  // data the delegation store doesn't carry.
   const [status, setStatus] = useState<OrchestratorStatus | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      Promise.all([api.getDelegationQueue(), api.getOrchestratorStatus()])
-        .then(([queue, s]) => {
-          if (cancelled) return;
-          setEntries(queue.entries || {});
-          setStatus(s);
-        })
+      api.getOrchestratorStatus()
+        .then(s => { if (!cancelled) setStatus(s); })
         .catch(() => { /* keep last known state on transient errors */ });
     };
     load();
@@ -69,7 +70,7 @@ export function DelegationWidget({ onTaskClick }: DelegationWidgetProps) {
     };
   }, []);
 
-  const list = useMemo(() => Object.values(entries), [entries]);
+  const list = useMemo(() => Object.values(delegationByGid), [delegationByGid]);
   const running = useMemo(() => list.filter(e => e.state === 'running'), [list]);
   const queued = useMemo(
     () => list.filter(e => e.state === 'queued').sort((a, b) => a.enqueuedAt.localeCompare(b.enqueuedAt)),

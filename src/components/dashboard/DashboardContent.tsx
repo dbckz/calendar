@@ -3,10 +3,9 @@
 import { useCallback, useState } from 'react';
 import { CalendarClock, Bot, Loader2, Archive, RefreshCw, ClipboardCheck } from 'lucide-react';
 
-import { CalendarEvent, TaskMetadata } from '@/types';
+import { CalendarEvent, DelegationQueueEntry, TaskMetadata } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
-import { api } from '@/lib/api';
-import { useDashboard } from '@/hooks/useDashboard';
+import { api, DashboardCapacityResponse } from '@/lib/api';
 import { TodayColumn } from './TodayColumn';
 import { TopTasks } from './TopTasks';
 import { CapacityWidget } from './CapacityWidget';
@@ -27,6 +26,15 @@ interface DashboardContentProps {
   todayEvents: CalendarEvent[]; // today's timed events (reused from page.tsx)
   asanaTasks: CalendarEvent[]; // incomplete Asana tasks
   metadataByGid: Record<string, TaskMetadata>;
+  // Delegation queue from the page-level useDelegationQueue store, rendered by
+  // the DelegationWidget. Passed in (rather than fetched in the widget) so a
+  // delegate action refreshing that store updates the widget immediately.
+  delegationByGid: Record<string, DelegationQueueEntry>;
+  // Weekly-capacity data lifted to page.tsx so page-level mutations (task
+  // complete/delete, delegation) can trigger a refetch to keep it current.
+  capacityData: DashboardCapacityResponse | null;
+  capacityLoading: boolean;
+  onRefetchCapacity: () => void;
   timeWorkedByIntegration: Record<string, number>;
   rolloverHour?: number; // logical-day rollover hour, for the Today column label
   asanaIntegrations: Integration[];
@@ -52,6 +60,10 @@ export function DashboardContent({
   todayEvents,
   asanaTasks,
   metadataByGid,
+  delegationByGid,
+  capacityData,
+  capacityLoading,
+  onRefetchCapacity,
   timeWorkedByIntegration,
   rolloverHour,
   asanaIntegrations,
@@ -65,7 +77,9 @@ export function DashboardContent({
   onStaleModalOpenChange,
   taskDialogOpen,
 }: DashboardContentProps) {
-  const { data, isLoading, refetch } = useDashboard();
+  const data = capacityData;
+  const isLoading = capacityLoading;
+  const refetch = onRefetchCapacity;
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [showReplanModal, setShowReplanModal] = useState(false);
   const [showDailyReviewModal, setShowDailyReviewModal] = useState(false);
@@ -186,7 +200,7 @@ export function DashboardContent({
             />
           </div>
           <div className="flex-1 min-h-0 min-w-0">
-            <DelegationWidget tasks={asanaTasks} onTaskClick={onOpenTask} />
+            <DelegationWidget delegationByGid={delegationByGid} onTaskClick={onOpenTask} />
           </div>
         </div>
       </div>

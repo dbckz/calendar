@@ -18,6 +18,7 @@ import { useTasks } from '@/hooks/useTasks';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { useTaskMetadata } from '@/hooks/useTaskMetadata';
 import { useDelegationQueue } from '@/hooks/useDelegationQueue';
+import { useDashboard } from '@/hooks/useDashboard';
 import { useToast } from '@/hooks/useToast';
 import { useGoogleEventModal } from '@/hooks/useGoogleEventModal';
 import { CalendarEvent, DragItem, TaskType, SettingsResponse, AsanaFilterState } from '@/types';
@@ -118,6 +119,9 @@ export default function Home() {
   const toast = useToast();
   const { metadataByGid, saveMetadata, reload: reloadMetadata } = useTaskMetadata();
   const { delegationByGid, refresh: refreshDelegation } = useDelegationQueue();
+  // Weekly-capacity store lifted here (from DashboardContent) so mutations that
+  // affect counts — task complete/delete, delegation — can refetch it.
+  const { data: capacityData, isLoading: capacityLoading, refetch: refetchCapacity } = useDashboard();
   const { addTask, updateTask, removeTask, getTasksForDate } = useTasks();
   const {
     googleEvents,
@@ -446,11 +450,13 @@ export default function Home() {
 
   const handleSidebarAsanaComplete = useCallback((taskId: string, integrationId: string, completed: boolean) => {
     toast.success(completed ? 'Task marked complete' : 'Task reopened');
-    completeAsanaTask(taskId, integrationId, completed).catch(err => {
-      toast.error('Failed to update task in Asana');
-      console.error('Error completing Asana task:', err);
-    });
-  }, [completeAsanaTask, toast]);
+    completeAsanaTask(taskId, integrationId, completed)
+      .then(() => refetchCapacity()) // keep the capacity widget's counts current
+      .catch(err => {
+        toast.error('Failed to update task in Asana');
+        console.error('Error completing Asana task:', err);
+      });
+  }, [completeAsanaTask, toast, refetchCapacity]);
 
   const handleSidebarAsanaComment = useCallback(async (taskId: string, integrationId: string, comment: string) => {
     try {
@@ -465,11 +471,13 @@ export default function Home() {
   const handleSidebarAsanaDelete = useCallback((taskId: string, integrationId: string) => {
     unscheduleAllAsanaInstances(taskId);
     toast.success('Task deleted from Asana');
-    deleteAsanaTask(taskId, integrationId).catch(err => {
-      toast.error('Failed to delete task from Asana');
-      console.error('Error deleting Asana task:', err);
-    });
-  }, [deleteAsanaTask, unscheduleAllAsanaInstances, toast]);
+    deleteAsanaTask(taskId, integrationId)
+      .then(() => refetchCapacity()) // keep the capacity widget's counts current
+      .catch(err => {
+        toast.error('Failed to delete task from Asana');
+        console.error('Error deleting Asana task:', err);
+      });
+  }, [deleteAsanaTask, unscheduleAllAsanaInstances, toast, refetchCapacity]);
 
   const handleSidebarAsanaUpdate = useCallback((
     taskId: string,
@@ -970,6 +978,13 @@ export default function Home() {
   // One-click delegate from the AI-runnable section (compose-brief modal).
   const [delegateTask, setDelegateTask] = useState<CalendarEvent | null>(null);
 
+  // After a delegate action: refresh the queue store (so the DelegationWidget
+  // updates at once) and the capacity widget's counts.
+  const handleDelegated = useCallback(() => {
+    refreshDelegation();
+    refetchCapacity();
+  }, [refreshDelegation, refetchCapacity]);
+
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
       <Header
@@ -994,6 +1009,10 @@ export default function Home() {
             rolloverHour={rolloverHour}
             asanaTasks={allAsanaTasks}
             metadataByGid={metadataByGid}
+            delegationByGid={delegationByGid}
+            capacityData={capacityData}
+            capacityLoading={capacityLoading}
+            onRefetchCapacity={refetchCapacity}
             timeWorkedByIntegration={timeWorkedByIntegration}
             asanaIntegrations={asanaIntegrations}
             typeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
@@ -1013,7 +1032,7 @@ export default function Home() {
               taskTitle={delegateTask.title}
               initialBrief={delegationByGid[delegateTask.id]?.brief || ''}
               onClose={() => setDelegateTask(null)}
-              onDelegated={refreshDelegation}
+              onDelegated={handleDelegated}
             />
           )}
           {/* Open a task over the Command Center without switching to calendar */}
@@ -1036,7 +1055,7 @@ export default function Home() {
               metadata={metadataByGid[dashboardDialogTask.id]}
               onSaveMetadata={saveMetadata}
               delegationEntry={delegationByGid[dashboardDialogTask.id]}
-              onDelegated={refreshDelegation}
+              onDelegated={handleDelegated}
             />
           )}
         </div>
@@ -1075,7 +1094,7 @@ export default function Home() {
           onUpdateTask={handleSidebarAsanaUpdate}
           onDeleteTask={handleSidebarAsanaDelete}
           onSaveTaskMetadata={saveMetadata}
-          onDelegated={refreshDelegation}
+          onDelegated={handleDelegated}
           highlightedAsanaTaskId={highlightedAsanaTaskId}
           onClearHighlight={handleClearHighlight}
           openTaskDialogId={openTaskDialogId}

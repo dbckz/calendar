@@ -36,9 +36,14 @@ export function useDelegationQueue(): UseDelegationQueueReturn {
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') refresh();
     }, POLL_MS);
+    // Refresh on tab focus so the queue is current when the user returns,
+    // rather than waiting up to POLL_MS for the next tick.
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh(); };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       isMountedRef.current = false;
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [refresh]);
 
