@@ -43,10 +43,9 @@ interface DashboardContentProps {
   typeFieldInfoByIntegration?: Map<string, AsanaTypeFieldInfo>;
   onOpenTask?: (taskId: string, navIds?: string[]) => void;
   onDelegateTask?: (task: CalendarEvent) => void; // open the compose-brief modal directly
-  // Triage actions for the DelegationWidget's "For review" inbox.
-  onReviewDone?: (entry: DelegationQueueEntry) => void;
-  onReviewNeedsHuman?: (entry: DelegationQueueEntry) => void;
-  onReviewContinue?: (entry: DelegationQueueEntry) => void;
+  // GIDs of tasks already completed in Asana — their finished runs are hidden
+  // from the For-review inbox (completed elsewhere, nothing left to triage).
+  completedTaskGids?: Set<string>;
   onReloadMetadata?: () => Promise<void> | void; // refresh aiDelegable flags after re-assessment
   onDeleteTask?: (taskId: string, integrationId: string) => void; // optimistic delete (stale triage)
   onPlanApplied?: () => void; // refresh calendar/asana data after applying a plan
@@ -74,9 +73,7 @@ export function DashboardContent({
   typeFieldInfoByIntegration,
   onOpenTask,
   onDelegateTask,
-  onReviewDone,
-  onReviewNeedsHuman,
-  onReviewContinue,
+  completedTaskGids,
   onReloadMetadata,
   onDeleteTask,
   onPlanApplied,
@@ -210,9 +207,7 @@ export function DashboardContent({
             <DelegationWidget
               delegationByGid={delegationByGid}
               onTaskClick={onOpenTask}
-              onReviewDone={onReviewDone}
-              onReviewNeedsHuman={onReviewNeedsHuman}
-              onReviewContinue={onReviewContinue}
+              completedTaskGids={completedTaskGids}
             />
           </div>
         </div>

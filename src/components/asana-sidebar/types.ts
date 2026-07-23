@@ -86,6 +86,10 @@ export interface TaskDetailDialogProps {
   ) => Promise<void>;
   delegationEntry?: DelegationQueueEntry;
   onDelegated?: () => void;
+  // "Move to backlog" (needs a human) for a finished delegation run: clears the
+  // task's aiDelegable flag and marks the entry reviewed. Shown only when the
+  // delegation entry is finished (done/failed) and not yet reviewed.
+  onMoveToBacklog?: (entry: DelegationQueueEntry) => void;
   // Step to the previous/next task in the originating list (Command Center
   // panels). Each is provided only when such a neighbour exists, so the
   // corresponding chevron renders only at a non-end position.

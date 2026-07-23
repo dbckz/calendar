@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { AsanaStory } from '@/types';
-import { X, ExternalLink, Send, Check, ArrowLeft, Clock, Folder, Tag, PlayCircle, Trash2, MessageSquare, Loader2, Layers, Bot, ChevronLeft, ChevronRight } from 'lucide-react';
+import { X, ExternalLink, Send, Check, ArrowLeft, Clock, Folder, Tag, PlayCircle, Trash2, MessageSquare, Loader2, Layers, Bot, ChevronLeft, ChevronRight, UserRound } from 'lucide-react';
 import { format, parseISO, isToday, isPast } from 'date-fns';
 import { getAsanaTaskUrl } from '@/lib/asana';
 import { api } from '@/lib/api';
@@ -36,6 +36,7 @@ export function TaskDetailDialog({
   onSaveMetadata,
   delegationEntry,
   onDelegated,
+  onMoveToBacklog,
   onPrevTask,
   onNextTask,
 }: TaskDetailDialogProps) {
@@ -163,6 +164,20 @@ export function TaskDetailDialog({
     if (isCompleting) {
       onClose();
     }
+  };
+
+  // "Move to backlog" (needs a human) for a finished delegation run. Clears
+  // aiDelegable + settles the review state via the parent, then closes so the
+  // user sees it took effect.
+  const isReviewable =
+    !!delegationEntry &&
+    (delegationEntry.state === 'done' || delegationEntry.state === 'failed') &&
+    !delegationEntry.reviewedAt;
+
+  const handleMoveToBacklog = () => {
+    if (!delegationEntry || !onMoveToBacklog) return;
+    onMoveToBacklog(delegationEntry);
+    onClose();
   };
 
   const handleDeleteTask = () => {
@@ -588,6 +603,19 @@ export function TaskDetailDialog({
             >
               <Check className="w-4 h-4" />
               {task.completed ? 'Reopen Task' : 'Mark Complete'}
+            </button>
+          )}
+
+          {/* Move to backlog (needs a human) — only for a finished, un-reviewed
+              delegation run. Keeps the task open but stops suggesting it for AI. */}
+          {isReviewable && onMoveToBacklog && (
+            <button
+              onClick={handleMoveToBacklog}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium border border-amber-300 text-amber-700 hover:bg-amber-50 transition-colors"
+              title="Needs a human — keep the task open, stop suggesting it for AI, and clear it from the For-review inbox"
+            >
+              <UserRound className="w-4 h-4" />
+              Move to backlog
             </button>
           )}
 

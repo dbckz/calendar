@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { format } from 'date-fns';
 import { Calendar, Repeat, LayoutDashboard, Bell } from 'lucide-react';
 import { Header } from '@/components/Header';
@@ -985,9 +985,9 @@ export default function Home() {
     refetchCapacity();
   }, [refreshDelegation, refetchCapacity]);
 
-  // "For review" inbox triage (DelegationWidget). Each action persists
-  // reviewedAt server-side so the entry leaves the inbox across reloads, then
-  // refreshes the shared delegation store so the UI updates instantly.
+  // "For review" inbox triage happens in the task dialog. Triage settles the
+  // delegation entry's reviewedAt server-side (so it leaves the inbox across
+  // reloads), then refreshes the shared store so the UI updates instantly.
   const markReviewed = useCallback((entry: DelegationQueueEntry) => {
     api.markDelegationReviewed(entry.asanaTaskGid, entry.integrationId)
       .then(() => refreshDelegation())
@@ -997,33 +997,42 @@ export default function Home() {
       });
   }, [refreshDelegation, toast]);
 
-  const handleReviewDone = useCallback((entry: DelegationQueueEntry) => {
-    // Complete the underlying Asana task via the existing complete flow.
-    handleSidebarAsanaComplete(entry.asanaTaskGid, entry.integrationId, true);
-    markReviewed(entry);
-  }, [handleSidebarAsanaComplete, markReviewed]);
-
-  const handleReviewNeedsHuman = useCallback((entry: DelegationQueueEntry) => {
-    // Drop the AI-delegable flag (task stays open in the backlog), then mark reviewed.
+  // "Move to backlog" (needs a human): drop the AI-delegable flag so the task
+  // leaves the AI-runnable panel but stays in the normal backlog (NOT completed),
+  // then mark the delegation entry reviewed so it leaves the For-review inbox.
+  const handleMoveToBacklog = useCallback((entry: DelegationQueueEntry) => {
     saveMetadata(entry.asanaTaskGid, entry.integrationId, { aiDelegable: false })
       .catch(err => console.error('Error clearing aiDelegable:', err));
     markReviewed(entry);
-    toast.success('Marked for a human');
+    toast.success('Moved to backlog for a human');
   }, [saveMetadata, markReviewed, toast]);
 
-  const handleReviewContinue = useCallback((entry: DelegationQueueEntry) => {
-    // Reopen the compose-brief modal prefilled from this entry (its brief seeds
-    // the textarea). Submitting re-queues (or runs now), which clears reviewedAt
-    // in storage so a fresh run re-enters the inbox; the prior result is kept.
-    setDelegateTask({
-      id: entry.asanaTaskGid,
-      title: entry.title,
-      integrationId: entry.integrationId,
-      source: 'asana',
-      startTime: new Date(),
-      endTime: new Date(),
-    });
-  }, []);
+  // GIDs of Asana tasks the store currently shows as completed. A task merely
+  // absent from the store is NOT treated as completed — an integration fetch
+  // may have failed or the task may belong to another workspace.
+  const completedAsanaGids = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of allAsanaTasks) {
+      if (t.completed) set.add(t.id);
+    }
+    return set;
+  }, [allAsanaTasks]);
+
+  // A task completed directly in Asana (outside the app) shouldn't linger in the
+  // For-review inbox. Auto-mark such finished, unreviewed entries reviewed so
+  // they settle server-side too. Guarded by a ref so each gid is attempted at
+  // most once per session (server-side reviewedAt then stops it after refresh).
+  const autoReviewedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const entry of Object.values(delegationByGid)) {
+      const finished = entry.state === 'done' || entry.state === 'failed';
+      if (!finished || entry.reviewedAt) continue;
+      if (!completedAsanaGids.has(entry.asanaTaskGid)) continue;
+      if (autoReviewedRef.current.has(entry.asanaTaskGid)) continue;
+      autoReviewedRef.current.add(entry.asanaTaskGid);
+      markReviewed(entry);
+    }
+  }, [delegationByGid, completedAsanaGids, markReviewed]);
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
@@ -1058,9 +1067,7 @@ export default function Home() {
             typeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
             onOpenTask={handleOpenTaskInPlace}
             onDelegateTask={setDelegateTask}
-            onReviewDone={handleReviewDone}
-            onReviewNeedsHuman={handleReviewNeedsHuman}
-            onReviewContinue={handleReviewContinue}
+            completedTaskGids={completedAsanaGids}
             onReloadMetadata={reloadMetadata}
             onDeleteTask={handleSidebarAsanaDelete}
             onPlanApplied={fetchAllEvents}
@@ -1099,6 +1106,7 @@ export default function Home() {
               onSaveMetadata={saveMetadata}
               delegationEntry={delegationByGid[dashboardDialogTask.id]}
               onDelegated={handleDelegated}
+              onMoveToBacklog={handleMoveToBacklog}
             />
           )}
         </div>

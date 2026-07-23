@@ -3,20 +3,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DelegationQueueEntry, OrchestratorStatus } from '@/types';
 import { api } from '@/lib/api';
-import { Bot, CheckCircle2, XCircle, Loader2, Clock, PauseCircle, Check, UserRound, Zap } from 'lucide-react';
+import { Bot, CheckCircle2, XCircle, Loader2, Clock, PauseCircle } from 'lucide-react';
 
 interface DelegationWidgetProps {
   // The delegation queue is owned by the page-level useDelegationQueue store and
   // passed in, so a delegate action (which refreshes that store) shows here at
   // once instead of waiting for a separate widget-local poll.
   delegationByGid: Record<string, DelegationQueueEntry>;
+  // Clicking a "For review" row opens the task dialog, where triage happens
+  // (complete / delegate again / move to backlog).
   onTaskClick?: (taskId: string) => void;
-  // Triage actions for a finished (done/failed) run in the "For review" inbox.
-  // Each marks the entry reviewed (server-side) so it leaves the list, and
-  // refreshes the shared store. Wired from page.tsx.
-  onReviewDone?: (entry: DelegationQueueEntry) => void;        // complete the Asana task
-  onReviewNeedsHuman?: (entry: DelegationQueueEntry) => void;  // clear aiDelegable, keep task open
-  onReviewContinue?: (entry: DelegationQueueEntry) => void;    // open the compose-brief modal
+  // GIDs of tasks already completed in Asana — their finished runs are hidden
+  // from the inbox (nothing left to triage; auto-marked reviewed elsewhere).
+  completedTaskGids?: Set<string>;
 }
 
 const REFRESH_MS = 30_000;
@@ -53,9 +52,7 @@ function timeUntil(iso: string): string {
 export function DelegationWidget({
   delegationByGid,
   onTaskClick,
-  onReviewDone,
-  onReviewNeedsHuman,
-  onReviewContinue,
+  completedTaskGids,
 }: DelegationWidgetProps) {
   // The queue entries come from the page-level store (prop). Only the
   // orchestrator status (pacer pause) is polled locally here — it's separate
@@ -90,11 +87,13 @@ export function DelegationWidget({
   );
   // Finished runs the user hasn't triaged yet form the "For review" inbox.
   // Old finished entries predating reviewedAt (no reviewedAt) still show up.
+  // Entries whose task is already completed in Asana are excluded — completed
+  // elsewhere, nothing left to triage (they're auto-marked reviewed too).
   const forReview = useMemo(
     () => list
-      .filter(e => (e.state === 'done' || e.state === 'failed') && !e.reviewedAt)
+      .filter(e => (e.state === 'done' || e.state === 'failed') && !e.reviewedAt && !completedTaskGids?.has(e.asanaTaskGid))
       .sort((a, b) => (b.result?.finishedAt || b.updatedAt).localeCompare(a.result?.finishedAt || a.updatedAt)),
-    [list]
+    [list, completedTaskGids]
   );
 
   const pausedUntil = isFuture(status?.pausedUntil) ? status!.pausedUntil! : null;
@@ -178,49 +177,22 @@ export function DelegationWidget({
                   return (
                     <li
                       key={e.asanaTaskGid}
-                      className="px-2 py-1.5 rounded bg-gray-50/60 border border-gray-100"
+                      onClick={() => onTaskClick?.(e.asanaTaskGid)}
+                      className={`flex items-start gap-1.5 px-2 py-1.5 rounded bg-gray-50/60 border border-gray-100 ${onTaskClick ? 'cursor-pointer hover:bg-gray-100/60' : ''}`}
                     >
-                      <div
-                        onClick={() => onTaskClick?.(e.asanaTaskGid)}
-                        className={`flex items-start gap-1.5 ${onTaskClick ? 'cursor-pointer' : ''}`}
-                      >
-                        {ok ? (
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 mt-0.5 flex-shrink-0" />
-                        ) : (
-                          <XCircle className="w-3.5 h-3.5 text-red-500 mt-0.5 flex-shrink-0" />
-                        )}
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-sm text-gray-700 truncate">{e.title || 'Task'}</span>
-                            <span className="text-xs text-gray-400 flex-shrink-0">{relativeTime(e.result?.finishedAt || e.updatedAt)}</span>
-                          </div>
-                          {e.result?.summary && (
-                            <p className="text-xs text-gray-500 line-clamp-2">{e.result.summary}</p>
-                          )}
+                      {ok ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 mt-0.5 flex-shrink-0" />
+                      ) : (
+                        <XCircle className="w-3.5 h-3.5 text-red-500 mt-0.5 flex-shrink-0" />
+                      )}
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm text-gray-700 truncate">{e.title || 'Task'}</span>
+                          <span className="text-xs text-gray-400 flex-shrink-0">{relativeTime(e.result?.finishedAt || e.updatedAt)}</span>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-1 mt-1.5 pl-5">
-                        <button
-                          onClick={(ev) => { ev.stopPropagation(); onReviewDone?.(e); }}
-                          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors"
-                          title="Mark the Asana task complete and clear from review"
-                        >
-                          <Check className="w-3 h-3" /> Done
-                        </button>
-                        <button
-                          onClick={(ev) => { ev.stopPropagation(); onReviewNeedsHuman?.(e); }}
-                          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded border border-amber-200 text-amber-700 hover:bg-amber-50 transition-colors"
-                          title="Needs a human — keep the task open and stop suggesting it for AI"
-                        >
-                          <UserRound className="w-3 h-3" /> Needs human
-                        </button>
-                        <button
-                          onClick={(ev) => { ev.stopPropagation(); onReviewContinue?.(e); }}
-                          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded border border-indigo-200 text-indigo-700 hover:bg-indigo-50 transition-colors"
-                          title="Continue with AI — send a follow-up brief"
-                        >
-                          <Zap className="w-3 h-3" /> Continue with AI
-                        </button>
+                        {e.result?.summary && (
+                          <p className="text-xs text-gray-500 line-clamp-2">{e.result.summary}</p>
+                        )}
                       </div>
                     </li>
                   );
