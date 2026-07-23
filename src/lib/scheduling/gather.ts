@@ -30,9 +30,9 @@ import { DEFAULT_ROLLOVER_HOUR, logicalTodayDate } from '@/lib/date-utils';
 import { partitionDeferrals } from '@/lib/scheduling/deferrals';
 import { selectStaleRecords, type ReconcileRecord } from '@/lib/scheduling/reconcile';
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations, updateIntegration } from '@/lib/integration-storage';
-import { getIncompleteTasks, refreshAsanaToken } from '@/lib/asana';
+import { getMyTasks, refreshAsanaToken } from '@/lib/asana';
 import { ensureValidCredentials, getCalendarEvents } from '@/lib/google-calendar';
-import { classifyBlockCategory, dedupeByEventId, type CapacityQuota } from '@/lib/capacity';
+import { classifyBlockCategory, type CapacityQuota } from '@/lib/capacity';
 import { eventsToBusyIntervals } from '@/lib/scheduling/free-busy';
 import type { BusyInterval, CandidateTask } from '@/lib/scheduling/types';
 import {
@@ -89,10 +89,22 @@ export function adHocTypeSignals(taskType: string, customTypes: CustomTaskType[]
   return signals;
 }
 
-// Fetch incomplete Asana tasks across enabled integrations, tagged with their
-// integration id and "Type" custom-field value.
-async function fetchAsanaCandidates(): Promise<AsanaCandidate[]> {
-  const out: AsanaCandidate[] = [];
+// Fetch the user's Asana tasks across enabled integrations. Returns two things:
+//   * candidates — the INCOMPLETE tasks (tagged with integration id + "Type"
+//     custom-field value, sorted by due date), the pool the wizard schedules
+//     from. This must stay incomplete-only: downstream (e.g. replan) treats an
+//     absent gid as "completed in Asana".
+//   * typeByGid — a gid -> "Type" value map that ALSO covers tasks COMPLETED
+//     since `completedSince` (week start). The existing-block count needs a
+//     completed member's type: it otherwise drops out of the live fetch, and a
+//     grouped block whose classifying member is done would lose its category and
+//     go uncounted (mirrors buildAsanaTypeMap in the dashboard capacity route).
+async function fetchAsanaData(completedSince: string): Promise<{
+  candidates: AsanaCandidate[];
+  typeByGid: Map<string, string | null>;
+}> {
+  const candidates: AsanaCandidate[] = [];
+  const typeByGid = new Map<string, string | null>();
   try {
     const integrations = await getEnabledAsanaIntegrations();
     await Promise.all(
@@ -107,17 +119,32 @@ async function fetchAsanaCandidates(): Promise<AsanaCandidate[]> {
           );
           await updateIntegration(integration.id, { credentials });
         }
-        const tasks = await getIncompleteTasks(credentials.accessToken, integration.workspaceId);
+        const tasks = await getMyTasks(
+          credentials.accessToken,
+          integration.workspaceId,
+          completedSince
+        );
         for (const task of tasks) {
           const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
-          out.push({ task, integrationId: integration.id, typeValue: typeField?.displayValue ?? null });
+          const typeValue = typeField?.displayValue ?? null;
+          typeByGid.set(task.gid, typeValue);
+          if (!task.completed) {
+            candidates.push({ task, integrationId: integration.id, typeValue });
+          }
         }
       })
     );
   } catch (error) {
     console.error('[Scheduling] Failed to fetch Asana tasks:', error);
   }
-  return out;
+  // Match getIncompleteTasks' ordering: by due date ascending, undated last.
+  candidates.sort((a, b) => {
+    if (!a.task.dueOn && !b.task.dueOn) return 0;
+    if (!a.task.dueOn) return 1;
+    if (!b.task.dueOn) return -1;
+    return a.task.dueOn.localeCompare(b.task.dueOn);
+  });
+  return { candidates, typeByGid };
 }
 
 // Fetch all timed/all-day events across enabled Google calendars for the week.
@@ -294,18 +321,22 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   const weekStartStr = format(weekStart, 'yyyy-MM-dd');
   const weekEndStr = format(addDays(weekStart, 6), 'yyyy-MM-dd');
 
-  const [scheduledAsanaRaw, adHocTasksRaw, customTypes, metadata, asanaCandidates, fetched, prepBlocksRaw, ritualBlocksRaw, deferralsRaw] =
+  const [scheduledAsanaRaw, adHocTasksRaw, customTypes, metadata, asanaData, fetched, prepBlocksRaw, ritualBlocksRaw, deferralsRaw] =
     await Promise.all([
       getScheduledAsanaTasks(),
       getAdHocTasks(),
       getCustomTaskTypes(),
       getAllTaskMetadata(),
-      fetchAsanaCandidates(),
+      // Use the local week-start instant, not the local date stamped as UTC: in
+      // BST `${weekStartStr}T00:00:00.000Z` would exclude tasks completed in the
+      // local 00:00–01:00 Monday window.
+      fetchAsanaData(weekStart.toISOString()),
       fetchWeekEvents(weekStart),
       getPrepBlocks(),
       getRitualBlocks(),
       getTaskDeferrals(),
     ]);
+  const asanaCandidates = asanaData.candidates;
 
   // Task deferrals: tasks parked out of the candidate pool until their resume
   // date. Prune any whose date has arrived (lazy cleanup); the rest suppress
@@ -345,7 +376,9 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   }));
 
   // --- Existing scheduled blocks this week (counts + per-date + exclusions) ---
-  const asanaTypeByGid = new Map(asanaCandidates.map(c => [c.task.gid, c.typeValue]));
+  // Type lookup covers tasks completed this week too (see fetchAsanaData), so a
+  // grouped block whose classifying member is done still resolves its type.
+  const asanaTypeByGid = asanaData.typeByGid;
   const inWeek = (d?: string) => !!d && d >= weekStartStr && d <= weekEndStr;
 
   const existingScheduledCounts: Record<string, number> = {};
@@ -365,20 +398,23 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   for (const s of inWeekAsana) scheduledGids.add(s.asanaTaskId);
 
   const scheduledAdhocIds = new Set<string>();
-  const inWeekAdhoc = adHocTasks.filter(t => !t.completed && inWeek(t.dueDate));
-  for (const t of inWeekAdhoc) scheduledAdhocIds.add(t.id);
+  const inWeekAdhoc = adHocTasks.filter(t => inWeek(t.dueDate));
+  for (const t of inWeekAdhoc) if (!t.completed) scheduledAdhocIds.add(t.id);
 
   // Count existing BLOCKS this week. Grouped blocks (e.g. Engagement / Outreach,
   // Batch) all point at the SAME Google event, and record one entry per agenda
-  // task — Asana tasks AND ad-hoc tasks alike. The quota counts BLOCKS, so we
-  // combine both record types and dedupe by googleEventId across the COMBINED
-  // set: records sharing an event id collapse to one, records with no event id
-  // each count. Deduping per-type would inflate "existing" counts on a mid-week
-  // re-run (N ad-hoc tasks on one Batch block → N, or an event carrying both an
-  // Asana and an ad-hoc record → 2).
+  // task — Asana tasks AND ad-hoc tasks alike, and COMPLETED members too (a
+  // completed block still consumed its slot this week). The quota counts BLOCKS,
+  // so we group both record types by googleEventId across the COMBINED set and
+  // UNION their type signals before classifying: records with no event id are
+  // each their own block. Unioning (rather than keeping the first record's
+  // signals) matters because a completed member can carry an empty signal — if it
+  // sorted first, a plain first-wins dedupe left the whole grouped block
+  // unclassified and uncounted, letting the wizard over-schedule the category.
+  // This mirrors mergeBlocksByEventId in the dashboard capacity route.
   interface CountRecord {
     googleEventId?: string | null;
-    category: string | null;
+    typeSignals: string[];
     date: string;
   }
   const countRecords: CountRecord[] = [];
@@ -386,18 +422,35 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     const typeValue = asanaTypeByGid.get(s.asanaTaskId) ?? null;
     countRecords.push({
       googleEventId: s.googleEventId,
-      category: classifyBlockCategory(typeValue ? [typeValue] : [], quotas),
+      typeSignals: typeValue ? [typeValue] : [],
       date: s.scheduledDate,
     });
   }
   for (const t of inWeekAdhoc) {
     countRecords.push({
       googleEventId: t.googleEventId,
-      category: classifyBlockCategory(adHocTypeSignals(t.taskType, customTypes), quotas),
+      typeSignals: adHocTypeSignals(t.taskType, customTypes),
       date: t.dueDate!,
     });
   }
-  for (const r of dedupeByEventId(countRecords, r => r.googleEventId)) bump(r.category, r.date);
+
+  // Collapse records sharing a Google event id into one block, unioning signals;
+  // no-event records each stay their own block. Then classify and count once.
+  const grouped = new Map<string, CountRecord>();
+  const standalone: CountRecord[] = [];
+  for (const r of countRecords) {
+    if (!r.googleEventId) {
+      standalone.push(r);
+      continue;
+    }
+    const existing = grouped.get(r.googleEventId);
+    // Copy signals on first insert so pushing more doesn't mutate the source record.
+    if (existing) existing.typeSignals.push(...r.typeSignals);
+    else grouped.set(r.googleEventId, { ...r, typeSignals: [...r.typeSignals] });
+  }
+  for (const { typeSignals, date } of [...grouped.values(), ...standalone]) {
+    bump(classifyBlockCategory(typeSignals, quotas), date);
+  }
 
   // --- Candidate tasks (not yet scheduled this week) ---
   // Deferred tasks are held out of the pool; count them per category so the

@@ -8,7 +8,7 @@
 import { gatherWeekContext } from '@/lib/scheduling/gather';
 import { getScheduledAsanaTasks, getAdHocTasks, getCustomTaskTypes, getAllTaskMetadata, getPrepBlocks, getRitualBlocks, getTaskDeferrals, removeTaskDeferrals } from '@/lib/user-data-storage';
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations } from '@/lib/integration-storage';
-import { getIncompleteTasks } from '@/lib/asana';
+import { getMyTasks } from '@/lib/asana';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import type { AdHocTask, AsanaTask, ScheduledAsanaTask } from '@/types';
 
@@ -33,7 +33,7 @@ jest.mock('@/lib/integration-storage', () => ({
   getEnabledGoogleIntegrations: jest.fn(),
   updateIntegration: jest.fn(),
 }));
-jest.mock('@/lib/asana', () => ({ getIncompleteTasks: jest.fn(), refreshAsanaToken: jest.fn() }));
+jest.mock('@/lib/asana', () => ({ getMyTasks: jest.fn(), refreshAsanaToken: jest.fn() }));
 
 const asanaTask = (gid: string, name: string): AsanaTask => ({
   id: gid,
@@ -77,7 +77,7 @@ describe('gatherWeekContext - week-scoped rollover', () => {
         credentials: { accessToken: 'tok', expiresAt: Date.now() + 3_600_000 },
       },
     ]);
-    (getIncompleteTasks as jest.Mock).mockResolvedValue([
+    (getMyTasks as jest.Mock).mockResolvedValue([
       asanaTask('inweek', 'Outreach A'),
       asanaTask('rollover', 'Outreach B'),
     ]);
@@ -177,7 +177,7 @@ describe('gatherWeekContext - existing block counts dedupe across record types',
     // pointing at the SAME googleEventId. That is ONE block, not two.
     (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([scheduledOn('a1', 'evt-batch')]);
     (getAdHocTasks as jest.Mock).mockResolvedValue([adhoc('ad1', 'evt-batch')]);
-    (getIncompleteTasks as jest.Mock).mockResolvedValue([batchAsanaTask('a1')]);
+    (getMyTasks as jest.Mock).mockResolvedValue([batchAsanaTask('a1')]);
 
     const ctx = await gatherWeekContext();
     expect(ctx.existingScheduledCounts.Batch).toBe(1);
@@ -190,7 +190,7 @@ describe('gatherWeekContext - existing block counts dedupe across record types',
       adhoc('ad1', 'evt-batch'),
       adhoc('ad2', 'evt-batch'),
     ]);
-    (getIncompleteTasks as jest.Mock).mockResolvedValue([]);
+    (getMyTasks as jest.Mock).mockResolvedValue([]);
 
     const ctx = await gatherWeekContext();
     expect(ctx.existingScheduledCounts.Batch).toBe(1);
@@ -199,9 +199,55 @@ describe('gatherWeekContext - existing block counts dedupe across record types',
   it('still counts ad-hoc tasks with no event id as separate blocks', async () => {
     (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([]);
     (getAdHocTasks as jest.Mock).mockResolvedValue([adhoc('ad1'), adhoc('ad2')]);
-    (getIncompleteTasks as jest.Mock).mockResolvedValue([]);
+    (getMyTasks as jest.Mock).mockResolvedValue([]);
 
     const ctx = await gatherWeekContext();
     expect(ctx.existingScheduledCounts.Batch).toBe(2);
+  });
+
+  it('classifies a grouped Asana block whose only member task is completed', async () => {
+    // The scheduled member's Asana task has since been completed. Completed tasks
+    // drop out of the incomplete-only fetch, so the block used to lose its "Type"
+    // and go unclassified/uncounted. getMyTasks(completedSince) now returns the
+    // completed task, so its type still classifies the block.
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([scheduledOn('a1', 'evt-batch')]);
+    (getAdHocTasks as jest.Mock).mockResolvedValue([]);
+    (getMyTasks as jest.Mock).mockResolvedValue([
+      { ...batchAsanaTask('a1'), completed: true },
+    ]);
+
+    const ctx = await gatherWeekContext();
+    expect(ctx.existingScheduledCounts.Batch).toBe(1);
+  });
+
+  it('classifies a grouped block when the FIRST member is a completed, type-less record', async () => {
+    // Two Asana tasks share one event; the first (a1) is completed and — worst
+    // case — carries no resolvable type, the second (a2) is the live classifying
+    // member. Unioning signals across the group (not first-record-wins) keeps the
+    // block classified and counted once.
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([
+      scheduledOn('a1', 'evt-batch'),
+      scheduledOn('a2', 'evt-batch'),
+    ]);
+    (getAdHocTasks as jest.Mock).mockResolvedValue([]);
+    (getMyTasks as jest.Mock).mockResolvedValue([
+      // a1 completed with no "Type" custom field -> empty signal
+      { id: 'a1', gid: 'a1', name: 'Batch a1', completed: true, customFields: [] },
+      batchAsanaTask('a2'),
+    ]);
+
+    const ctx = await gatherWeekContext();
+    expect(ctx.existingScheduledCounts.Batch).toBe(1);
+  });
+
+  it('counts a completed ad-hoc block toward existing blocks', async () => {
+    // A completed ad-hoc block still consumed its slot this week, so it counts —
+    // matching the dashboard capacity route (which counts completed blocks too).
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([]);
+    (getAdHocTasks as jest.Mock).mockResolvedValue([{ ...adhoc('ad1'), completed: true }]);
+    (getMyTasks as jest.Mock).mockResolvedValue([]);
+
+    const ctx = await gatherWeekContext();
+    expect(ctx.existingScheduledCounts.Batch).toBe(1);
   });
 });

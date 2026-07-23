@@ -8,7 +8,6 @@ import {
   findCatchAllCategory,
   resolveSelectionCap,
   computeCapacity,
-  dedupeByEventId,
   mergeBlocksByEventId,
   CapacityQuota,
   CapacityBlock,
@@ -180,48 +179,6 @@ describe('computeCapacity', () => {
     const rows = computeCapacity(quotas, []);
     expect(rows.map(r => r.category)).toEqual(['Writing/Deep Work', 'Batch']);
     expect(rows.every(r => r.scheduledCount === 0 && r.scheduledMinutes === 0)).toBe(true);
-  });
-});
-
-describe('dedupeByEventId', () => {
-  it('collapses a grouped block (N records, 1 event) to one', () => {
-    const records = [
-      { id: 'a', eventId: 'evt-1' },
-      { id: 'b', eventId: 'evt-1' },
-      { id: 'c', eventId: 'evt-1' },
-    ];
-    const result = dedupeByEventId(records, r => r.eventId);
-    expect(result).toEqual([{ id: 'a', eventId: 'evt-1' }]);
-  });
-
-  it('keeps distinct events (N events -> N)', () => {
-    const records = [
-      { id: 'a', eventId: 'evt-1' },
-      { id: 'b', eventId: 'evt-2' },
-      { id: 'c', eventId: 'evt-3' },
-    ];
-    expect(dedupeByEventId(records, r => r.eventId)).toHaveLength(3);
-  });
-
-  it('always keeps records with no event id (each its own block)', () => {
-    const records = [
-      { id: 'a', eventId: undefined },
-      { id: 'b', eventId: undefined },
-      { id: 'c', eventId: null },
-    ];
-    expect(dedupeByEventId(records, r => r.eventId)).toHaveLength(3);
-  });
-
-  it('mixes grouped, distinct, and no-event records correctly', () => {
-    const records = [
-      { id: 'a', eventId: 'evt-1' }, // grouped
-      { id: 'b', eventId: 'evt-1' }, // grouped dup
-      { id: 'c', eventId: 'evt-2' }, // distinct
-      { id: 'd', eventId: undefined }, // ad-hoc, own block
-      { id: 'e', eventId: undefined }, // ad-hoc, own block
-    ];
-    const result = dedupeByEventId(records, r => r.eventId);
-    expect(result.map(r => r.id)).toEqual(['a', 'c', 'd', 'e']);
   });
 });
 
