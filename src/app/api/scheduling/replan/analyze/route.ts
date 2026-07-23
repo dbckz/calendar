@@ -12,7 +12,8 @@ import {
   getRitualBlocks,
   getBlockDoneOverrides,
 } from '@/lib/user-data-storage';
-import { ritualKindForTitle, isBreakTitle, existingRitualTitlesByDateFromEvents } from '@/lib/scheduling/rituals';
+import { ritualKindForTitle, isBreakTitle, existingRitualTitlesByDateFromEvents, RITUAL_TITLES } from '@/lib/scheduling/rituals';
+import { selectCalendarReviewBlocks } from '@/lib/scheduling/calendar-review';
 import { prepTitle } from '@/lib/scheduling/event-titles';
 import type { ScheduledAsanaTask } from '@/types';
 
@@ -284,6 +285,25 @@ export async function POST(request: NextRequest) {
         ritualKind: kind,
         isBreak,
       });
+    }
+
+    // Ad-hoc Google Calendar events with no local record (added straight into
+    // Google). Reviewed as solo work: skip meetings, all-day events, rituals and
+    // app blocks; match each to an incomplete Asana task where possible.
+    for (const b of selectCalendarReviewBlocks({
+      events: ctx.weekEvents,
+      appEventIds,
+      ritualTitles: new Set(RITUAL_TITLES),
+      nowMs,
+      inWeek,
+      doneOverrides,
+      asanaTasks: ctx.asanaCandidates.map(c => ({
+        gid: c.task.gid,
+        name: c.task.name,
+        integrationId: c.integrationId,
+      })),
+    })) {
+      reviewBlocks.push(b);
     }
 
     // Busy intervals from everything that is NOT an app block (real meetings).

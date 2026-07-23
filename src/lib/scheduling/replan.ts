@@ -188,6 +188,11 @@ export interface ReplanReviewBlock {
   googleEventId: string;
   googleIntegrationId?: string;
   kind: 'task' | 'prep';
+  // 'calendar' marks a block adopted from a bare Google Calendar event with no
+  // local record (added directly in Google, not by the planner). The review UI
+  // badges these separately, and the apply "adopts" a not-done one into a local
+  // task so the replan step can re-slot it. Absent for the app-owned sources.
+  source?: 'calendar';
   category: string;
   date: string; // stored yyyy-MM-dd
   start: string; // stored HH:mm

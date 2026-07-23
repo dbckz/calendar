@@ -69,7 +69,7 @@ describe('buildReviewApplyPayload', () => {
       e1: mark({ done: false }),
       e2: mark({ done: false }),
     });
-    expect(out).toEqual({ done: [], notDone: [], completeAsana: [] });
+    expect(out).toEqual({ done: [], notDone: [], completeAsana: [], adopt: [] });
   });
 
   it('marks a prep block done', () => {
@@ -156,7 +156,7 @@ describe('buildReviewApplyPayload', () => {
     const out = buildReviewApplyPayload(blocks, {
       e1: mark({ done: true, completeInAsana: true }),
     });
-    expect(out).toEqual({ done: [], notDone: [], completeAsana: [] });
+    expect(out).toEqual({ done: [], notDone: [], completeAsana: [], adopt: [] });
   });
 
   it('emits nothing for a task already complete in Asana (completedInAsana)', () => {
@@ -169,6 +169,84 @@ describe('buildReviewApplyPayload', () => {
     const out = buildReviewApplyPayload([block], {
       e1: mark({ done: true, completeInAsana: true }),
     });
-    expect(out).toEqual({ done: [], notDone: [], completeAsana: [] });
+    expect(out).toEqual({ done: [], notDone: [], completeAsana: [], adopt: [] });
+  });
+});
+
+// A bare Google Calendar event surfaced in the review (source 'calendar').
+function calendarBlock(
+  eventId: string,
+  done: boolean,
+  task: { title?: string; gid?: string; integrationId?: string } = {}
+): ReplanReviewBlock {
+  return {
+    googleEventId: eventId,
+    googleIntegrationId: 'g-int1',
+    kind: 'task',
+    source: 'calendar',
+    category: 'Calendar',
+    date: '2026-07-21',
+    start: '14:00',
+    durationMinutes: 45,
+    startMs: 0,
+    endMs: 0,
+    done,
+    titles: [task.title ?? '🎯 Write notes'],
+    tasks: [
+      {
+        title: task.title ?? '🎯 Write notes',
+        done,
+        ...(task.gid ? { gid: task.gid, integrationId: task.integrationId ?? 'int1' } : {}),
+      },
+    ],
+  };
+}
+
+describe('buildReviewApplyPayload — calendar events', () => {
+  it('adopts a not-done unmatched calendar event (emoji-stripped title, no gid)', () => {
+    const out = buildReviewApplyPayload([calendarBlock('e1', false)], { e1: mark({ done: false }) });
+    expect(out.adopt).toEqual([
+      {
+        googleEventId: 'e1',
+        googleIntegrationId: 'g-int1',
+        title: 'Write notes',
+        date: '2026-07-21',
+        start: '14:00',
+        durationMinutes: 45,
+      },
+    ]);
+    expect(out.done).toEqual([]);
+    expect(out.notDone).toEqual([]);
+  });
+
+  it('adopts a not-done Asana-matched calendar event carrying its gid', () => {
+    const out = buildReviewApplyPayload([calendarBlock('e1', false, { gid: 'g1', integrationId: 'int1' })], {
+      e1: mark({ done: false }),
+    });
+    expect(out.adopt).toEqual([
+      expect.objectContaining({ googleEventId: 'e1', gid: 'g1', integrationId: 'int1' }),
+    ]);
+  });
+
+  it('marks a done unmatched calendar event as a planning override (no adopt)', () => {
+    const out = buildReviewApplyPayload([calendarBlock('e1', false)], { e1: mark({ done: true }) });
+    expect(out.done).toEqual(['e1']);
+    expect(out.adopt).toEqual([]);
+  });
+
+  it('completes a done Asana-matched calendar event in Asana and records the override', () => {
+    const out = buildReviewApplyPayload(
+      [calendarBlock('e1', false, { gid: 'g1', integrationId: 'int1' })],
+      { e1: mark({ done: true, completeInAsana: true }) }
+    );
+    expect(out.completeAsana).toEqual([{ gid: 'g1', integrationId: 'int1' }]);
+    expect(out.done).toEqual(['e1']);
+    expect(out.adopt).toEqual([]);
+  });
+
+  it('clears a stale override when a previously-done calendar event is reopened, then adopts', () => {
+    const out = buildReviewApplyPayload([calendarBlock('e1', true)], { e1: mark({ done: false }) });
+    expect(out.notDone).toEqual(['e1']);
+    expect(out.adopt).toHaveLength(1);
   });
 });

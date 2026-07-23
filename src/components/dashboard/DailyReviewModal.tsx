@@ -147,7 +147,10 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
         Object.fromEntries(Object.entries(marks).map(([id, tasks]) => [id, { tasks }]))
       );
       const hasWork =
-        payload.done.length > 0 || payload.notDone.length > 0 || payload.completeAsana.length > 0;
+        payload.done.length > 0 ||
+        payload.notDone.length > 0 ||
+        payload.completeAsana.length > 0 ||
+        payload.adopt.length > 0;
       if (hasWork) {
         const res = await api.confirmReplan(
           [],
@@ -156,11 +159,15 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
           undefined,
           undefined,
           payload.notDone,
-          payload.completeAsana
+          payload.completeAsana,
+          undefined,
+          undefined,
+          payload.adopt
         );
         const failed = [
           ...(res.doneResults ?? []),
           ...(res.notDoneResults ?? []),
+          ...(res.adoptResults ?? []),
         ].filter(r => !r.success).length + (res.asanaResults ?? []).filter(r => !r.success).length;
         if (failed > 0) setError(`${failed} update${failed === 1 ? '' : 's'} could not be saved.`);
         onApplied?.();
@@ -373,6 +380,11 @@ function ReviewRow({
             <span className="text-sm font-medium text-gray-800 truncate">
               {titleLabel(block.titles)}
             </span>
+            {block.source === 'calendar' && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500">
+                From your calendar
+              </span>
+            )}
           </div>
           <div className="mt-0.5 text-xs text-gray-400">{slotLabelMs(block.startMs)}</div>
         </div>

@@ -17,16 +17,19 @@ import {
   getAdHocTasks,
   getPrepBlocks,
   getRitualBlocks,
+  addAdHocTask,
   updateAdHocTask,
   updatePrepBlock,
   deletePrepBlock,
   deleteRitualBlock,
+  scheduleAsanaTask,
   setBlockDoneOverride,
   removeGoogleEventAttribution,
   removeBlockDoneOverride,
   setTaskDeferrals,
   updateScheduledAsanaTasksByGoogleEvent,
 } from '@/lib/user-data-storage';
+import type { ReviewAdoptInput } from '@/lib/scheduling/daily-review';
 import type { AsanaIntegration, GoogleCalendarCredentials, GoogleIntegration } from '@/types';
 
 // One accepted move: patch the existing Google event to a new time and update
@@ -46,6 +49,15 @@ interface MoveResult {
 }
 
 interface DoneResult {
+  googleEventId: string;
+  success: boolean;
+  error?: string;
+}
+
+// One adopted bare calendar event (daily review): a not-done Google event with no
+// local record turned into a scheduled Asana block (gid set) or an ad-hoc task,
+// so the replan step re-slots it like any other missed work.
+interface AdoptResult {
   googleEventId: string;
   success: boolean;
   error?: string;
@@ -160,11 +172,27 @@ export async function POST(request: NextRequest) {
             !!d && typeof d === 'object' && typeof (d as { googleEventId?: unknown }).googleEventId === 'string'
         )
       : [];
+    // Bare calendar events (source 'calendar') the user left not-done: adopt each
+    // into a local record so the replan step can re-slot it. Trust only the shape;
+    // the record type is chosen server-side from whether a gid is present.
+    const adoptInputs: ReviewAdoptInput[] = Array.isArray(body?.adopt)
+      ? body.adopt.filter(
+          (a: unknown): a is ReviewAdoptInput =>
+            !!a &&
+            typeof a === 'object' &&
+            typeof (a as { googleEventId?: unknown }).googleEventId === 'string' &&
+            typeof (a as { title?: unknown }).title === 'string' &&
+            typeof (a as { date?: unknown }).date === 'string' &&
+            typeof (a as { start?: unknown }).start === 'string' &&
+            typeof (a as { durationMinutes?: unknown }).durationMinutes === 'number'
+        )
+      : [];
     if (
       moves.length === 0 &&
       doneEventIds.length === 0 &&
       notDoneEventIds.length === 0 &&
       asanaCompletions.length === 0 &&
+      adoptInputs.length === 0 &&
       deferInputs.length === 0 &&
       leaveEventIds.length === 0 &&
       dismissEventIds.length === 0 &&
@@ -253,6 +281,48 @@ export async function POST(request: NextRequest) {
           googleEventId,
           success: false,
           error: err instanceof Error ? err.message : 'Failed to mark not done',
+        });
+      }
+    }
+
+    // --- Adoptions: turn a not-done bare calendar event into a local record ---
+    // Asana-matched → a scheduled Asana block (the replan re-slots it and later
+    // completion flows through Asana); otherwise → an ad-hoc task. Both link the
+    // existing Google event, so nothing new lands on the calendar.
+    const adoptResults: AdoptResult[] = [];
+    for (const a of adoptInputs) {
+      try {
+        if (a.gid && a.integrationId) {
+          await scheduleAsanaTask(
+            a.gid,
+            a.integrationId,
+            a.date,
+            a.start,
+            a.durationMinutes,
+            a.googleEventId,
+            a.googleIntegrationId,
+            a.title
+          );
+        } else {
+          await addAdHocTask({
+            title: a.title,
+            completed: false,
+            priority: 'medium',
+            taskType: 'focus',
+            dueDate: a.date,
+            dueTime: a.start,
+            duration: a.durationMinutes,
+            googleEventId: a.googleEventId,
+            googleIntegrationId: a.googleIntegrationId,
+          });
+        }
+        adoptResults.push({ googleEventId: a.googleEventId, success: true });
+      } catch (err) {
+        console.error(`[Replan Confirm] Failed to adopt calendar event ${a.googleEventId}:`, err);
+        adoptResults.push({
+          googleEventId: a.googleEventId,
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to adopt calendar event',
         });
       }
     }
@@ -466,7 +536,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, deferResults, additionResults });
+    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, additionResults });
   } catch (error) {
     console.error('Error confirming mid-week replan:', error);
     return NextResponse.json(

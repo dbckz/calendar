@@ -4,6 +4,7 @@ import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaT
 import type { CapacityRow } from '@/lib/capacity';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanReviewBlock } from '@/lib/scheduling/replan';
+import type { ReviewAdoptInput } from '@/lib/scheduling/daily-review';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 
 export interface QuotaSummaryRow {
@@ -1058,12 +1059,16 @@ export const api = {
     // Unplaceable-block choices: defer each block's tasks to next week (until is
     // computed server-side), or leave a block unscheduled (clear its override).
     defer?: Array<{ taskIds: string[]; googleEventId?: string }>,
-    leaveUnscheduled?: string[]
+    leaveUnscheduled?: string[],
+    // Daily-review adoptions: not-done bare calendar events to turn into local
+    // records so the replan step can re-slot them.
+    adopt?: ReviewAdoptInput[]
   ): Promise<{
     results: ReplanConfirmResult[];
     doneResults: ReplanConfirmResult[];
     notDoneResults?: ReplanConfirmResult[];
     asanaResults?: ReplanAsanaResult[];
+    adoptResults?: ReplanConfirmResult[];
     deferResults?: ReplanDeferResult[];
     additionResults: ReplanAdditionResult[];
   }> {
@@ -1072,6 +1077,7 @@ export const api = {
       doneResults: ReplanConfirmResult[];
       notDoneResults?: ReplanConfirmResult[];
       asanaResults?: ReplanAsanaResult[];
+      adoptResults?: ReplanConfirmResult[];
       deferResults?: ReplanDeferResult[];
       additionResults: ReplanAdditionResult[];
     }>(
@@ -1084,6 +1090,7 @@ export const api = {
           ...(done && done.length ? { done } : {}),
           ...(notDone && notDone.length ? { notDone } : {}),
           ...(completeAsana && completeAsana.length ? { completeAsana } : {}),
+          ...(adopt && adopt.length ? { adopt } : {}),
           ...(defer && defer.length ? { defer } : {}),
           ...(leaveUnscheduled && leaveUnscheduled.length ? { leaveUnscheduled } : {}),
           ...(dismiss && dismiss.length ? { dismiss } : {}),

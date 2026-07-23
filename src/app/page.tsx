@@ -23,6 +23,7 @@ import { useGoogleEventModal } from '@/hooks/useGoogleEventModal';
 import { CalendarEvent, DragItem, TaskType, SettingsResponse, AsanaFilterState } from '@/types';
 import { api } from '@/lib/api';
 import { asanaTaskUrl, asanaTaskGidsFromText } from '@/lib/asana-url';
+import { stripLeadingEmoji } from '@/lib/scheduling/calendar-review';
 import { DEFAULT_ROLLOVER_HOUR, logicalToday, logicalTodayDate, formatLocalDate } from '@/lib/date-utils';
 
 function formatMinutes(minutes: number): string {
@@ -306,9 +307,7 @@ export default function Home() {
       // Last resort, for planner blocks that predate description links: match
       // the title against incomplete Asana tasks, tolerating the planner's
       // category-emoji prefix. Only an unambiguous (single-task) match links.
-      const strippedTitle = event.title
-        .replace(/^\s*\p{Extended_Pictographic}\uFE0F?\s+/u, '')
-        .trim();
+      const strippedTitle = stripLeadingEmoji(event.title);
       const titleGids =
         asanaGidsByTitle.get(strippedTitle) ?? asanaGidsByTitle.get(event.title.trim()) ?? [];
       if (titleGids.length === 1) {
