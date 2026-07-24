@@ -111,6 +111,22 @@ export function TasksStep({
       </span>
     ) : null;
 
+  // Tiny pill marking a task the user carried out of an earlier week at that
+  // week's end-of-week review. Nothing rendered for everything else.
+  const renderCarriedBadge = (c: WeekCandidate) =>
+    c.carriedOver ? (
+      <span
+        title={
+          c.carriedFromWeek
+            ? `Carried over from the week of ${format(parseISO(c.carriedFromWeek), 'MMM d')}`
+            : 'Carried over from last week'
+        }
+        className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-100 text-orange-700 flex-shrink-0"
+      >
+        ↩ last week
+      </span>
+    ) : null;
+
   // "Must do this week" toggle for a selectable row.
   const renderMustDo = (category: string, id: string) => {
     const on = mustDoIds.has(id);
@@ -232,6 +248,7 @@ export function TasksStep({
                 {cat.candidates.slice(0, autoN).map(c => (
                   <li key={c.id} className="flex items-center gap-2">
                     <span className="text-sm text-gray-500 truncate flex-1">{c.title}</span>
+                    {renderCarriedBadge(c)}
                     {renderIntegrationBadge(c.integrationName)}
                     {renderAsanaControls(c)}
                     {!cat.grouped && renderTaskDurationSelect(c.id, defaultDuration)}
@@ -259,6 +276,7 @@ export function TasksStep({
                           <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400 flex-shrink-0" />
                         )}
                         <span className="text-sm text-gray-700 truncate flex-1">{c.title}</span>
+                        {renderCarriedBadge(c)}
                         {renderIntegrationBadge(c.integrationName)}
                         {c.dueDate && (
                           <span className="text-[11px] text-gray-400 flex-shrink-0">

@@ -13,6 +13,16 @@ export type StaleMode = 'leave' | 'done' | 'dismiss';
 // it tomorrow by displacing one of tomorrow's blocks (only when there is one to
 // bump).
 export type UnplaceableMode = 'defer' | 'leave' | 'overflow' | 'prioritise';
+// Per-row action in END-OF-WEEK mode (the last working day and the weekend after
+// it): there is no week left to reschedule into, so each unfinished task is
+// carried into next week's plan (default), dropped back to the backlog with no
+// badge, or marked done. Keyed by block event id for single-task blocks, and by
+// `${eventId}::${taskId}` for each member of a grouped block.
+export type CarryMode = 'carry' | 'backlog' | 'done';
+
+// Per-task key for a grouped carry block's member row.
+export const carryTaskKey = (googleEventId: string, taskId: string) =>
+  `${googleEventId}::${taskId}`;
 
 // Shared state + confirm logic for the replan "plan view" (moves / stale /
 // additions / deletions / unplaceable / kept). Extracted from ReplanWeekModal so
@@ -26,6 +36,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
   // For a 'prioritise' unplaceable row: the googleEventId of tomorrow's block the
   // user chose to displace (bump). Keyed by the unplaceable block's googleEventId.
   const [unplaceableVictim, setUnplaceableVictim] = useState<Record<string, string>>({});
+  const [carryMode, setCarryMode] = useState<Record<string, CarryMode>>({});
   const [additionIncluded, setAdditionIncluded] = useState<Set<string>>(new Set());
   const [additionResults, setAdditionResults] = useState<Record<string, ReplanAdditionResult>>({});
   const [deletionIncluded, setDeletionIncluded] = useState<Set<string>>(new Set());
@@ -41,11 +52,25 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     setIncluded(new Set(data.moves.map(m => m.googleEventId)));
     setMoveMode(Object.fromEntries(data.moves.map(m => [m.googleEventId, 'reschedule' as MoveMode])));
     setStaleMode(Object.fromEntries((data.stale ?? []).map(s => [s.googleEventId, 'leave' as StaleMode])));
-    // Default every unplaceable row to "defer to next week".
+    // Default every unplaceable row to "defer to next week" — except at the end
+    // of the week, where the only rows left in that section (meeting prep) have
+    // nowhere to go but "leave unscheduled".
+    const unplaceableDefault: UnplaceableMode = data.endOfWeek ? 'leave' : 'defer';
     setUnplaceableMode(
-      Object.fromEntries((data.unplaceable ?? []).map(u => [u.googleEventId, 'defer' as UnplaceableMode]))
+      Object.fromEntries((data.unplaceable ?? []).map(u => [u.googleEventId, unplaceableDefault]))
     );
     setUnplaceableVictim({});
+    // Every end-of-week row defaults to "carry over to next week" — block level
+    // for single-task blocks, per incomplete member for grouped ones.
+    setCarryMode(
+      Object.fromEntries(
+        (data.carryBlocks ?? []).flatMap(b =>
+          b.tasks.length > 1
+            ? b.tasks.filter(t => !t.done).map(t => [carryTaskKey(b.googleEventId, t.id), 'carry' as CarryMode])
+            : [[b.googleEventId, 'carry' as CarryMode]]
+        )
+      )
+    );
     setAdditionIncluded(new Set((data.additions ?? []).map(a => a.id)));
     setAdditionResults({});
     setDeletionIncluded(new Set((data.deletions ?? []).map(d => d.googleEventId)));
@@ -57,6 +82,13 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
   }, [data]);
 
   const stale = useMemo(() => data?.stale ?? [], [data]);
+  // End-of-week mode: these blocks replace their rows in the moves / couldn't-fit
+  // sections with a single carry-over decision each.
+  const carryBlocks = useMemo(() => (data?.endOfWeek ? data.carryBlocks ?? [] : []), [data]);
+  const carriedEventIds = useMemo(
+    () => new Set(carryBlocks.map(b => b.googleEventId)),
+    [carryBlocks]
+  );
   const additions = useMemo(() => data?.additions ?? [], [data]);
   const deletions = useMemo(() => data?.deletions ?? [], [data]);
 
@@ -70,6 +102,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     const dismissIds: string[] = [];
     const defer: Array<{ taskIds: string[]; googleEventId?: string }> = [];
     const leaveUnscheduled: string[] = [];
+    const carry: Array<{ blockId?: string; taskIds: string[]; quiet?: boolean }> = [];
+    const completeAsana: Array<{ gid: string; integrationId: string }> = [];
     const displace: Array<{
       googleEventId: string;
       googleIntegrationId?: string;
@@ -80,6 +114,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     }> = [];
     if (data) {
       for (const m of data.moves) {
+        // End-of-week: a missed block's decision is its carry row, not a move.
+        if (carriedEventIds.has(m.googleEventId)) continue;
         if (!included.has(m.googleEventId)) continue;
         if (m.reason === 'missed' && moveMode[m.googleEventId] === 'done') {
           doneIds.push(m.googleEventId);
@@ -103,6 +139,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       // defer → park the tasks; leave → clear any override.
       const tomorrowBlocks = data.tomorrowBlocks ?? [];
       for (const u of data.unplaceable) {
+        if (carriedEventIds.has(u.googleEventId)) continue;
         const mode = unplaceableMode[u.googleEventId] ?? 'defer';
         if (mode === 'overflow' && u.overflowOption) {
           moves.push({
@@ -141,13 +178,36 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
           defer.push({ taskIds: u.deferTaskIds ?? [], googleEventId: u.googleEventId });
         }
       }
+      // End-of-week carry rows. A grouped block asks per incomplete member; a
+      // single-task block asks once. "Mark done" completes an Asana-backed task
+      // in Asana, and marks the whole block done for planning once nothing
+      // incomplete is left on it.
+      for (const b of carryBlocks) {
+        const incomplete = b.tasks.filter(t => !t.done);
+        if (incomplete.length === 0) continue;
+        const grouped = b.tasks.length > 1;
+        const modeFor = (taskId: string) =>
+          (grouped ? carryMode[carryTaskKey(b.googleEventId, taskId)] : carryMode[b.googleEventId]) ??
+          'carry';
+        const carryIds = incomplete.filter(t => modeFor(t.id) === 'carry').map(t => t.id);
+        const backlogIds = incomplete.filter(t => modeFor(t.id) === 'backlog').map(t => t.id);
+        const doneTasks = incomplete.filter(t => modeFor(t.id) === 'done');
+        if (carryIds.length > 0) carry.push({ blockId: b.googleEventId, taskIds: carryIds });
+        if (backlogIds.length > 0)
+          carry.push({ blockId: b.googleEventId, taskIds: backlogIds, quiet: true });
+        for (const t of doneTasks) {
+          if (t.gid && t.integrationId) completeAsana.push({ gid: t.gid, integrationId: t.integrationId });
+        }
+        // Nothing incomplete left once these are done → the block itself reads done.
+        if (doneTasks.length === incomplete.length) doneIds.push(b.googleEventId);
+      }
     }
     const additionBlocks = additions.filter(a => additionIncluded.has(a.id));
     const deletionBlocks = deletions
       .filter(d => deletionIncluded.has(d.googleEventId))
       .map(d => ({ googleEventId: d.googleEventId, googleIntegrationId: d.googleIntegrationId }));
-    return { moves, doneIds, dismissIds, defer, leaveUnscheduled, displace, additionBlocks, deletionBlocks };
-  }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, additions, additionIncluded, deletions, deletionIncluded]);
+    return { moves, doneIds, dismissIds, defer, leaveUnscheduled, carry, completeAsana, displace, additionBlocks, deletionBlocks };
+  }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, carryBlocks, carriedEventIds, carryMode, additions, additionIncluded, deletions, deletionIncluded]);
 
   const actionCount =
     payload.moves.length +
@@ -155,6 +215,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     payload.dismissIds.length +
     payload.defer.length +
     payload.leaveUnscheduled.length +
+    payload.carry.length +
+    payload.completeAsana.length +
     payload.displace.length +
     payload.additionBlocks.length +
     payload.deletionBlocks.length;
@@ -188,18 +250,19 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     setIsConfirming(true);
     setError(null);
     try {
-      const { results: res, doneResults, deferResults, displaceResults, additionResults: addRes } = await api.confirmReplan(
+      const { results: res, doneResults, deferResults, carryResults, displaceResults, additionResults: addRes } = await api.confirmReplan(
         payload.moves,
         payload.doneIds,
         payload.dismissIds,
         payload.additionBlocks,
         payload.deletionBlocks,
         undefined,
-        undefined,
+        payload.completeAsana.length > 0 ? payload.completeAsana : undefined,
         payload.defer,
         payload.leaveUnscheduled,
         undefined,
-        payload.displace
+        payload.displace,
+        payload.carry.length > 0 ? payload.carry : undefined
       );
       const map: Record<string, ReplanConfirmResult> = {};
       for (const r of [...res, ...doneResults]) map[r.googleEventId] = r;
@@ -207,6 +270,15 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       // the same per-row map so unplaceable rows can show a status icon.
       for (const r of deferResults ?? []) {
         if (r.googleEventId) map[r.googleEventId] = { googleEventId: r.googleEventId, success: r.success, error: r.error };
+      }
+      // Fold carry results in so each end-of-week row shows a status icon. A
+      // block with both a carried and a backlogged member reports the worst of
+      // the two, so a failure is never hidden by a later success.
+      for (const r of carryResults ?? []) {
+        if (!r.blockId) continue;
+        const prev = map[r.blockId];
+        if (prev && !prev.success) continue;
+        map[r.blockId] = { googleEventId: r.blockId, success: r.success, error: r.error };
       }
       // Fold displaced-victim results in too, so a bumped tomorrow block shows a
       // status icon on its picker row.
@@ -217,7 +289,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       const addMap: Record<string, ReplanAdditionResult> = {};
       for (const r of addRes ?? []) addMap[r.id] = r;
       setAdditionResults(addMap);
-      if ([...res, ...doneResults, ...(deferResults ?? []), ...(displaceResults ?? []), ...(addRes ?? [])].some(r => r.success)) onApplied?.();
+      if ([...res, ...doneResults, ...(deferResults ?? []), ...(carryResults ?? []), ...(displaceResults ?? []), ...(addRes ?? [])].some(r => r.success)) onApplied?.();
       setDone(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to apply changes');
@@ -237,6 +309,10 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     setUnplaceableMode,
     unplaceableVictim,
     setUnplaceableVictim,
+    carryBlocks,
+    carriedEventIds,
+    carryMode,
+    setCarryMode,
     additionIncluded,
     additionResults,
     deletionIncluded,

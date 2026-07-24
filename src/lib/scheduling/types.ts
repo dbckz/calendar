@@ -34,6 +34,11 @@ export interface CandidateTask {
   // Marks a task the user pinned as a priority in the wizard. Sorts first
   // within its category, ahead of deadline/due-date ranking.
   isPriority?: boolean;
+  // Set when the user carried this task out of an EARLIER week during that
+  // week's end-of-week review. The wizard badges it ("↩ last week") and floats it
+  // above the rest of its category (behind pinned priorities).
+  carriedOver?: boolean;
+  carriedFromWeek?: string; // yyyy-MM-dd Monday of the week it was carried out of
 }
 
 // A single proposed calendar block. `task` is omitted for a "reserved" block

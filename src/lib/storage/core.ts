@@ -72,6 +72,15 @@ export interface RitualBlock {
   createdAt: string;
 }
 
+// A task the user explicitly carried over from one week's end-of-week review
+// into the next week's plan. `fromWeek` is the yyyy-MM-dd Monday of the week the
+// task was planned in, so the plan-week wizard can badge it ("↩ last week") only
+// when the week being planned is a LATER week.
+export interface CarryOverEntry {
+  fromWeek: string; // yyyy-MM-dd (Monday of the week it was carried out of)
+  at: number; // ms timestamp the carry-over was recorded
+}
+
 export interface UserData {
   taskTemplates: TaskTemplate[];
   templateGroups: TemplateGroup[];
@@ -97,6 +106,11 @@ export interface UserData {
   // resume as a candidate (next Monday). Deferrals whose resume date has arrived
   // are pruned lazily by gatherWeekContext.
   taskDeferrals?: Record<string, string>;
+  // Task ids (Asana gid or ad-hoc id) the user carried over at the end of a week,
+  // mapped to the week they were carried out of. Purely a marker for the
+  // plan-week wizard (the parallel taskDeferral is what actually parks the task);
+  // cleared once the task is scheduled or completed, and pruned when stale.
+  carryOvers?: Record<string, CarryOverEntry>;
   // Daily-review state: when the review was last completed (so the next review
   // only covers what has finished SINCE then) and the bare calendar-event titles
   // the user has dismissed as "not a task" (so they never resurface in review).
@@ -126,6 +140,7 @@ const DEFAULT_USER_DATA: UserData = {
   ritualBlocks: [],
   blockDoneOverrides: {},
   taskDeferrals: {},
+  carryOvers: {},
   dailyReviewState: {},
 };
 
@@ -162,6 +177,16 @@ export async function getUserData(): Promise<UserData> {
       taskDeferrals: Object.fromEntries(
         Object.entries(parsed.taskDeferrals || {}).filter(
           ([k, v]) => typeof k === 'string' && typeof v === 'string'
+        )
+      ),
+      // Tolerant load: keep only well-formed { fromWeek, at } entries.
+      carryOvers: Object.fromEntries(
+        Object.entries(parsed.carryOvers || {}).filter(
+          ([k, v]) =>
+            typeof k === 'string' &&
+            !!v &&
+            typeof v === 'object' &&
+            typeof (v as CarryOverEntry).fromWeek === 'string'
         )
       ),
       dailyReviewState: parsed.dailyReviewState || {},

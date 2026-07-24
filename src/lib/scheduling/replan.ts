@@ -131,6 +131,35 @@ export interface ReplanStale {
   reason: ReplanReason;
 }
 
+// One task backing an end-of-week carry-over block. `id` is the deferral /
+// carry-over key (Asana gid or ad-hoc id); `gid` + `integrationId` are present
+// only for Asana-backed tasks (so a "mark done" can complete it in Asana).
+export interface ReplanCarryTask {
+  id: string;
+  title: string;
+  done: boolean;
+  gid?: string;
+  integrationId?: string;
+  adhocId?: string;
+}
+
+// A block surfaced by the END-OF-WEEK review: unfinished, task-backed work with
+// no week left to reschedule into. The user decides per incomplete task whether
+// to carry it into next week's plan, drop it back to the backlog, or mark it
+// done. Rituals and meeting-prep blocks are never carry blocks — the analyze
+// route only builds these for blocks with backing tasks.
+export interface ReplanCarryBlock {
+  googleEventId: string;
+  googleIntegrationId?: string;
+  category: string;
+  titles: string[];
+  date: string; // the block's original yyyy-MM-dd
+  start: string; // the block's original HH:mm
+  durationMinutes: number;
+  reason: 'missed' | 'unplaceable';
+  tasks: ReplanCarryTask[];
+}
+
 export interface ReplanInput {
   config: WorkflowConfig;
   weekStart: Date; // local midnight of the week's Monday

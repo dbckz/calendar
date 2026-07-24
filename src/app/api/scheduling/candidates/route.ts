@@ -61,6 +61,11 @@ export async function POST(request: NextRequest) {
         const existing = ctx.existingScheduledCounts[q.category] ?? 0;
         const list = (tasksByCategory.get(q.category) ?? []).slice();
         list.sort((a, b) => compareKeys(taskSortKey(a), taskSortKey(b)));
+        // Float carried-over tasks (explicitly carried out of an earlier week)
+        // above the rest of their category, behind pinned priorities. A stable
+        // sort, so the engine ordering holds within each band.
+        const band = (t: CandidateTask) => (t.isPriority ? 0 : t.carriedOver ? 1 : 2);
+        list.sort((a, b) => band(a) - band(b));
         // An explicit maxSelection caps how many tasks the wizard may select,
         // taking precedence over the no-quota / grouped "pick any" behavior (so a
         // grouped category can still be capped, e.g. Deep Work "up to 3").
@@ -84,6 +89,7 @@ export async function POST(request: NextRequest) {
             dueDate: t.dueDate,
             deadlineType: t.deadlineType,
             isPriority: t.isPriority === true,
+            ...(t.carriedOver ? { carriedOver: true, carriedFromWeek: t.carriedFromWeek } : {}),
           })),
         };
       });

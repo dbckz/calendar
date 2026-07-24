@@ -6,7 +6,7 @@
  * I/O (config, storage, Asana, Google) is mocked so the test is deterministic.
  */
 import { gatherWeekContext, firstWorkingDaysOfNextWeek } from '@/lib/scheduling/gather';
-import { getScheduledAsanaTasks, getAdHocTasks, getCustomTaskTypes, getAllTaskMetadata, getPrepBlocks, getRitualBlocks, getTaskDeferrals, removeTaskDeferrals } from '@/lib/user-data-storage';
+import { getScheduledAsanaTasks, getAdHocTasks, getCustomTaskTypes, getAllTaskMetadata, getPrepBlocks, getRitualBlocks, getTaskDeferrals, removeTaskDeferrals, getCarryOvers, removeCarryOvers } from '@/lib/user-data-storage';
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations } from '@/lib/integration-storage';
 import { getMyTasks } from '@/lib/asana';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
@@ -27,6 +27,8 @@ jest.mock('@/lib/user-data-storage', () => ({
   removeGoogleEventAttribution: jest.fn(),
   getTaskDeferrals: jest.fn().mockResolvedValue({}),
   removeTaskDeferrals: jest.fn().mockResolvedValue(0),
+  getCarryOvers: jest.fn().mockResolvedValue({}),
+  removeCarryOvers: jest.fn().mockResolvedValue(0),
 }));
 jest.mock('@/lib/integration-storage', () => ({
   getEnabledAsanaIntegrations: jest.fn(),
@@ -113,6 +115,30 @@ describe('gatherWeekContext - week-scoped rollover', () => {
     const gids = ctx.candidateTasks.map(t => t.gid);
     expect(gids).toContain('rollover');
     expect(removeTaskDeferrals).toHaveBeenCalledWith(['rollover']);
+  });
+
+  it('flags a task carried out of an earlier week and ignores a same-week marker', async () => {
+    (getCarryOvers as jest.Mock).mockResolvedValue({
+      rollover: { fromWeek: '2026-07-06', at: 1 }, // last week -> badge
+      inweek: { fromWeek: '2026-07-13', at: 1 }, // the week being planned -> no badge
+    });
+
+    const ctx = await gatherWeekContext();
+    const carried = ctx.candidateTasks.find(t => t.gid === 'rollover');
+    expect(carried).toEqual(
+      expect.objectContaining({ carriedOver: true, carriedFromWeek: '2026-07-06' })
+    );
+    expect(removeCarryOvers).not.toHaveBeenCalled();
+  });
+
+  it('prunes a carry-over marker older than four weeks', async () => {
+    (getCarryOvers as jest.Mock).mockResolvedValue({
+      rollover: { fromWeek: '2026-06-08', at: 1 }, // 5 weeks before the planning week
+    });
+
+    const ctx = await gatherWeekContext();
+    expect(ctx.candidateTasks.find(t => t.gid === 'rollover')).not.toHaveProperty('carriedOver');
+    expect(removeCarryOvers).toHaveBeenCalledWith(['rollover']);
   });
 });
 

@@ -3,7 +3,7 @@
 import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { CapacityRow } from '@/lib/capacity';
 import type { ProposedBlock } from '@/lib/scheduling/types';
-import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanReviewBlock } from '@/lib/scheduling/replan';
+import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanReviewBlock, ReplanCarryBlock } from '@/lib/scheduling/replan';
 import type { ReviewAdoptInput } from '@/lib/scheduling/daily-review';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 
@@ -118,6 +118,10 @@ export interface WeekCandidate {
   dueDate?: string;
   deadlineType?: string;
   isPriority: boolean;
+  // Set when the user carried this task out of an EARLIER week at that week's
+  // end-of-week review. The wizard badges it and floats it up its category.
+  carriedOver?: boolean;
+  carriedFromWeek?: string; // yyyy-MM-dd Monday of the week it was carried out of
 }
 
 export interface WeekCandidateCategory {
@@ -188,6 +192,13 @@ export interface ReplanAnalyzeResponse {
   // Past app blocks (task/prep) for the daily-review step. Absent on older
   // responses — treat as [].
   reviewBlocks?: ReplanReviewBlock[];
+  // True on the last working day of the week (or the weekend after it): there is
+  // no week left to reschedule into, so the review offers carry-over decisions
+  // instead. Absent on older responses — treat as false.
+  endOfWeek?: boolean;
+  // Unfinished, task-backed blocks to carry over / drop / mark done. Present only
+  // in end-of-week mode; never contains ritual or meeting-prep blocks.
+  carryBlocks?: ReplanCarryBlock[];
 }
 
 export interface ReplanConfirmResult {
@@ -207,6 +218,14 @@ export interface ReplanAsanaResult {
 export interface ReplanDeferResult {
   taskIds: string[];
   googleEventId?: string;
+  success: boolean;
+  error?: string;
+}
+
+// One end-of-week carry-over result, keyed by the block's Google event id.
+export interface ReplanCarryResult {
+  blockId?: string;
+  taskIds: string[];
   success: boolean;
   error?: string;
 }
@@ -1148,7 +1167,11 @@ export const api = {
       // so the server can reject a victim too short to hold the prioritised block.
       durationMinutes: number;
       priorityDurationMinutes: number;
-    }>
+    }>,
+    // End-of-week carry-overs: each entry marks a block's chosen tasks as carried
+    // into next week's plan (and defers them past the weekend), or — with
+    // quiet:true — quietly returns them to the backlog with no badge.
+    carry?: Array<{ blockId?: string; taskIds: string[]; quiet?: boolean }>
   ): Promise<{
     results: ReplanConfirmResult[];
     doneResults: ReplanConfirmResult[];
@@ -1156,6 +1179,7 @@ export const api = {
     asanaResults?: ReplanAsanaResult[];
     adoptResults?: ReplanConfirmResult[];
     deferResults?: ReplanDeferResult[];
+    carryResults?: ReplanCarryResult[];
     displaceResults?: ReplanDisplaceResult[];
     additionResults: ReplanAdditionResult[];
   }> {
@@ -1166,6 +1190,7 @@ export const api = {
       asanaResults?: ReplanAsanaResult[];
       adoptResults?: ReplanConfirmResult[];
       deferResults?: ReplanDeferResult[];
+      carryResults?: ReplanCarryResult[];
       displaceResults?: ReplanDisplaceResult[];
       additionResults: ReplanAdditionResult[];
     }>(
@@ -1182,6 +1207,7 @@ export const api = {
           ...(defer && defer.length ? { defer } : {}),
           ...(leaveUnscheduled && leaveUnscheduled.length ? { leaveUnscheduled } : {}),
           ...(displace && displace.length ? { displace } : {}),
+          ...(carry && carry.length ? { carry } : {}),
           ...(dismiss && dismiss.length ? { dismiss } : {}),
           ...(additions && additions.length ? { additions } : {}),
           ...(deletions && deletions.length ? { deletions } : {}),

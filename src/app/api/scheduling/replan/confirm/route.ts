@@ -31,6 +31,8 @@ import {
   removeGoogleEventAttribution,
   removeBlockDoneOverride,
   setTaskDeferrals,
+  setCarryOvers,
+  removeCarryOvers,
   updateScheduledAsanaTasksByGoogleEvent,
 } from '@/lib/user-data-storage';
 import type { ReviewAdoptInput } from '@/lib/scheduling/daily-review';
@@ -88,6 +90,24 @@ interface DeferInput {
 interface DeferResult {
   taskIds: string[];
   googleEventId?: string;
+  success: boolean;
+  error?: string;
+}
+
+// One end-of-week carry-over decision for a block's tasks. The loud form (the
+// default) marks each task as carried out of the CURRENT week — so next week's
+// plan-week wizard badges it — and defers it to next Monday so a weekend replan
+// leaves it alone. The `quiet` form is "back to backlog": no marker, no deferral,
+// just the same cleanup the 'leave unscheduled' path does.
+interface CarryInput {
+  blockId?: string; // the block's Google event id
+  taskIds: string[];
+  quiet: boolean;
+}
+
+interface CarryResult {
+  blockId?: string;
+  taskIds: string[];
   success: boolean;
   error?: string;
 }
@@ -189,6 +209,20 @@ export async function POST(request: NextRequest) {
     const leaveEventIds: string[] = Array.isArray(body?.leaveUnscheduled)
       ? body.leaveUnscheduled.filter((id: unknown): id is string => typeof id === 'string')
       : [];
+    // End-of-week carry-overs: mark each block's chosen tasks as carried into
+    // next week (or, when quiet, quietly returned to the backlog).
+    const carryInputs: CarryInput[] = Array.isArray(body?.carry)
+      ? body.carry
+          .filter((c: unknown): c is Record<string, unknown> => !!c && typeof c === 'object')
+          .map((c: Record<string, unknown>) => ({
+            blockId: typeof c.blockId === 'string' ? c.blockId : undefined,
+            taskIds: Array.isArray(c.taskIds)
+              ? c.taskIds.filter((t: unknown): t is string => typeof t === 'string')
+              : [],
+            quiet: c.quiet === true,
+          }))
+          .filter((c: CarryInput) => c.taskIds.length > 0 || c.blockId)
+      : [];
     // "Prioritise tomorrow" victims: displace each so its tomorrow slot frees up
     // for the prioritised block (which comes through as a normal move).
     const displaceInputs: DisplaceInput[] = Array.isArray(body?.displace)
@@ -261,6 +295,7 @@ export async function POST(request: NextRequest) {
       adoptInputs.length === 0 &&
       deferInputs.length === 0 &&
       leaveEventIds.length === 0 &&
+      carryInputs.length === 0 &&
       displaceInputs.length === 0 &&
       dismissEventIds.length === 0 &&
       additions.length === 0 &&
@@ -311,6 +346,8 @@ export async function POST(request: NextRequest) {
           const adhoc = adHocTasks.find(t => t.googleEventId === googleEventId);
           if (adhoc) {
             await updateAdHocTask(adhoc.id, { completed: true });
+            // A completed task is no longer carried over.
+            await removeCarryOvers([adhoc.id]);
           } else {
             // Asana-backed (or unknown): a planning-only override.
             await setBlockDoneOverride(googleEventId);
@@ -420,6 +457,8 @@ export async function POST(request: NextRequest) {
           asanaCredCache.set(integrationId, accessToken);
         }
         await completeTask(accessToken, gid, true);
+        // A completed task is no longer carried over.
+        await removeCarryOvers([gid]);
         asanaResults.push({ gid, success: true });
       } catch (err) {
         console.error(`[Replan Confirm] Failed to complete Asana task ${gid}:`, err);
@@ -469,6 +508,53 @@ export async function POST(request: NextRequest) {
           success: false,
           error: err instanceof Error ? err.message : 'Failed to leave unscheduled',
         });
+      }
+    }
+
+    // --- Carry-overs: park each chosen task for next week's plan -------------
+    // A carried task gets BOTH a carry-over marker (so the plan-week wizard
+    // badges and floats it next week) and the normal deferral to next Monday (so
+    // a weekend replan leaves it alone). "Back to backlog" (quiet) writes no
+    // marker and drops any stale one, leaving the task in the ordinary pool.
+    const carryResults: CarryResult[] = [];
+    if (carryInputs.length > 0) {
+      const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+      const fromWeek = format(weekStart, 'yyyy-MM-dd'); // this week's Monday
+      const until = format(addDays(weekStart, 7), 'yyyy-MM-dd'); // next Monday
+      for (const c of carryInputs) {
+        try {
+          // Rituals and meeting prep are never carried: next week's plan creates
+          // rituals fresh, and a prep block belongs to its own meeting.
+          const isRitual = !!c.blockId && ritualBlocks.some(r => r.googleEventId === c.blockId);
+          const isPrep = !!c.blockId && prepBlocks.some(p => p.googleEventId === c.blockId);
+          if (isRitual || isPrep) {
+            carryResults.push({
+              blockId: c.blockId,
+              taskIds: c.taskIds,
+              success: false,
+              error: `${isRitual ? 'Ritual' : 'Meeting prep'} blocks cannot be carried over`,
+            });
+            continue;
+          }
+          if (c.taskIds.length > 0) {
+            if (c.quiet) {
+              await removeCarryOvers(c.taskIds);
+            } else {
+              await setCarryOvers(c.taskIds.map(taskId => ({ taskId, fromWeek })));
+              await setTaskDeferrals(c.taskIds.map(taskId => ({ taskId, until })));
+            }
+          }
+          if (c.blockId) await removeBlockDoneOverride(c.blockId);
+          carryResults.push({ blockId: c.blockId, taskIds: c.taskIds, success: true });
+        } catch (err) {
+          console.error(`[Replan Confirm] Failed to carry over ${c.blockId ?? c.taskIds.join(',')}:`, err);
+          carryResults.push({
+            blockId: c.blockId,
+            taskIds: c.taskIds,
+            success: false,
+            error: err instanceof Error ? err.message : 'Failed to carry over',
+          });
+        }
       }
     }
 
@@ -716,7 +802,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, displaceResults, additionResults });
+    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, carryResults, displaceResults, additionResults });
   } catch (error) {
     console.error('Error confirming mid-week replan:', error);
     return NextResponse.json(

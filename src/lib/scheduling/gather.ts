@@ -23,11 +23,14 @@ import {
   removeGoogleEventAttribution,
   getTaskDeferrals,
   removeTaskDeferrals,
+  getCarryOvers,
+  removeCarryOvers,
   type PrepBlock,
   type RitualBlock,
 } from '@/lib/user-data-storage';
 import { DEFAULT_ROLLOVER_HOUR, logicalTodayDate } from '@/lib/date-utils';
 import { partitionDeferrals } from '@/lib/scheduling/deferrals';
+import { partitionCarryOvers } from '@/lib/scheduling/carry-overs';
 import { selectStaleRecords, type ReconcileRecord } from '@/lib/scheduling/reconcile';
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations, updateIntegration } from '@/lib/integration-storage';
 import { getMyTasks, refreshAsanaToken } from '@/lib/asana';
@@ -392,7 +395,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   const weekStartStr = format(weekStart, 'yyyy-MM-dd');
   const weekEndStr = format(addDays(weekStart, 6), 'yyyy-MM-dd');
 
-  const [scheduledAsanaRaw, adHocTasksRaw, customTypes, metadata, asanaData, fetched, nextWeekEarlyEvents, prepBlocksRaw, ritualBlocksRaw, deferralsRaw] =
+  const [scheduledAsanaRaw, adHocTasksRaw, customTypes, metadata, asanaData, fetched, nextWeekEarlyEvents, prepBlocksRaw, ritualBlocksRaw, deferralsRaw, carryOversRaw] =
     await Promise.all([
       getScheduledAsanaTasks(),
       getAdHocTasks(),
@@ -407,6 +410,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
       getPrepBlocks(),
       getRitualBlocks(),
       getTaskDeferrals(),
+      getCarryOvers(),
     ]);
   const asanaCandidates = asanaData.candidates;
 
@@ -418,6 +422,16 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     weekEndStr
   );
   if (expiredDeferrals.length > 0) await removeTaskDeferrals(expiredDeferrals);
+
+  // Carry-overs: tasks the user explicitly carried out of an earlier week's
+  // end-of-week review. Only markers from a week BEFORE the one being planned
+  // count (carrying out of this very week is not "last week's leftover"); stale
+  // ones are pruned on read, like deferrals.
+  const { carriedFromWeek, stale: staleCarryOvers } = partitionCarryOvers(
+    carryOversRaw,
+    weekStartStr
+  );
+  if (staleCarryOvers.length > 0) await removeCarryOvers(staleCarryOvers);
 
   const weekEvents = fetched.events;
 
@@ -533,6 +547,13 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     if (category) deferredCountsByCategory[category] = (deferredCountsByCategory[category] ?? 0) + 1;
   };
 
+  // Carry-over flags for a candidate, omitted entirely when the task was not
+  // carried (so the candidate shape is unchanged for everything else).
+  const carryFlags = (taskId: string) => {
+    const from = carriedFromWeek.get(taskId);
+    return from ? { carriedOver: true as const, carriedFromWeek: from } : {};
+  };
+
   const candidateTasks: CandidateTask[] = [];
   for (const { task, integrationId, typeValue } of asanaCandidates) {
     if (scheduledGids.has(task.gid)) continue;
@@ -551,6 +572,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
       bestTime: meta?.bestTime,
       energyLevel: meta?.energyLevel,
       effortMinutes: meta?.effortMinutes,
+      ...carryFlags(task.gid),
     });
   }
   for (const t of adHocTasks) {
@@ -564,6 +586,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
       title: t.title,
       dueDate: t.dueDate,
       typeSignals: adHocTypeSignals(t.taskType, customTypes),
+      ...carryFlags(t.id),
     });
   }
 

@@ -218,13 +218,13 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
             <ClipboardCheck className="w-5 h-5 text-orange-500" />
             <div>
               <h2 className="text-lg font-semibold text-gray-900">
-                Daily review{step === 2 ? ' — replan' : ''}
+                Daily review{step === 2 ? (data?.endOfWeek ? ' — end of week' : ' — replan') : ''}
               </h2>
               {data && (
                 <p className="text-xs text-gray-400">
                   {step === 1
                     ? 'What got done since your last review?'
-                    : `Reschedule what didn’t · ${weekLabel}`}
+                    : `${data.endOfWeek ? 'Carry what didn’t into next week' : 'Reschedule what didn’t'} · ${weekLabel}`}
                 </p>
               )}
             </div>

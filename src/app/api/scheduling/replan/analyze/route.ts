@@ -4,7 +4,8 @@ import { format } from 'date-fns';
 import { classifyBlockCategory } from '@/lib/capacity';
 import { adHocTypeSignals, gatherWeekContext } from '@/lib/scheduling/gather';
 import { eventsToBusyIntervals } from '@/lib/scheduling/free-busy';
-import { planReplan, type ReplanBlock, type ReplanReviewBlock } from '@/lib/scheduling/replan';
+import { planReplan, type ReplanBlock, type ReplanCarryBlock, type ReplanCarryTask, type ReplanReviewBlock } from '@/lib/scheduling/replan';
+import { isEndOfWeekReview } from '@/lib/scheduling/end-of-week';
 import { proposePrepBlocks, type PrepMeeting } from '@/lib/scheduling/prep';
 import { resolvePrepCandidates } from '@/lib/scheduling/prep-candidates';
 import type { BusyInterval } from '@/lib/scheduling/types';
@@ -92,6 +93,10 @@ export async function POST(request: NextRequest) {
     // eventId → backing task ids (Asana gid / ad-hoc id), so unplaceable rows can
     // carry what to defer. Preps have no deferrable task.
     const taskIdsByEvent = new Map<string, string[]>();
+    // eventId → the same tasks with their titles and done state, so the
+    // end-of-week review can ask per incomplete member task. Populated only for
+    // task-backed blocks (never rituals, never meeting prep).
+    const carryTasksByEvent = new Map<string, ReplanCarryTask[]>();
     const reviewBlocks: ReplanReviewBlock[] = [];
     const pushReview = (b: ReplanReviewBlock) => {
       if (b.endMs > reviewStartMs && b.endMs <= nowMs) reviewBlocks.push(b);
@@ -153,6 +158,16 @@ export async function POST(request: NextRequest) {
         category = classifyBlockCategory(tv ? [tv] : [], ctx.quotas);
         if (category) break;
       }
+      carryTasksByEvent.set(
+        eventId,
+        entries.map((e, i) => ({
+          id: e.asanaTaskId,
+          title: titles[i],
+          done: !incompleteByGid.has(e.asanaTaskId),
+          gid: e.asanaTaskId,
+          ...(e.integrationId ? { integrationId: e.integrationId } : {}),
+        }))
+      );
       const { startMs, endMs } = intervalFor(
         eventId,
         first.scheduledDate,
@@ -204,6 +219,9 @@ export async function POST(request: NextRequest) {
       if (!t.googleEventId || !t.dueTime || !inWeek(t.dueDate)) continue;
       appEventIds.add(t.googleEventId);
       taskIdsByEvent.set(t.googleEventId, [t.id]);
+      carryTasksByEvent.set(t.googleEventId, [
+        { id: t.id, title: t.title, done: !!t.completed, adhocId: t.id },
+      ]);
       const category =
         classifyBlockCategory(adHocTypeSignals(t.taskType, customTypes), ctx.quotas) ?? 'Scheduled';
       const duration = t.duration ?? 30;
@@ -425,10 +443,53 @@ export async function POST(request: NextRequest) {
         taskIds: taskIdsByEvent.get(b.googleEventId) ?? [],
       }));
 
+    // --- End-of-week review ---------------------------------------------
+    // On the last working day (and the weekend after it) there is no week left
+    // to reschedule into, so unfinished task-backed work is offered as a single
+    // carry-over decision per incomplete task instead. Uses the LOGICAL day so
+    // the small hours before rollover still belong to the previous day.
+    const endOfWeek = isEndOfWeekReview(logicalDayStart, ctx.config.scheduling?.workingDays);
+    // Missed + unplaceable blocks that are task-backed. Rituals and meeting-prep
+    // blocks have no entry in carryTasksByEvent, so they are excluded by
+    // construction — next week's plan recreates rituals, and prep belongs to its
+    // meeting.
+    const carryBlocks: ReplanCarryBlock[] = endOfWeek
+      ? [
+          ...result.moves
+            .filter(m => m.reason === 'missed')
+            .map(m => ({
+              googleEventId: m.googleEventId,
+              googleIntegrationId: m.googleIntegrationId,
+              category: m.category,
+              titles: m.titles,
+              date: m.oldDate,
+              start: m.oldStart,
+              durationMinutes: m.durationMinutes,
+              reason: 'missed' as const,
+              tasks: carryTasksByEvent.get(m.googleEventId) ?? [],
+            })),
+          ...unplaceable.map(u => ({
+            googleEventId: u.googleEventId,
+            googleIntegrationId: u.googleIntegrationId,
+            category: u.category,
+            titles: u.titles,
+            date: u.oldDate,
+            start: u.oldStart,
+            durationMinutes: u.durationMinutes,
+            reason: 'unplaceable' as const,
+            tasks: carryTasksByEvent.get(u.googleEventId) ?? [],
+          })),
+        ].filter(b => b.tasks.some(t => !t.done))
+      : [];
+
     return NextResponse.json({
       weekStart: ctx.weekStartStr,
       weekEnd: ctx.weekEndStr,
       ...result,
+      endOfWeek,
+      // Only present in end-of-week mode; the rest of the payload is byte-for-byte
+      // what a mid-week analyze has always returned.
+      ...(endOfWeek ? { carryBlocks } : {}),
       // Ritual additions (from planReplan) plus prep additions for early-next-week
       // meetings. Both are ProposedBlocks; the confirm route creates each by kind.
       additions: [...result.additions, ...prepAdditions],

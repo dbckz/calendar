@@ -1,10 +1,11 @@
 'use client';
 
-import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell, BookOpen } from 'lucide-react';
+import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell, BookOpen, CornerUpRight } from 'lucide-react';
 
 import type { ReplanAnalyzeResponse } from '@/lib/api';
 import { categoryColor, formatDuration, slotLabel, titleLabel } from './replanFormat';
-import type { MoveMode, StaleMode, UnplaceableMode, ReplanActions } from './useReplanActions';
+import type { CarryMode, MoveMode, StaleMode, UnplaceableMode, ReplanActions } from './useReplanActions';
+import { carryTaskKey } from './useReplanActions';
 
 // Shared render of the replan "plan view": moves / stale / missing rituals /
 // break deletions / couldn't-fit / unchanged. State + confirm live in the
@@ -32,6 +33,10 @@ export function ReplanSections({
     deletionIncluded,
     showUnchanged,
     setShowUnchanged,
+    carryBlocks,
+    carriedEventIds,
+    carryMode,
+    setCarryMode,
     toggle,
     toggleAddition,
     toggleDeletion,
@@ -43,6 +48,10 @@ export function ReplanSections({
   const additions = data.additions ?? [];
   const deletions = data.deletions ?? [];
   const tomorrowBlocks = data.tomorrowBlocks ?? [];
+  // End-of-week mode: missed + couldn't-fit task blocks move into the carry-over
+  // section, so they are filtered out of their usual sections here.
+  const moves = data.moves.filter(m => !carriedEventIds.has(m.googleEventId));
+  const unplaceable = data.unplaceable.filter(u => !carriedEventIds.has(u.googleEventId));
 
   // Additions come in two flavours: missing rituals and prep blocks for
   // early-next-week meetings. Same toggle/result plumbing, separate sections.
@@ -105,13 +114,13 @@ export function ReplanSections({
   return (
     <div className="space-y-6">
       {/* Moving */}
-      {data.moves.length > 0 && (
+      {moves.length > 0 && (
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
-            Moving ({data.moves.length})
+            Moving ({moves.length})
           </h3>
           <ul className="space-y-2">
-            {data.moves.map(m => {
+            {moves.map(m => {
               const color = categoryColor(m.category);
               const result = results[m.googleEventId];
               const isIn = included.has(m.googleEventId);
@@ -338,14 +347,112 @@ export function ReplanSections({
         </div>
       )}
 
+      {/* End of week — carry the leftovers into next week's plan */}
+      {carryBlocks.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 flex items-center gap-1.5">
+            <CornerUpRight className="w-3.5 h-3.5 text-orange-500" />
+            End of week ({carryBlocks.length})
+          </h3>
+          <p className="mb-2 text-xs text-gray-400">
+            No week left to reschedule into. Recurring rituals are scheduled fresh next week.
+          </p>
+          <ul className="space-y-2">
+            {carryBlocks.map(b => {
+              const color = categoryColor(b.category);
+              const result = results[b.googleEventId];
+              const grouped = b.tasks.length > 1;
+              const blockMode = carryMode[b.googleEventId] ?? 'carry';
+              return (
+                <li
+                  key={b.googleEventId}
+                  className="flex items-start gap-3 rounded-lg border border-gray-200 bg-white p-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
+                        {b.category}
+                      </span>
+                      <span className="text-sm font-medium text-gray-800 truncate">
+                        {titleLabel(b.titles)}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      <span className="line-through">{slotLabel(b.date, b.start)}</span>
+                      <span className="ml-1.5 text-gray-400">
+                        {b.reason === 'missed' ? 'missed' : 'no slot left this week'}
+                      </span>
+                    </div>
+                    {/* Single-task block: one choice for the whole block. */}
+                    {!grouped && !hasResults && (
+                      <CarryOptions
+                        value={blockMode}
+                        onChange={v => setCarryMode(prev => ({ ...prev, [b.googleEventId]: v }))}
+                      />
+                    )}
+                    {/* Grouped block: the decision belongs to each member task.
+                        Completed members stay checked and inert, as in step 1. */}
+                    {grouped && (
+                      <ul className="mt-2 space-y-1.5 pl-1">
+                        {b.tasks.map(t => {
+                          const key = carryTaskKey(b.googleEventId, t.id);
+                          const mode = carryMode[key] ?? 'carry';
+                          return (
+                            <li key={t.id} className="flex flex-wrap items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={t.done}
+                                disabled
+                                readOnly
+                                className="w-4 h-4 rounded border-gray-300 text-emerald-500 disabled:opacity-60"
+                              />
+                              <span
+                                className={`text-sm truncate flex-1 min-w-0 ${
+                                  t.done ? 'text-gray-400 line-through' : 'text-gray-700'
+                                }`}
+                              >
+                                {t.title}
+                              </span>
+                              {!t.done && !hasResults && (
+                                <CarryOptions
+                                  className="mt-0"
+                                  value={mode}
+                                  onChange={v => setCarryMode(prev => ({ ...prev, [key]: v }))}
+                                />
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                  {result &&
+                    (result.success ? (
+                      <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle
+                        className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+                        aria-label={result.error}
+                      />
+                    ))}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
       {/* Couldn't fit — choose what to do with each block */}
-      {data.unplaceable.length > 0 && (
+      {unplaceable.length > 0 && (
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">
-            Couldn&apos;t fit ({data.unplaceable.length})
+            Couldn&apos;t fit ({unplaceable.length})
           </h3>
           <ul className="space-y-2">
-            {data.unplaceable.map(u => {
+            {unplaceable.map(u => {
               const color = categoryColor(u.category);
               const result = results[u.googleEventId];
               const mode = unplaceableMode[u.googleEventId] ?? 'defer';
@@ -360,12 +467,18 @@ export function ReplanSections({
               const chosenVictim = tomorrowBlocks.find(
                 t => t.googleEventId === unplaceableVictim[u.googleEventId]
               );
-              const options: Array<{ v: UnplaceableMode; label: string }> = [
-                { v: 'defer', label: 'Defer to next week' },
-                { v: 'leave', label: 'Leave unscheduled' },
-                ...(hasOverflow ? [{ v: 'overflow' as UnplaceableMode, label: 'Try evening overflow' }] : []),
-                ...(canPrioritise ? [{ v: 'prioritise' as UnplaceableMode, label: 'Prioritise tomorrow' }] : []),
-              ];
+              // End-of-week: task-backed rows have moved to the carry-over
+              // section, so anything left here (meeting prep) has no week to be
+              // rescheduled or bumped into — leaving it unscheduled is the only
+              // sensible action.
+              const options: Array<{ v: UnplaceableMode; label: string }> = data.endOfWeek
+                ? [{ v: 'leave', label: 'Leave unscheduled' }]
+                : [
+                    { v: 'defer', label: 'Defer to next week' },
+                    { v: 'leave', label: 'Leave unscheduled' },
+                    ...(hasOverflow ? [{ v: 'overflow' as UnplaceableMode, label: 'Try evening overflow' }] : []),
+                    ...(canPrioritise ? [{ v: 'prioritise' as UnplaceableMode, label: 'Prioritise tomorrow' }] : []),
+                  ];
               return (
                 <li
                   key={u.googleEventId}
@@ -520,6 +633,46 @@ export function ReplanSections({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// The end-of-week choice for one block or one member task: carry it into next
+// week's plan (default), drop it back to the backlog unbadged, or mark it done.
+const CARRY_OPTIONS: Array<{ v: CarryMode; label: string }> = [
+  { v: 'carry', label: 'Carry over to next week' },
+  { v: 'backlog', label: 'Back to backlog' },
+  { v: 'done', label: 'Mark done' },
+];
+
+function CarryOptions({
+  value,
+  onChange,
+  className = 'mt-2',
+}: {
+  value: CarryMode;
+  onChange: (v: CarryMode) => void;
+  className?: string;
+}) {
+  return (
+    <div
+      className={`${className} inline-flex rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium flex-shrink-0`}
+    >
+      {CARRY_OPTIONS.map(opt => (
+        <button
+          key={opt.v}
+          onClick={() => onChange(opt.v)}
+          className={`px-2.5 py-1 transition-colors ${
+            value === opt.v
+              ? opt.v === 'done'
+                ? 'bg-emerald-500 text-white'
+                : 'bg-orange-500 text-white'
+              : 'bg-white text-gray-600 hover:bg-gray-50'
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
     </div>
   );
 }

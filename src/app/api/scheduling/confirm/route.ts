@@ -14,6 +14,7 @@ import {
   updateAdHocTask,
   setGoogleEventAttribution,
   addPrepBlock,
+  removeCarryOvers,
 } from '@/lib/user-data-storage';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import type { GoogleCalendarCredentials, GoogleIntegration } from '@/types';
@@ -171,6 +172,10 @@ export async function POST(request: NextRequest) {
     };
 
     const results: ConfirmResult[] = [];
+    // Task ids (gid / ad-hoc id) actually placed on the calendar by this confirm.
+    // A carried-over task that now has a slot is no longer carried over, so its
+    // marker is dropped once the run finishes.
+    const scheduledTaskIds: string[] = [];
 
     for (const proposal of proposals) {
       try {
@@ -247,6 +252,7 @@ export async function POST(request: NextRequest) {
           // Record each listed task as scheduled to the shared container event, so
           // they show as scheduled and drop out of future candidate pools.
           for (const t of proposal.tasks!) {
+            if (t.gid || t.adhocId) scheduledTaskIds.push((t.gid ?? t.adhocId)!);
             if (t.gid) {
               await scheduleAsanaTask(
                 t.gid,
@@ -273,6 +279,7 @@ export async function POST(request: NextRequest) {
           }
         } else if (!isReserved && proposal.task) {
           const { gid, adhocId, integrationId } = proposal.task;
+          if (gid || adhocId) scheduledTaskIds.push((gid ?? adhocId)!);
           if (gid) {
             await scheduleAsanaTask(
               gid,
@@ -308,6 +315,17 @@ export async function POST(request: NextRequest) {
           success: false,
           error: err instanceof Error ? err.message : 'Failed to create event',
         });
+      }
+    }
+
+    // Scheduled work is no longer "carried over" — drop the markers so next
+    // week's wizard doesn't badge a task that now has a slot. Best-effort: a
+    // failure here must not fail an otherwise successful confirm.
+    if (scheduledTaskIds.length > 0) {
+      try {
+        await removeCarryOvers(scheduledTaskIds);
+      } catch (err) {
+        console.error('[Scheduling Confirm] Failed to clear carry-over markers:', err);
       }
     }
 
