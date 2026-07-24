@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream, type WriteStream } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from './config';
 import type { ContainerReport } from './types';
@@ -161,6 +161,11 @@ interface RunClaudeTaskInput {
   claudeBin?: string;
   model?: string;
   cwd?: string;
+  // Local MCP servers to make available to the agent. When set, the config is
+  // written to `mcpConfigPath` and passed via `--mcp-config` (merging with the
+  // user's existing connectors — no --strict-mcp-config).
+  mcpServers?: Record<string, unknown>;
+  mcpConfigPath?: string;
 }
 
 // Run a headless `claude -p` task using the streaming JSONL protocol. Every
@@ -176,9 +181,20 @@ export async function runClaudeTask({
   claudeBin = config.claudeBin,
   model = config.claudeModel,
   cwd = config.agentWorkspace,
+  mcpServers,
+  mcpConfigPath,
 }: RunClaudeTaskInput): Promise<RunClaudeTaskResult> {
   // Land any Write output in a dedicated scratch workspace, never the repo.
   await mkdir(cwd, { recursive: true });
+
+  // Write the local MCP server config and pass it to the CLI. Merges with the
+  // user's configured connectors (no --strict-mcp-config).
+  const mcpArgs: string[] = [];
+  if (mcpServers && mcpConfigPath && Object.keys(mcpServers).length > 0) {
+    await mkdir(path.dirname(mcpConfigPath), { recursive: true });
+    await writeFile(mcpConfigPath, JSON.stringify({ mcpServers }, null, 2), 'utf8');
+    mcpArgs.push('--mcp-config', mcpConfigPath);
+  }
 
   let traceStream: WriteStream | null = null;
   if (traceFile) {
@@ -193,6 +209,7 @@ export async function runClaudeTask({
     '--output-format', 'stream-json',
     '--verbose',
     '--allowedTools', allowedTools,
+    ...mcpArgs,
     ...(permissionMode ? ['--permission-mode', permissionMode] : []),
     ...(disallowedTools ? ['--disallowedTools', disallowedTools] : []),
   ];

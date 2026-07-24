@@ -31,6 +31,11 @@ const DEFAULT_ALLOWED_TOOLS = [
   'mcp__claude_ai_HubSpot__*',
   'mcp__claude_ai_Google_Drive__*',
   'mcp__claude_ai_Notion__*',
+  // Local calendar-asana MCP server (workers/mcp/asana-mcp-server.ts): lets the
+  // agent read/comment on Asana tasks in EITHER the DBC or OM workspace via the
+  // app's own stored tokens, covering the gap where the claude.ai Asana
+  // connector is OM-only. Must use the mcp__<server>__* glob (see note above).
+  'mcp__calendar-asana__*',
 ].join(',');
 
 function resolvePlannerBaseUrl(): string {
@@ -80,6 +85,24 @@ export const config = {
   agentWorkspace: path.join(DATA_DIR, 'agent-workspace'),
   // Per-run stream-json trace files (mirrors src/lib/data-paths.ts AGENT_RUNS_DIR).
   agentRunsDir: path.join(DATA_DIR, 'agent-runs'),
+  // Local calendar-asana MCP server config passed to `claude -p` via
+  // --mcp-config. Written to this path at run time (see claude-runner.ts) then
+  // referenced by the CLI; it MERGES with the user's existing connectors (no
+  // --strict-mcp-config, so the claude.ai connectors above stay available). The
+  // server is spawned with cwd=repoRoot so its resolvePlannerBaseUrl can read
+  // .data/current-port. The server name MUST be `calendar-asana` to match the
+  // mcp__calendar-asana__* allowlist entry.
+  mcpConfigPath: path.join(DATA_DIR, 'orchestrator-mcp.json'),
+  mcpServers: {
+    'calendar-asana': {
+      command: 'npx',
+      args: ['tsx', path.join(repoRoot, 'workers', 'mcp', 'asana-mcp-server.ts')],
+      cwd: repoRoot,
+      ...(process.env.PLANNER_BASE_URL
+        ? { env: { PLANNER_BASE_URL: process.env.PLANNER_BASE_URL } }
+        : {}),
+    },
+  } as Record<string, unknown>,
   // Fallback pacing budget when the app's workflow-config is unreachable. The
   // pacer prefers the live workflow-config.agentPacing values.
   defaultMaxRunsPerHour: Number(process.env.AGENT_MAX_RUNS_PER_HOUR || 2),

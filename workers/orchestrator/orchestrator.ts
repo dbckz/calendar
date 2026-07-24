@@ -81,6 +81,8 @@ export async function runTask(entry: DelegationQueueEntry): Promise<RunResult> {
       timeoutSeconds: config.claudeTimeoutSeconds,
       allowedTools: config.claudeAllowedTools,
       traceFile,
+      mcpServers: config.mcpServers,
+      mcpConfigPath: config.mcpConfigPath,
     });
     report = normalizeReport(run.report);
     sessionId = run.sessionId;

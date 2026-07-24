@@ -38,6 +38,10 @@ export function buildBriefPrompt({ task, stories, brief }: BriefPromptInput): st
 
   return [
     ...lead,
+    'To read or comment on an Asana task in EITHER Dave\'s DBC or OM workspace, '
+      + 'prefer the calendar-asana MCP tools (get_task, post_comment) — they use '
+      + 'the app\'s own stored integrations and work in both workspaces, unlike '
+      + 'the Asana connector which only covers OM.',
     'Return ONLY valid JSON with this schema:',
     '{"status":"successful|failed","summary":"string","outputs":["string"],"next":"string"}',
     'outputs should be a short list of concrete review items such as URLs, artefacts produced, or key caveats.',

@@ -249,6 +249,49 @@ export async function getTaskByName(
   return data.data;
 }
 
+// Fetch a single task by gid with a token. Returns the raw Asana task object,
+// or null when this token cannot see the task (403 forbidden / 404 not found) —
+// the signal callers use to probe the next integration when resolving which
+// workspace owns a gid. Any other non-OK status throws (a genuine error we want
+// surfaced rather than silently treated as "not mine").
+export async function getTaskById(
+  accessToken: string,
+  taskGid: string
+): Promise<Record<string, unknown> | null> {
+  const optFields = [
+    'name',
+    'notes',
+    'completed',
+    'due_on',
+    'due_at',
+    'permalink_url',
+    'assignee.name',
+    'projects.name',
+    'workspace.name',
+  ].join(',');
+
+  const response = await fetch(
+    `${ASANA_API_BASE}/tasks/${taskGid}?opt_fields=${optFields}`,
+    {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    }
+  );
+
+  if (response.status === 403 || response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Failed to fetch task ${taskGid}: ${response.status} - ${errorBody.substring(0, 200)}`);
+  }
+
+  const data = await response.json();
+  return data.data;
+}
+
 export async function getIncompleteTasks(
   accessToken: string,
   workspaceId: string

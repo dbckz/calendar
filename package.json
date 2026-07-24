@@ -13,6 +13,7 @@
     "orchestrator:run": "tsx workers/orchestrator/run.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
     "better-sqlite3": "^13.0.1",
     "date-fns": "^4.1.0",
     "googleapis": "^169.0.0",
