@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useState } from 'react';
-import { CalendarClock, Bot, Loader2, Archive, RefreshCw, ClipboardCheck } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CalendarClock, Bot, Loader2, Archive, RefreshCw, ClipboardCheck, Search } from 'lucide-react';
 
 import { CalendarEvent, DelegationQueueEntry, TaskMetadata } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
@@ -16,6 +16,7 @@ import { StaleTasksModal } from './StaleTasksModal';
 import { PlanWeekModal } from './PlanWeekModal';
 import { ReplanWeekModal } from './ReplanWeekModal';
 import { DailyReviewModal } from './DailyReviewModal';
+import { TaskSearchModal } from './TaskSearchModal';
 
 interface Integration {
   id: string;
@@ -87,6 +88,29 @@ export function DashboardContent({
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [showReplanModal, setShowReplanModal] = useState(false);
   const [showDailyReviewModal, setShowDailyReviewModal] = useState(false);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+
+  // Incomplete Asana tasks for the Cmd/Ctrl+F search palette.
+  const searchTasks = useMemo(() => asanaTasks.filter(t => !t.completed), [asanaTasks]);
+
+  // Cmd/Ctrl+F opens the task search palette (preventing the browser's native
+  // find). Suppressed while the stale-triage modal or a task dialog is open so
+  // we don't stack over their own inputs. Pressing it again while search is
+  // open keeps it open and refocuses the input.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'f' || !(e.metaKey || e.ctrlKey)) return;
+      if (staleModalOpen || taskDialogOpen) return;
+      e.preventDefault();
+      if (showSearchModal) {
+        document.querySelector<HTMLInputElement>('input[aria-label="Search tasks"]')?.focus();
+      } else {
+        setShowSearchModal(true);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [staleModalOpen, taskDialogOpen, showSearchModal]);
 
   const [isReassessing, setIsReassessing] = useState(false);
   const [reassessNote, setReassessNote] = useState<string | null>(null);
@@ -123,6 +147,13 @@ export function DashboardContent({
         <h1 className="text-xl font-semibold text-gray-900">Command Center</h1>
         <div className="flex items-center gap-3">
           {reassessNote && <span className="text-xs text-gray-500 hidden lg:inline">{reassessNote}</span>}
+          <button
+            onClick={() => setShowSearchModal(true)}
+            className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+            title="Search all tasks (⌘F)"
+          >
+            <Search className="w-4 h-4" /> Search
+          </button>
           <button
             onClick={() => onStaleModalOpenChange?.(true)}
             className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-50 transition-colors"
@@ -212,6 +243,14 @@ export function DashboardContent({
           </div>
         </div>
       </div>
+
+      {showSearchModal && (
+        <TaskSearchModal
+          tasks={searchTasks}
+          onClose={() => setShowSearchModal(false)}
+          onOpenTask={onOpenTask}
+        />
+      )}
 
       {staleModalOpen && (
         <StaleTasksModal
