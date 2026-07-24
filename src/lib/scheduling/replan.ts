@@ -158,6 +158,63 @@ export interface ReplanCarryBlock {
   durationMinutes: number;
   reason: 'missed' | 'unplaceable';
   tasks: ReplanCarryTask[];
+  // Every block folded into this card, primary first. A grouped category places
+  // SEVERAL blocks a week over one shared agenda (e.g. two Writing blocks on
+  // Friday), so its siblings merge into a single card — but each underlying
+  // block still needs its planning override cleared / marked done.
+  mergedEventIds: string[];
+}
+
+// Collapse the raw per-block carry list into the cards the review shows.
+//
+//  * Sibling blocks of the same GROUPED category (several blocks sharing one
+//    agenda) merge into one card: the union of their member tasks.
+//  * A task is listed once overall — first card wins — so a task that appears in
+//    two blocks (or even two categories) never asks twice.
+//  * A card with nothing incomplete left is dropped: there is nothing to decide.
+//
+// Single-task blocks are unaffected: they never merge, and keep their own card.
+export function mergeCarryBlocks(blocks: ReplanCarryBlock[]): ReplanCarryBlock[] {
+  // Identity is the task id where we have one; a legacy record with neither
+  // falls back to its (normalised) title so duplicates still collapse.
+  const taskKey = (t: ReplanCarryTask) =>
+    t.gid || t.adhocId || t.id || `title:${t.title.trim().toLowerCase()}`;
+
+  const seen = new Set<string>();
+  const cards: ReplanCarryBlock[] = [];
+  const groupedCardByCategory = new Map<string, ReplanCarryBlock>();
+
+  for (const block of blocks) {
+    const isGrouped = block.tasks.length > 1;
+    const tasks: ReplanCarryTask[] = [];
+    for (const t of block.tasks) {
+      const key = taskKey(t);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tasks.push(t);
+    }
+
+    const mergeInto = isGrouped ? groupedCardByCategory.get(block.category) : undefined;
+    if (mergeInto) {
+      mergeInto.tasks.push(...tasks);
+      mergeInto.mergedEventIds.push(block.googleEventId);
+      for (const title of block.titles) {
+        if (!mergeInto.titles.includes(title)) mergeInto.titles.push(title);
+      }
+      continue;
+    }
+
+    const card: ReplanCarryBlock = {
+      ...block,
+      titles: [...block.titles],
+      tasks,
+      mergedEventIds: [block.googleEventId],
+    };
+    cards.push(card);
+    if (isGrouped) groupedCardByCategory.set(block.category, card);
+  }
+
+  return cards.filter(c => c.tasks.some(t => !t.done));
 }
 
 export interface ReplanInput {

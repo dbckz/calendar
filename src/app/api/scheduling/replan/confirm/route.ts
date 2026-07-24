@@ -99,8 +99,13 @@ interface DeferResult {
 // plan-week wizard badges it — and defers it to next Monday so a weekend replan
 // leaves it alone. The `quiet` form is "back to backlog": no marker, no deferral,
 // just the same cleanup the 'leave unscheduled' path does.
+// Carry decisions are applied PER TASK ID — the block ids are only used to
+// reject rituals/prep and to clear planning overrides — so a merged card (a
+// grouped category's sibling blocks folded into one) can send whichever of its
+// block ids it likes without the task ids having to belong to any one of them.
 interface CarryInput {
-  blockId?: string; // the block's Google event id
+  blockId?: string; // the card's primary Google event id (echoed back in the result)
+  blockIds: string[]; // every block behind the card, primary included
   taskIds: string[];
   quiet: boolean;
 }
@@ -214,14 +219,21 @@ export async function POST(request: NextRequest) {
     const carryInputs: CarryInput[] = Array.isArray(body?.carry)
       ? body.carry
           .filter((c: unknown): c is Record<string, unknown> => !!c && typeof c === 'object')
-          .map((c: Record<string, unknown>) => ({
-            blockId: typeof c.blockId === 'string' ? c.blockId : undefined,
-            taskIds: Array.isArray(c.taskIds)
-              ? c.taskIds.filter((t: unknown): t is string => typeof t === 'string')
-              : [],
-            quiet: c.quiet === true,
-          }))
-          .filter((c: CarryInput) => c.taskIds.length > 0 || c.blockId)
+          .map((c: Record<string, unknown>) => {
+            const blockId = typeof c.blockId === 'string' ? c.blockId : undefined;
+            const extra = Array.isArray(c.blockIds)
+              ? c.blockIds.filter((b: unknown): b is string => typeof b === 'string')
+              : [];
+            return {
+              blockId,
+              blockIds: [...new Set([...(blockId ? [blockId] : []), ...extra])],
+              taskIds: Array.isArray(c.taskIds)
+                ? c.taskIds.filter((t: unknown): t is string => typeof t === 'string')
+                : [],
+              quiet: c.quiet === true,
+            };
+          })
+          .filter((c: CarryInput) => c.taskIds.length > 0 || c.blockIds.length > 0)
       : [];
     // "Prioritise tomorrow" victims: displace each so its tomorrow slot frees up
     // for the prioritised block (which comes through as a normal move).
@@ -525,8 +537,8 @@ export async function POST(request: NextRequest) {
         try {
           // Rituals and meeting prep are never carried: next week's plan creates
           // rituals fresh, and a prep block belongs to its own meeting.
-          const isRitual = !!c.blockId && ritualBlocks.some(r => r.googleEventId === c.blockId);
-          const isPrep = !!c.blockId && prepBlocks.some(p => p.googleEventId === c.blockId);
+          const isRitual = c.blockIds.some(id => ritualBlocks.some(r => r.googleEventId === id));
+          const isPrep = c.blockIds.some(id => prepBlocks.some(p => p.googleEventId === id));
           if (isRitual || isPrep) {
             carryResults.push({
               blockId: c.blockId,
@@ -544,10 +556,11 @@ export async function POST(request: NextRequest) {
               await setTaskDeferrals(c.taskIds.map(taskId => ({ taskId, until })));
             }
           }
-          if (c.blockId) await removeBlockDoneOverride(c.blockId);
+          // Clear the planning override on every block behind the card.
+          for (const id of c.blockIds) await removeBlockDoneOverride(id);
           carryResults.push({ blockId: c.blockId, taskIds: c.taskIds, success: true });
         } catch (err) {
-          console.error(`[Replan Confirm] Failed to carry over ${c.blockId ?? c.taskIds.join(',')}:`, err);
+          console.error(`[Replan Confirm] Failed to carry over ${c.blockIds.join(',') || c.taskIds.join(',')}:`, err);
           carryResults.push({
             blockId: c.blockId,
             taskIds: c.taskIds,

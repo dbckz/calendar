@@ -4,7 +4,7 @@ import { format } from 'date-fns';
 import { classifyBlockCategory } from '@/lib/capacity';
 import { adHocTypeSignals, gatherWeekContext } from '@/lib/scheduling/gather';
 import { eventsToBusyIntervals } from '@/lib/scheduling/free-busy';
-import { planReplan, type ReplanBlock, type ReplanCarryBlock, type ReplanCarryTask, type ReplanReviewBlock } from '@/lib/scheduling/replan';
+import { mergeCarryBlocks, planReplan, type ReplanBlock, type ReplanCarryBlock, type ReplanCarryTask, type ReplanReviewBlock } from '@/lib/scheduling/replan';
 import { isEndOfWeekReview } from '@/lib/scheduling/end-of-week';
 import { proposePrepBlocks, type PrepMeeting } from '@/lib/scheduling/prep';
 import { resolvePrepCandidates } from '@/lib/scheduling/prep-candidates';
@@ -452,8 +452,10 @@ export async function POST(request: NextRequest) {
     // Missed + unplaceable blocks that are task-backed. Rituals and meeting-prep
     // blocks have no entry in carryTasksByEvent, so they are excluded by
     // construction — next week's plan recreates rituals, and prep belongs to its
-    // meeting.
-    const carryBlocks: ReplanCarryBlock[] = endOfWeek
+    // meeting. mergeCarryBlocks then folds a grouped category's sibling blocks
+    // (several blocks over one shared agenda) into a single card and lists each
+    // task exactly once, so the review never asks about the same task twice.
+    const carryCandidates: Array<Omit<ReplanCarryBlock, 'mergedEventIds'>> = endOfWeek
       ? [
           ...result.moves
             .filter(m => m.reason === 'missed')
@@ -479,8 +481,11 @@ export async function POST(request: NextRequest) {
             reason: 'unplaceable' as const,
             tasks: carryTasksByEvent.get(u.googleEventId) ?? [],
           })),
-        ].filter(b => b.tasks.some(t => !t.done))
+        ]
       : [];
+    const carryBlocks: ReplanCarryBlock[] = mergeCarryBlocks(
+      carryCandidates.map(b => ({ ...b, mergedEventIds: [] }))
+    );
 
     return NextResponse.json({
       weekStart: ctx.weekStartStr,

@@ -85,8 +85,11 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
   // End-of-week mode: these blocks replace their rows in the moves / couldn't-fit
   // sections with a single carry-over decision each.
   const carryBlocks = useMemo(() => (data?.endOfWeek ? data.carryBlocks ?? [] : []), [data]);
+  // Every block folded into a carry card, not just each card's primary: a
+  // grouped category's sibling blocks all belong to one card, and none of them
+  // should still appear in the moves / couldn't-fit sections.
   const carriedEventIds = useMemo(
-    () => new Set(carryBlocks.map(b => b.googleEventId)),
+    () => new Set(carryBlocks.flatMap(b => b.mergedEventIds ?? [b.googleEventId])),
     [carryBlocks]
   );
   const additions = useMemo(() => data?.additions ?? [], [data]);
@@ -102,7 +105,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     const dismissIds: string[] = [];
     const defer: Array<{ taskIds: string[]; googleEventId?: string }> = [];
     const leaveUnscheduled: string[] = [];
-    const carry: Array<{ blockId?: string; taskIds: string[]; quiet?: boolean }> = [];
+    const carry: Array<{ blockId?: string; blockIds?: string[]; taskIds: string[]; quiet?: boolean }> = [];
     const completeAsana: Array<{ gid: string; integrationId: string }> = [];
     const displace: Array<{
       googleEventId: string;
@@ -192,14 +195,19 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
         const carryIds = incomplete.filter(t => modeFor(t.id) === 'carry').map(t => t.id);
         const backlogIds = incomplete.filter(t => modeFor(t.id) === 'backlog').map(t => t.id);
         const doneTasks = incomplete.filter(t => modeFor(t.id) === 'done');
-        if (carryIds.length > 0) carry.push({ blockId: b.googleEventId, taskIds: carryIds });
+        const blockIds = b.mergedEventIds ?? [b.googleEventId];
+        if (carryIds.length > 0)
+          carry.push({ blockId: b.googleEventId, blockIds, taskIds: carryIds });
         if (backlogIds.length > 0)
-          carry.push({ blockId: b.googleEventId, taskIds: backlogIds, quiet: true });
+          carry.push({ blockId: b.googleEventId, blockIds, taskIds: backlogIds, quiet: true });
         for (const t of doneTasks) {
           if (t.gid && t.integrationId) completeAsana.push({ gid: t.gid, integrationId: t.integrationId });
         }
-        // Nothing incomplete left once these are done → the block itself reads done.
-        if (doneTasks.length === incomplete.length) doneIds.push(b.googleEventId);
+        // Nothing incomplete left once these are done → every block behind the
+        // card reads done (a merged card covers several sibling blocks).
+        if (doneTasks.length === incomplete.length) {
+          doneIds.push(...(b.mergedEventIds ?? [b.googleEventId]));
+        }
       }
     }
     const additionBlocks = additions.filter(a => additionIncluded.has(a.id));

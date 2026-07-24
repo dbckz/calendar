@@ -141,6 +141,49 @@ describe('replan confirm — end-of-week carry-over', () => {
     expect(removeCarryOvers).toHaveBeenCalledWith(['g2']);
   });
 
+  it('carries a task from a MERGED card whose tasks span several sibling blocks', async () => {
+    // The card's tasks come from two blocks; the payload sends the primary block
+    // id plus every merged one. Carry is applied per task id, so it must not
+    // matter which block a given task actually belongs to.
+    const out = await confirm({
+      moves: [],
+      carry: [
+        {
+          blockId: 'evt-group',
+          blockIds: ['evt-group', 'evt-group-2'],
+          taskIds: ['g-from-block-1', 'g-from-block-2'],
+        },
+      ],
+    });
+
+    expect((setCarryOvers as jest.Mock).mock.calls[0][0].map((e: { taskId: string }) => e.taskId)).toEqual([
+      'g-from-block-1',
+      'g-from-block-2',
+    ]);
+    expect((setTaskDeferrals as jest.Mock).mock.calls[0][0].map((e: { taskId: string }) => e.taskId)).toEqual([
+      'g-from-block-1',
+      'g-from-block-2',
+    ]);
+    // Every block behind the card has its planning override cleared.
+    expect(removeBlockDoneOverride).toHaveBeenCalledWith('evt-group');
+    expect(removeBlockDoneOverride).toHaveBeenCalledWith('evt-group-2');
+    expect(out.carryResults).toEqual([
+      { blockId: 'evt-group', taskIds: ['g-from-block-1', 'g-from-block-2'], success: true },
+    ]);
+  });
+
+  it('refuses a merged card when ANY block behind it is a ritual or prep block', async () => {
+    (getRitualBlocks as jest.Mock).mockResolvedValue([{ id: 'r1', googleEventId: 'evt-ritual' }]);
+
+    const out = await confirm({
+      moves: [],
+      carry: [{ blockId: 'evt-group', blockIds: ['evt-group', 'evt-ritual'], taskIds: ['g1'] }],
+    });
+
+    expect(setCarryOvers).not.toHaveBeenCalled();
+    expect(out.carryResults[0].success).toBe(false);
+  });
+
   it('refuses to carry a ritual or a meeting-prep block', async () => {
     (getRitualBlocks as jest.Mock).mockResolvedValue([{ id: 'r1', googleEventId: 'evt-ritual' }]);
     (getPrepBlocks as jest.Mock).mockResolvedValue([{ id: 'p1', googleEventId: 'evt-prep' }]);

@@ -1171,7 +1171,7 @@ export const api = {
     // End-of-week carry-overs: each entry marks a block's chosen tasks as carried
     // into next week's plan (and defers them past the weekend), or — with
     // quiet:true — quietly returns them to the backlog with no badge.
-    carry?: Array<{ blockId?: string; taskIds: string[]; quiet?: boolean }>
+    carry?: Array<{ blockId?: string; blockIds?: string[]; taskIds: string[]; quiet?: boolean }>
   ): Promise<{
     results: ReplanConfirmResult[];
     doneResults: ReplanConfirmResult[];

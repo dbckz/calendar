@@ -81,7 +81,34 @@ const GROUPED = [
   },
 ];
 
-function setContext(now: Date) {
+// A second Writing block later the same week over an OVERLAPPING agenda: the
+// planner places one grouped block per quota slot, all sharing the same tasks.
+const SIBLING = [
+  {
+    id: 's3',
+    asanaTaskId: 'g-open',
+    integrationId: 'ai1',
+    scheduledDate: '2026-07-16',
+    scheduledTime: '12:00',
+    duration: 60,
+    googleEventId: 'evt-group-2',
+    googleIntegrationId: 'gi1',
+    taskName: 'Draft the brief',
+  },
+  {
+    id: 's4',
+    asanaTaskId: 'g-extra',
+    integrationId: 'ai1',
+    scheduledDate: '2026-07-16',
+    scheduledTime: '12:00',
+    duration: 60,
+    googleEventId: 'evt-group-2',
+    googleIntegrationId: 'gi1',
+    taskName: 'Outline the deck',
+  },
+];
+
+function setContext(now: Date, extraCandidates: Array<{ gid: string; name: string }> = []) {
   mockGather.mockResolvedValue({
     now,
     weekStart: WEEK_START,
@@ -92,6 +119,7 @@ function setContext(now: Date) {
     // Only g-open is still incomplete in Asana.
     asanaCandidates: [
       { task: { gid: 'g-open', name: 'Draft the brief' }, integrationId: 'ai1', typeValue: null },
+      ...extraCandidates.map(t => ({ task: t, integrationId: 'ai1', typeValue: null })),
     ],
     asanaNameByGid: new Map([['g-done', 'Send the invites']]),
     quotas: [],
@@ -160,6 +188,19 @@ describe('replan analyze — end-of-week mode', () => {
     const out = await analyze();
 
     expect(out.carryBlocks!.map(b => b.googleEventId)).toEqual(['evt-group']);
+  });
+
+  it('merges sibling blocks of a grouped category into one card with unique tasks', async () => {
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([...GROUPED, ...SIBLING]);
+    setContext(FRIDAY_EVENING, [{ gid: 'g-extra', name: 'Outline the deck' }]);
+
+    const out = await analyze();
+
+    // One card, not one per block — and no repeated member task.
+    expect(out.carryBlocks).toHaveLength(1);
+    const block = out.carryBlocks![0];
+    expect(block.tasks.map(t => t.id)).toEqual(['g-open', 'g-done', 'g-extra']);
+    expect(block.mergedEventIds).toEqual(['evt-group', 'evt-group-2']);
   });
 
   it('leaves a mid-week analyze untouched (no carry blocks, same moves/unplaceable)', async () => {
