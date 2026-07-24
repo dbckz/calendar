@@ -30,6 +30,25 @@ function run(events: CalendarEvent[], opts: Partial<Parameters<typeof selectCale
   });
 }
 
+describe('selectCalendarReviewBlocks — ritual events are never adopted', () => {
+  it('skips a ritual event the user created by hand with no emoji', () => {
+    // Exactly tonight's production bug: a plain "Emails" event at 14:00 was
+    // adopted as an ad-hoc task because only the emoji titles were excluded.
+    expect(run([event({ id: 'e-emails', title: 'Emails' })])).toEqual([]);
+    expect(run([event({ id: 'e-lower', title: 'emails' })])).toEqual([]);
+    expect(run([event({ id: 'e-pad', title: ' Emails ' })])).toEqual([]);
+    expect(run([event({ id: 'e-emoji', title: '📧 Emails' })])).toEqual([]);
+    // Rituals whose emoji title is not in the passed-in set are caught too.
+    expect(run([event({ id: 'e-break', title: 'Break' })])).toEqual([]);
+    expect(run([event({ id: 'e-retro', title: 'Retrospective' })])).toEqual([]);
+  });
+
+  it('still adopts a real task whose title merely starts with a ritual word', () => {
+    const out = run([event({ id: 'e-triage', title: 'Email triage' })]);
+    expect(out.map(b => b.googleEventId)).toEqual(['e-triage']);
+  });
+});
+
 describe('selectCalendarReviewBlocks', () => {
   it('selects a solo timed event that has ended this week', () => {
     const out = run([event({ id: 'e1', title: 'Draft memo' })]);

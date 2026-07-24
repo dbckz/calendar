@@ -93,6 +93,30 @@ export function isBreakTitle(title: string): boolean {
 export function isRitualTitle(title: string): boolean {
   return RITUAL_TITLES.includes(title.trim());
 }
+
+// Drop any leading pictographs / variation selectors / ZWJs and surrounding
+// whitespace, so "📧 Emails", "Emails" and " emails " all reduce to "emails".
+function ritualBaseName(title: string): string {
+  return title
+    .replace(/^[\s\p{Extended_Pictographic}️‍]+/u, '')
+    .trim()
+    .toLowerCase();
+}
+
+// The bare names behind the emoji constants ("lunch", "emails", "break", …),
+// derived from RITUAL_TITLES so a new ritual needs no second list.
+const RITUAL_BASE_NAMES: ReadonlySet<string> = new Set(RITUAL_TITLES.map(ritualBaseName));
+
+// Tolerant ritual identity, for EXCLUSION decisions only: is this title one of
+// the rituals, however the user typed it? A manually-created "Emails" event (no
+// emoji) is still the emails ritual and must never be adopted as a task or
+// offered for carry-over — but it is NOT app-created, so the exact-title
+// constants above still govern dedupe, reset sweeps and free/busy tagging.
+// Matching is whole-name: "Email triage" is a real task, not the ritual.
+export function isRitualLikeTitle(title: string): boolean {
+  if (!title) return false;
+  return RITUAL_BASE_NAMES.has(ritualBaseName(title));
+}
 // Resolve a ritual/break title to its kind. A non-ritual title falls back to
 // 'emails' (callers pass ritual titles only; the fallback keeps the return total).
 export function ritualKindForTitle(title: string): RitualKind {

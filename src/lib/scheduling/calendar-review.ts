@@ -14,6 +14,7 @@
 import type { CalendarEvent } from '@/types';
 
 import { asanaTaskGidsFromText } from '@/lib/asana-url';
+import { isRitualLikeTitle } from './rituals';
 import { formatLocalDate } from '@/lib/date-utils';
 import type { ReplanReviewBlock } from './replan';
 
@@ -41,7 +42,8 @@ export interface CalendarReviewInput {
   // ritual). Those are reviewed via their own source, so skip them here.
   appEventIds: Set<string>;
   // Exact ritual titles (e.g. "🍽️ Lunch") so a manually-added ritual event with
-  // no local record is still skipped.
+  // no local record is still skipped. Titles the user typed WITHOUT the emoji
+  // ("Emails") are caught separately by isRitualLikeTitle.
   ritualTitles: ReadonlySet<string>;
   // Exact event titles the user has dismissed as "not a task": skipped so they
   // never resurface in the review. Defaults to none.
@@ -109,7 +111,9 @@ export function selectCalendarReviewBlocks(input: CalendarReviewInput): ReplanRe
   for (const event of input.events) {
     if (event.allDay) continue;
     if (input.appEventIds.has(event.id)) continue;
-    if (input.ritualTitles.has(event.title.trim())) continue;
+    // Rituals are never adopted as tasks — including one the user created by
+    // hand with no emoji ("Emails"), which the exact-title set alone misses.
+    if (input.ritualTitles.has(event.title.trim()) || isRitualLikeTitle(event.title)) continue;
     // Titles the user marked "not a task" never come back.
     if (dismissedTitles.has(event.title.trim())) continue;
     // Meetings (anyone else invited) are not solo work → skip. attendeeCount is

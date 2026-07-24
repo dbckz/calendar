@@ -27,7 +27,12 @@ jest.mock('@/lib/integration-storage', () => ({
 
 jest.mock('@/lib/workflow-config-storage', () => ({ getWorkflowConfig: jest.fn() }));
 jest.mock('@/lib/scheduling/ritual-events', () => ({ createRitualEvent: jest.fn() }));
-jest.mock('@/lib/scheduling/rituals', () => ({ ritualIntegrationIdForBlock: jest.fn() }));
+// Ritual identity stays REAL here: the carry path uses isRitualLikeTitle to
+// refuse a ritual that an earlier review adopted as an ad-hoc task.
+jest.mock('@/lib/scheduling/rituals', () => ({
+  ...jest.requireActual('@/lib/scheduling/rituals'),
+  ritualIntegrationIdForBlock: jest.fn(),
+}));
 
 jest.mock('@/lib/user-data-storage', () => ({
   getAdHocTasks: jest.fn(),
@@ -201,6 +206,23 @@ describe('replan confirm — end-of-week carry-over', () => {
     expect(out.carryResults.map((r: { success: boolean }) => r.success)).toEqual([false, false]);
     expect(out.carryResults[0].error).toMatch(/Ritual/);
     expect(out.carryResults[1].error).toMatch(/prep/i);
+  });
+
+  it('refuses to carry an ad-hoc task that is really a ritual, whatever the client sends', async () => {
+    (getAdHocTasks as jest.Mock).mockResolvedValue([
+      { id: 'adhoc-emails', title: 'Emails', googleEventId: 'evt-emails' },
+      { id: 'adhoc-real', title: 'Email triage', googleEventId: 'evt-triage' },
+    ]);
+
+    const out = await confirm({
+      moves: [],
+      carry: [{ blockId: 'evt-mixed', taskIds: ['adhoc-emails', 'adhoc-real'] }],
+    });
+
+    expect((setCarryOvers as jest.Mock).mock.calls[0][0].map((e: { taskId: string }) => e.taskId)).toEqual([
+      'adhoc-real',
+    ]);
+    expect(out.carryResults[0].taskIds).toEqual(['adhoc-real']);
   });
 
   it('clears the carry-over marker when a task is completed in Asana', async () => {

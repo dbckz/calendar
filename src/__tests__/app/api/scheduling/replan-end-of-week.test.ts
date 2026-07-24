@@ -203,6 +203,43 @@ describe('replan analyze — end-of-week mode', () => {
     expect(block.mergedEventIds).toEqual(['evt-group', 'evt-group-2']);
   });
 
+  it('never offers a ritual that was adopted as an ad-hoc task (bare "Emails")', async () => {
+    // Reproduces the production bug: a hand-made "Emails" event with no emoji was
+    // adopted as an ad-hoc task, which then surfaced as a "Scheduled" carry card.
+    (getAdHocTasks as jest.Mock).mockResolvedValue([
+      {
+        id: 'b74f1700-820c-4a35-96a0-d5fb087ff106',
+        title: 'Emails',
+        completed: false,
+        taskType: 'focus',
+        dueDate: '2026-07-16',
+        dueTime: '14:00',
+        duration: 30,
+        googleEventId: '7pi8pnfd2gl4fsemevfjbvibo5',
+        googleIntegrationId: 'gi1',
+      },
+      {
+        id: 'adhoc-real',
+        title: 'Email triage',
+        completed: false,
+        taskType: 'focus',
+        dueDate: '2026-07-16',
+        dueTime: '15:00',
+        duration: 30,
+        googleEventId: 'evt-triage',
+        googleIntegrationId: 'gi1',
+      },
+    ]);
+    setContext(FRIDAY_EVENING);
+
+    const out = await analyze();
+
+    const ids = out.carryBlocks!.map(b => b.googleEventId);
+    expect(ids).not.toContain('7pi8pnfd2gl4fsemevfjbvibo5');
+    // A real task whose title merely starts with a ritual word is untouched.
+    expect(ids).toContain('evt-triage');
+  });
+
   it('leaves a mid-week analyze untouched (no carry blocks, same moves/unplaceable)', async () => {
     setContext(WEDNESDAY);
     const out = await analyze();

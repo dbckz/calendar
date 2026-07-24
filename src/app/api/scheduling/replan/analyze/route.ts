@@ -19,7 +19,7 @@ import {
   getDailyReviewState,
 } from '@/lib/user-data-storage';
 import { logicalTodayDate, normalizeRolloverHour } from '@/lib/date-utils';
-import { ritualKindForTitle, isBreakTitle, existingRitualTitlesByDateFromEvents, RITUAL_TITLES } from '@/lib/scheduling/rituals';
+import { ritualKindForTitle, isBreakTitle, isRitualLikeTitle, existingRitualTitlesByDateFromEvents, RITUAL_TITLES } from '@/lib/scheduling/rituals';
 import { selectCalendarReviewBlocks } from '@/lib/scheduling/calendar-review';
 import { prepTitle } from '@/lib/scheduling/event-titles';
 import type { ScheduledAsanaTask } from '@/types';
@@ -483,8 +483,18 @@ export async function POST(request: NextRequest) {
           })),
         ]
       : [];
+    // Belt and braces: never ask about a ritual. A ritual block has no backing
+    // task so it cannot reach here — but a ritual the user created by hand with
+    // no emoji ("Emails") may have been ADOPTED as an ad-hoc task by an earlier
+    // review, and that task would otherwise show up as a carry card.
     const carryBlocks: ReplanCarryBlock[] = mergeCarryBlocks(
-      carryCandidates.map(b => ({ ...b, mergedEventIds: [] }))
+      carryCandidates
+        .filter(
+          b =>
+            !(b.titles.length > 0 && b.titles.every(isRitualLikeTitle)) &&
+            !(b.tasks.length > 0 && b.tasks.every(t => isRitualLikeTitle(t.title)))
+        )
+        .map(b => ({ ...b, mergedEventIds: [] }))
     );
 
     return NextResponse.json({

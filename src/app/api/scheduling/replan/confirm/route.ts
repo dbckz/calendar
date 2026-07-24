@@ -12,7 +12,7 @@ import {
 } from '@/lib/integration-storage';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import { createRitualEvent } from '@/lib/scheduling/ritual-events';
-import { ritualIntegrationIdForBlock } from '@/lib/scheduling/rituals';
+import { ritualIntegrationIdForBlock, isRitualLikeTitle } from '@/lib/scheduling/rituals';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import {
   getAdHocTasks,
@@ -548,17 +548,24 @@ export async function POST(request: NextRequest) {
             });
             continue;
           }
-          if (c.taskIds.length > 0) {
+          // A ritual the user created by hand with no emoji can have been adopted
+          // as an ad-hoc task by an earlier review; never carry one over, whatever
+          // the client sends.
+          const taskIds = c.taskIds.filter(id => {
+            const adhoc = adHocTasks.find(t => t.id === id);
+            return !(adhoc && isRitualLikeTitle(adhoc.title));
+          });
+          if (taskIds.length > 0) {
             if (c.quiet) {
-              await removeCarryOvers(c.taskIds);
+              await removeCarryOvers(taskIds);
             } else {
-              await setCarryOvers(c.taskIds.map(taskId => ({ taskId, fromWeek })));
-              await setTaskDeferrals(c.taskIds.map(taskId => ({ taskId, until })));
+              await setCarryOvers(taskIds.map(taskId => ({ taskId, fromWeek })));
+              await setTaskDeferrals(taskIds.map(taskId => ({ taskId, until })));
             }
           }
           // Clear the planning override on every block behind the card.
           for (const id of c.blockIds) await removeBlockDoneOverride(id);
-          carryResults.push({ blockId: c.blockId, taskIds: c.taskIds, success: true });
+          carryResults.push({ blockId: c.blockId, taskIds, success: true });
         } catch (err) {
           console.error(`[Replan Confirm] Failed to carry over ${c.blockIds.join(',') || c.taskIds.join(',')}:`, err);
           carryResults.push({

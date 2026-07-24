@@ -10,6 +10,7 @@ import {
   ritualCadenceForTitle,
   isBreakTitle,
   isRitualTitle,
+  isRitualLikeTitle,
   ritualIntegrationIdForKind,
   ritualIntegrationIdForBlock,
   LUNCH_TITLE,
@@ -83,6 +84,45 @@ describe('break title helpers', () => {
       reason: 'r',
     });
     expect(interval.isBreak).toBe(true);
+  });
+});
+
+describe('isRitualLikeTitle', () => {
+  it('recognises a ritual however the user typed it', () => {
+    for (const t of ['Emails', 'emails', '📧 Emails', ' Emails ', 'EMAILS']) {
+      expect(isRitualLikeTitle(t)).toBe(true);
+    }
+  });
+
+  it('recognises every ritual, not just emails', () => {
+    for (const t of [
+      'Lunch',
+      'Exercise',
+      'Kindle notes',
+      'backlog grooming',
+      'Retrospective',
+      'Break',
+      '🍽️ Lunch',
+      '☕ Break',
+    ]) {
+      expect(isRitualLikeTitle(t)).toBe(true);
+    }
+  });
+
+  it('does not match prefixes, supersets or unrelated titles', () => {
+    for (const t of [
+      'Email triage',
+      'Emails to send',
+      'Lunch with Sam',
+      'Pre-lunch prep',
+      'Exercise plan doc',
+      'Breaking news piece',
+      'Email',
+      '',
+      'Deep work',
+    ]) {
+      expect(isRitualLikeTitle(t)).toBe(false);
+    }
   });
 });
 
