@@ -8,6 +8,7 @@
  * runs pure.
  */
 jest.mock('@/lib/google-calendar', () => ({
+  createCalendarEvent: jest.fn(),
   deleteCalendarEvent: jest.fn(),
   updateCalendarEvent: jest.fn(),
   ensureValidCredentials: jest.fn(),
@@ -35,6 +36,7 @@ jest.mock('@/lib/user-data-storage', () => ({
   getRitualBlocks: jest.fn(),
   getScheduledAsanaTasks: jest.fn(),
   addAdHocTask: jest.fn(),
+  addPrepBlock: jest.fn(),
   updateAdHocTask: jest.fn(),
   updatePrepBlock: jest.fn(),
   deletePrepBlock: jest.fn(),
@@ -49,13 +51,14 @@ jest.mock('@/lib/user-data-storage', () => ({
 }));
 
 import { POST } from '@/app/api/scheduling/replan/confirm/route';
-import { deleteCalendarEvent, updateCalendarEvent, ensureValidCredentials } from '@/lib/google-calendar';
+import { createCalendarEvent, deleteCalendarEvent, updateCalendarEvent, ensureValidCredentials } from '@/lib/google-calendar';
 import { getEnabledGoogleIntegrations, getGoogleIntegrationById } from '@/lib/integration-storage';
 import {
   getAdHocTasks,
   getPrepBlocks,
   getRitualBlocks,
   getScheduledAsanaTasks,
+  addPrepBlock,
   unscheduleAsanaTask,
   updateAdHocTask,
   setTaskDeferrals,
@@ -193,5 +196,49 @@ describe('replan confirm — prioritise tomorrow (displace)', () => {
       dueTime: undefined,
     });
     expect(setTaskDeferrals).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('replan confirm — prep additions (early-next-week meetings)', () => {
+  it('creates a "📖 Prep:" event and a linked PrepBlock for an accepted prep addition', async () => {
+    (createCalendarEvent as jest.Mock).mockResolvedValue({ id: 'evt-prep-new' });
+
+    const out = await confirm({
+      additions: [
+        {
+          id: 'add-prep-1',
+          kind: 'prep',
+          category: 'Meeting prep',
+          date: '2026-07-17',
+          start: '15:00',
+          durationMinutes: 15,
+          reason: 'Prep for "Board review"',
+          meeting: {
+            eventId: 'evt-next-mon',
+            title: 'Board review',
+            meetingStart: '2026-07-20T10:00:00.000Z',
+          },
+        },
+      ],
+    });
+
+    expect(createCalendarEvent).toHaveBeenCalledTimes(1);
+    // Title carries the prep prefix built from the meeting title.
+    expect((createCalendarEvent as jest.Mock).mock.calls[0][3]).toBe('📖 Prep: Board review');
+    // PrepBlock record links to the (next-week) meeting so the morning briefing finds it.
+    expect(addPrepBlock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        googleEventId: 'evt-prep-new',
+        meetingEventId: 'evt-next-mon',
+        meetingTitle: 'Board review',
+        meetingStart: '2026-07-20T10:00:00.000Z',
+        date: '2026-07-17',
+        start: '15:00',
+        durationMinutes: 15,
+      })
+    );
+    expect(out.additionResults).toEqual([
+      { id: 'add-prep-1', success: true, googleEventId: 'evt-prep-new' },
+    ]);
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell } from 'lucide-react';
+import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell, BookOpen } from 'lucide-react';
 
 import type { ReplanAnalyzeResponse } from '@/lib/api';
 import { categoryColor, formatDuration, slotLabel, titleLabel } from './replanFormat';
@@ -43,6 +43,64 @@ export function ReplanSections({
   const additions = data.additions ?? [];
   const deletions = data.deletions ?? [];
   const tomorrowBlocks = data.tomorrowBlocks ?? [];
+
+  // Additions come in two flavours: missing rituals and prep blocks for
+  // early-next-week meetings. Same toggle/result plumbing, separate sections.
+  const ritualAdditions = additions.filter(a => a.kind !== 'prep');
+  const prepAdditions = additions.filter(a => a.kind === 'prep');
+
+  const additionRow = (a: (typeof additions)[number]) => {
+    const color = categoryColor(a.category);
+    const result = additionResults[a.id];
+    const isIn = additionIncluded.has(a.id);
+    return (
+      <li
+        key={a.id}
+        className={`flex items-start gap-3 rounded-lg border p-3 ${
+          isIn ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
+        }`}
+      >
+        <input
+          type="checkbox"
+          checked={isIn}
+          onChange={() => toggleAddition(a.id)}
+          disabled={hasResults}
+          className="mt-1 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
+              {a.category}
+            </span>
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
+              add
+            </span>
+            <span className="text-sm font-medium text-gray-800 truncate">
+              {a.title ?? a.category}
+            </span>
+          </div>
+          <div className="mt-1 text-xs text-gray-500">
+            <span className="font-medium text-slate-600">{slotLabel(a.date, a.start)}</span>
+            {a.kind === 'prep' && a.meeting && (
+              <> · for {titleLabel([a.meeting.title])}</>
+            )}
+          </div>
+        </div>
+        {result &&
+          (result.success ? (
+            <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+          ) : (
+            <AlertTriangle
+              className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+              aria-label={result.error}
+            />
+          ))}
+      </li>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -204,63 +262,24 @@ export function ReplanSections({
       )}
 
       {/* Missing rituals — add on remaining working days */}
-      {additions.length > 0 && (
+      {ritualAdditions.length > 0 && (
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 flex items-center gap-1.5">
             <Dumbbell className="w-3.5 h-3.5 text-emerald-500" />
-            Missing rituals ({additions.length})
+            Missing rituals ({ritualAdditions.length})
           </h3>
-          <ul className="space-y-2">
-            {additions.map(a => {
-              const color = categoryColor(a.category);
-              const result = additionResults[a.id];
-              const isIn = additionIncluded.has(a.id);
-              return (
-                <li
-                  key={a.id}
-                  className={`flex items-start gap-3 rounded-lg border p-3 ${
-                    isIn ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={isIn}
-                    onChange={() => toggleAddition(a.id)}
-                    disabled={hasResults}
-                    className="mt-1 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${color.bg} ${color.text}`}
-                      >
-                        <span className={`w-1.5 h-1.5 rounded-full ${color.dot}`} />
-                        {a.category}
-                      </span>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
-                        add
-                      </span>
-                      <span className="text-sm font-medium text-gray-800 truncate">
-                        {a.title ?? a.category}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-xs text-gray-500">
-                      <span className="font-medium text-slate-600">{slotLabel(a.date, a.start)}</span>
-                    </div>
-                  </div>
-                  {result &&
-                    (result.success ? (
-                      <Check className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
-                    ) : (
-                      <AlertTriangle
-                        className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
-                        aria-label={result.error}
-                      />
-                    ))}
-                </li>
-              );
-            })}
-          </ul>
+          <ul className="space-y-2">{ritualAdditions.map(additionRow)}</ul>
+        </div>
+      )}
+
+      {/* Prep for early-next-week meetings — add on remaining working days */}
+      {prepAdditions.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 flex items-center gap-1.5">
+            <BookOpen className="w-3.5 h-3.5 text-indigo-500" />
+            Prep for next week ({prepAdditions.length})
+          </h3>
+          <ul className="space-y-2">{prepAdditions.map(additionRow)}</ul>
         </div>
       )}
 

@@ -90,6 +90,10 @@ export interface PrepMeetingRow {
   needsPrep: boolean;
   decidedBy: 'user' | 'ai';
   reason: string;
+  // True when the meeting is on an early day of NEXT week (its prep block is
+  // scheduled into this week). The UI labels these "next Mon"/"next Tue". Absent
+  // on older responses — treat as false.
+  nextWeek?: boolean;
   block?: ProposedBlock;
 }
 

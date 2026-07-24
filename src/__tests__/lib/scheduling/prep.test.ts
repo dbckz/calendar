@@ -213,6 +213,47 @@ describe('proposePrepBlocks', () => {
     expect(placed[0].start).toBe('10:30'); // workStart+90, before the 11:00 meeting
   });
 
+  it('places next-week prep on the LATEST working day of this week (preferLatest)', () => {
+    // Meeting next Monday 09:00 — its day-before / day-of are next week, so prep
+    // goes into THIS week's latest working day (Friday), freshest before the meeting.
+    const startMs = new Date(2026, 6, 20, 9, 0).getTime(); // next Mon 09:00
+    const { placed, unplaced } = run({
+      meetings: [meeting({ startMs, preferLatest: true })],
+      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+    });
+    expect(unplaced).toHaveLength(0);
+    expect(placed).toHaveLength(1);
+    expect(placed[0].date).toBe('2026-07-17'); // Friday, the latest working day
+    expect(placed[0].start).toBe('12:00'); // afternoon-first
+  });
+
+  it('walks back to an earlier working day when the latest is full (preferLatest)', () => {
+    const startMs = new Date(2026, 6, 20, 9, 0).getTime(); // next Mon 09:00
+    const fridayFull: BusyInterval = {
+      start: new Date(2026, 6, 17, 9, 0),
+      end: new Date(2026, 6, 17, 17, 0),
+    };
+    const { placed, unplaced } = run({
+      meetings: [meeting({ startMs, preferLatest: true })],
+      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+      busyIntervals: [fridayFull],
+    });
+    expect(unplaced).toHaveLength(0);
+    expect(placed).toHaveLength(1);
+    expect(placed[0].date).toBe('2026-07-16'); // Thursday, next latest working day
+  });
+
+  it('honours a preferredDate over the latest-first default (preferLatest)', () => {
+    const startMs = new Date(2026, 6, 20, 9, 0).getTime(); // next Mon 09:00
+    const { placed, unplaced } = run({
+      meetings: [meeting({ startMs, preferLatest: true, preferredDate: '2026-07-15' })],
+      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+    });
+    expect(unplaced).toHaveLength(0);
+    expect(placed).toHaveLength(1);
+    expect(placed[0].date).toBe('2026-07-15'); // Wednesday, the chosen day
+  });
+
   it('falls back to the default search when the preferred day is full', () => {
     // Wednesday meeting; user prefers Monday, but Monday is fully busy. Placement
     // falls back to the default day-before (Tuesday) search so prep isn't lost.

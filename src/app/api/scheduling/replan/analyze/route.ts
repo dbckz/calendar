@@ -5,6 +5,9 @@ import { classifyBlockCategory } from '@/lib/capacity';
 import { adHocTypeSignals, gatherWeekContext } from '@/lib/scheduling/gather';
 import { eventsToBusyIntervals } from '@/lib/scheduling/free-busy';
 import { planReplan, type ReplanBlock, type ReplanReviewBlock } from '@/lib/scheduling/replan';
+import { proposePrepBlocks, type PrepMeeting } from '@/lib/scheduling/prep';
+import { resolvePrepCandidates } from '@/lib/scheduling/prep-candidates';
+import type { BusyInterval } from '@/lib/scheduling/types';
 import {
   getScheduledAsanaTasks,
   getAdHocTasks,
@@ -342,6 +345,50 @@ export async function POST(request: NextRequest) {
       existingRitualTitlesByDate: existingRitualTitlesByDateFromEvents(ctx.weekEvents),
     });
 
+    // --- Prep additions for early-next-week meetings ------------------------
+    // A meeting early next week (e.g. next Mon/Tue) can only realistically be
+    // prepped THIS week. Discover those that warrant prep and have no prep block
+    // yet, then place them into this week's remaining days AFTER the replan has
+    // settled — the busy set is the final post-replan timeline (meetings + kept
+    // blocks + moved blocks + ritual additions), so prep never collides with them
+    // and never steals a ritual slot. Placed latest-first (freshest prep sits
+    // closest to the meeting) by proposePrepBlocks' preferLatest path.
+    const toBusy = (date: string, start: string, durationMinutes: number): BusyInterval => {
+      const [y, mo, d] = date.split('-').map(Number);
+      const [h, m] = start.split(':').map(Number);
+      const s = new Date(y, mo - 1, d, h, m, 0, 0);
+      return { start: s, end: new Date(s.getTime() + durationMinutes * MS_PER_MINUTE) };
+    };
+    const nextWeekEarlyEvents = ctx.nextWeekEarlyEvents ?? [];
+    let prepAdditions: typeof result.additions = [];
+    // Only consult the prep classifier when there IS an early-next-week meeting to
+    // consider — the common replan (mid-week, nothing next week yet) does no extra
+    // work or AI call.
+    if (nextWeekEarlyEvents.length > 0) {
+      const prepCandidates = await resolvePrepCandidates({
+        weekEvents: ctx.weekEvents,
+        nextWeekEarlyEvents,
+        nowMs,
+        prepBlocks,
+      });
+      const nextWeekPrepMeetings: PrepMeeting[] = prepCandidates
+        .filter(c => c.nextWeek && c.needsPrep)
+        .map(c => ({ eventId: c.eventId, title: c.title, startMs: c.startMs, date: c.date, preferLatest: true }));
+      const prepBusy: BusyInterval[] = [
+        ...otherBusy,
+        ...result.kept.map(k => toBusy(k.date, k.start, k.durationMinutes)),
+        ...result.moves.map(m => toBusy(m.newDate, m.newStart, m.durationMinutes)),
+        ...result.additions.map(a => toBusy(a.date, a.start, a.durationMinutes)),
+      ];
+      prepAdditions = proposePrepBlocks({
+        meetings: nextWeekPrepMeetings,
+        config: ctx.config,
+        busyIntervals: prepBusy,
+        weekStart: ctx.weekStart,
+        now: ctx.now,
+      }).placed;
+    }
+
     // Earliest-first so the review reads chronologically.
     reviewBlocks.sort((a, b) => a.endMs - b.endMs);
 
@@ -382,6 +429,9 @@ export async function POST(request: NextRequest) {
       weekStart: ctx.weekStartStr,
       weekEnd: ctx.weekEndStr,
       ...result,
+      // Ritual additions (from planReplan) plus prep additions for early-next-week
+      // meetings. Both are ProposedBlocks; the confirm route creates each by kind.
+      additions: [...result.additions, ...prepAdditions],
       unplaceable,
       tomorrowBlocks,
       reviewBlocks,

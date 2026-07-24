@@ -44,6 +44,12 @@ export interface PrepMeeting {
   // search so the meeting never silently loses its prep. When absent, default
   // behaviour applies.
   preferredDate?: string;
+  // True for a meeting that lands EARLY NEXT WEEK (its day-before / day-of fall
+  // outside this week's working days). Its prep is placed into THIS week's
+  // remaining working days, LATEST day first — prep closest to the meeting is
+  // freshest — rather than the default day-before → day-of search. A preferredDate
+  // (if the user picks a specific day) still wins.
+  preferLatest?: boolean;
 }
 
 export interface ProposePrepInput {
@@ -91,18 +97,29 @@ export function proposePrepBlocks(
       slot = tryDay(dayByDateStr.get(meeting.preferredDate), prepDuration, endCapFor(meeting.preferredDate));
     }
 
-    // (a) Day before, anywhere in working hours.
-    if (!slot) {
-      const dayBeforeStr = localDateStr(new Date(meeting.startMs - MS_PER_DAY));
-      slot = tryDay(dayByDateStr.get(dayBeforeStr), prepDuration);
-    }
+    if (meeting.preferLatest) {
+      // Early-next-week meeting: its day-before / day-of aren't this week, so
+      // place prep on THIS week's LATEST working day that has room (freshest prep
+      // sits closest to the meeting), walking backwards to earlier days.
+      if (!slot) {
+        for (let i = workingDays.length - 1; i >= 0 && !slot; i--) {
+          slot = tryDay(workingDays[i], prepDuration, endCapFor(workingDays[i].dateStr));
+        }
+      }
+    } else {
+      // (a) Day before, anywhere in working hours.
+      if (!slot) {
+        const dayBeforeStr = localDateStr(new Date(meeting.startMs - MS_PER_DAY));
+        slot = tryDay(dayByDateStr.get(dayBeforeStr), prepDuration);
+      }
 
-    // (b) Day of, before the meeting starts. The work-run rule handles run
-    // lengths; prep just has to end by the meeting start.
-    if (!slot) {
-      const dayOf = dayByDateStr.get(meeting.date);
-      if (dayOf) {
-        slot = tryDay(dayOf, prepDuration, meeting.startMs);
+      // (b) Day of, before the meeting starts. The work-run rule handles run
+      // lengths; prep just has to end by the meeting start.
+      if (!slot) {
+        const dayOf = dayByDateStr.get(meeting.date);
+        if (dayOf) {
+          slot = tryDay(dayOf, prepDuration, meeting.startMs);
+        }
       }
     }
 

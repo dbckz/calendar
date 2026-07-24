@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addDays, format, startOfWeek } from 'date-fns';
 
-import { deleteCalendarEvent, ensureValidCredentials, updateCalendarEvent } from '@/lib/google-calendar';
+import { createCalendarEvent, deleteCalendarEvent, ensureValidCredentials, updateCalendarEvent } from '@/lib/google-calendar';
 import { completeTask, refreshAsanaToken } from '@/lib/asana';
+import { blockEventDescription, colorIdForBlock, eventTitleForBlock } from '@/lib/scheduling/event-titles';
 import {
   getEnabledGoogleIntegrations,
   getGoogleIntegrationById,
@@ -20,6 +21,7 @@ import {
   getScheduledAsanaTasks,
   addAdHocTask,
   updateAdHocTask,
+  addPrepBlock,
   updatePrepBlock,
   deletePrepBlock,
   deleteRitualBlock,
@@ -642,14 +644,55 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // --- Additions: create each missing ritual on the ritual calendar ---
+    // --- Additions: create each missing ritual / early-next-week prep block ---
     // Ritual events route to the configured ritual Google integration (else the
     // default), opaque, via the shared creator reused by the weekly-plan confirm.
+    // Prep additions (kind 'prep') create a "📖 Prep:" event on the default
+    // calendar and record a PrepBlock linked to the (next-week) meeting, exactly
+    // like the weekly-plan confirm — so the morning-briefing still finds it.
     const additionResults: AdditionResult[] = [];
     if (additions.length > 0) {
       const config = await getWorkflowConfig();
       for (const block of additions) {
         try {
+          if (block.kind === 'prep') {
+            const resolved = await resolveGoogle();
+            if (!resolved) {
+              additionResults.push({
+                id: block.id,
+                success: false,
+                error: 'No authenticated Google integration available',
+              });
+              continue;
+            }
+            const { start, end } = toStartEnd(block.date, block.start, block.durationMinutes);
+            const event = await createCalendarEvent(
+              resolved.credentials,
+              resolved.integration.clientId,
+              resolved.integration.clientSecret,
+              eventTitleForBlock(block),
+              start,
+              end,
+              blockEventDescription(block),
+              'default',
+              'primary',
+              { transparency: 'opaque', colorId: colorIdForBlock(block) }
+            );
+            if (block.meeting) {
+              await addPrepBlock({
+                googleEventId: event.id,
+                googleIntegrationId: resolved.integration.id,
+                meetingEventId: block.meeting.eventId,
+                meetingTitle: block.meeting.title,
+                meetingStart: block.meeting.meetingStart,
+                date: block.date,
+                start: block.start,
+                durationMinutes: block.durationMinutes,
+              });
+            }
+            additionResults.push({ id: block.id, success: true, googleEventId: event.id });
+            continue;
+          }
           const ritualId = ritualIntegrationIdForBlock(config.scheduling, block.title ?? '');
           const resolved = await resolveGoogle(ritualId);
           if (!resolved) {
@@ -663,11 +706,11 @@ export async function POST(request: NextRequest) {
           const googleEventId = await createRitualEvent(resolved, block);
           additionResults.push({ id: block.id, success: true, googleEventId });
         } catch (err) {
-          console.error(`[Replan Confirm] Failed to add ritual ${block.id}:`, err);
+          console.error(`[Replan Confirm] Failed to add block ${block.id}:`, err);
           additionResults.push({
             id: block.id,
             success: false,
-            error: err instanceof Error ? err.message : 'Failed to add ritual',
+            error: err instanceof Error ? err.message : 'Failed to add block',
           });
         }
       }

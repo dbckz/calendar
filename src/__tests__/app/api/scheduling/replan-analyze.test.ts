@@ -26,6 +26,8 @@ jest.mock('@/lib/user-data-storage', () => ({
   getRitualBlocks: jest.fn(),
   getBlockDoneOverrides: jest.fn(),
   getDailyReviewState: jest.fn(),
+  getMeetingPrepDecisions: jest.fn(),
+  setMeetingPrepDecision: jest.fn(),
 }));
 
 import { POST } from '@/app/api/scheduling/replan/analyze/route';
@@ -38,8 +40,11 @@ import {
   getRitualBlocks,
   getBlockDoneOverrides,
   getDailyReviewState,
+  getMeetingPrepDecisions,
+  setMeetingPrepDecision,
 } from '@/lib/user-data-storage';
 import type { ReplanReviewBlock } from '@/lib/scheduling/replan';
+import type { ProposedBlock } from '@/lib/scheduling/types';
 
 const mockGather = gatherWeekContext as jest.MockedFunction<typeof gatherWeekContext>;
 const mockScheduled = getScheduledAsanaTasks as jest.Mock;
@@ -49,6 +54,7 @@ const mockPrep = getPrepBlocks as jest.Mock;
 const mockRitual = getRitualBlocks as jest.Mock;
 const mockOverrides = getBlockDoneOverrides as jest.Mock;
 const mockReviewState = getDailyReviewState as jest.Mock;
+const mockPrepDecisions = getMeetingPrepDecisions as jest.Mock;
 
 const WEEK_START = new Date(2026, 6, 13, 0, 0, 0, 0); // Monday 2026-07-13
 const NOW = new Date(2026, 6, 15, 8, 0, 0, 0); // Wednesday 08:00 (after Monday blocks)
@@ -65,8 +71,15 @@ const CONFIG: WorkflowConfig = {
 };
 
 function setContext(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  over: { weekEvents?: any[]; asanaCandidates?: any[]; asanaNameByGid?: Map<string, string> } = {}
+  over: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    weekEvents?: any[];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    asanaCandidates?: any[];
+    asanaNameByGid?: Map<string, string>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    nextWeekEarlyEvents?: any[];
+  } = {}
 ) {
   mockGather.mockResolvedValue({
     now: NOW,
@@ -74,6 +87,7 @@ function setContext(
     weekStartStr: '2026-07-13',
     weekEndStr: '2026-07-19',
     weekEvents: over.weekEvents ?? [],
+    nextWeekEarlyEvents: over.nextWeekEarlyEvents ?? [],
     asanaCandidates: over.asanaCandidates ?? [],
     asanaNameByGid: over.asanaNameByGid ?? new Map(),
     quotas: [],
@@ -82,8 +96,12 @@ function setContext(
   } as any);
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function analyze(): Promise<{ reviewBlocks: ReplanReviewBlock[]; tomorrowBlocks: any[] }> {
+async function analyze(): Promise<{
+  reviewBlocks: ReplanReviewBlock[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tomorrowBlocks: any[];
+  additions: ProposedBlock[];
+}> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const res = await POST({ json: async () => ({}) } as any);
   return res.json();
@@ -96,6 +114,8 @@ beforeEach(() => {
   mockPrep.mockResolvedValue([]);
   mockRitual.mockResolvedValue([]);
   mockOverrides.mockResolvedValue({});
+  mockPrepDecisions.mockResolvedValue({});
+  (setMeetingPrepDecision as jest.Mock).mockResolvedValue(undefined);
   // A last-review well before the week's blocks, so the "since last review"
   // window includes them (these tests exercise title/interval logic, not the
   // window itself — see the dedicated window test below).
@@ -397,5 +417,71 @@ describe('replan analyze — daily review blocks', () => {
 
     const { reviewBlocks } = await analyze();
     expect(reviewBlocks.find(b => b.googleEventId === 'cal-1')).toBeUndefined();
+  });
+});
+
+describe('replan analyze — prep additions for early-next-week meetings', () => {
+  // A meeting on next Monday, offered as a prep candidate this week. `startTime`
+  // is a real Date (gather returns Dates), so resolvePrepCandidates can read it.
+  const nextMondayMeeting = {
+    id: 'evt-next-mon',
+    title: 'Board review',
+    allDay: false,
+    startTime: new Date(2026, 6, 20, 10, 0, 0), // next Mon 10:00
+    endTime: new Date(2026, 6, 20, 11, 0, 0),
+    integrationId: 'gi1',
+    attendeeCount: 4,
+  };
+
+  it('adds a prep block this week for a next-week meeting the user wants prepped', async () => {
+    // A stored USER decision means no AI classification call is needed.
+    mockPrepDecisions.mockResolvedValue({
+      'board review': { needsPrep: true, decidedBy: 'user', updatedAt: '2026-07-14T00:00:00.000Z' },
+    });
+    setContext({ nextWeekEarlyEvents: [nextMondayMeeting] });
+
+    const { additions } = await analyze();
+    const prep = additions.filter(a => a.kind === 'prep');
+    expect(prep).toHaveLength(1);
+    expect(prep[0].meeting?.eventId).toBe('evt-next-mon');
+    expect(prep[0].meeting?.title).toBe('Board review');
+    // Placed on one of THIS week's remaining working days (Wed–Fri), latest-first.
+    expect(prep[0].date >= '2026-07-15' && prep[0].date <= '2026-07-17').toBe(true);
+  });
+
+  it('does not add prep for a next-week meeting the user declined to prep', async () => {
+    mockPrepDecisions.mockResolvedValue({
+      'board review': { needsPrep: false, decidedBy: 'user', updatedAt: '2026-07-14T00:00:00.000Z' },
+    });
+    setContext({ nextWeekEarlyEvents: [nextMondayMeeting] });
+
+    const { additions } = await analyze();
+    expect(additions.filter(a => a.kind === 'prep')).toHaveLength(0);
+  });
+
+  it('does not re-offer prep for a next-week meeting already prepped (done) last week', async () => {
+    mockPrepDecisions.mockResolvedValue({
+      'board review': { needsPrep: true, decidedBy: 'user', updatedAt: '2026-07-14T00:00:00.000Z' },
+    });
+    // A done prep block from last week for the exact meeting instance suppresses it.
+    mockPrep.mockResolvedValue([
+      {
+        id: 'p1',
+        googleEventId: 'evt-prep-lastweek',
+        googleIntegrationId: 'gi1',
+        meetingEventId: 'evt-next-mon',
+        meetingTitle: 'Board review',
+        meetingStart: new Date(2026, 6, 20, 10, 0, 0).toISOString(),
+        date: '2026-07-10',
+        start: '15:00',
+        durationMinutes: 15,
+        done: true,
+        createdAt: '2026-07-10T00:00:00.000Z',
+      },
+    ]);
+    setContext({ nextWeekEarlyEvents: [nextMondayMeeting] });
+
+    const { additions } = await analyze();
+    expect(additions.filter(a => a.kind === 'prep')).toHaveLength(0);
   });
 });
