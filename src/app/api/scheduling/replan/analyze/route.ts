@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { format } from 'date-fns';
 
 import { classifyBlockCategory } from '@/lib/capacity';
 import { adHocTypeSignals, gatherWeekContext } from '@/lib/scheduling/gather';
@@ -125,13 +126,16 @@ export async function POST(request: NextRequest) {
       appEventIds.add(eventId);
       taskIdsByEvent.set(eventId, entries.map(e => e.asanaTaskId));
       const first = entries[0];
-      // Prefer the live Asana name; then the title captured at scheduling time;
-      // then a title recovered from the calendar event — so a task already
-      // completed (and thus absent from the incomplete fetch) still shows its
-      // name rather than a generic placeholder.
+      // Prefer the live Asana name — the incomplete fetch first, then the
+      // completed-inclusive name map so a member completed this week still
+      // resolves; then the title captured at scheduling time; then a title
+      // recovered from the calendar event — so a task already completed (and thus
+      // absent from the incomplete fetch) still shows its name rather than a
+      // generic placeholder.
       const titles = entries.map(
         e =>
           incompleteByGid.get(e.asanaTaskId)?.name ??
+          ctx.asanaNameByGid.get(e.asanaTaskId) ??
           e.taskName ??
           titleFromEvent(eventId, e.asanaTaskId, entries.length === 1) ??
           'Scheduled task'
@@ -347,11 +351,39 @@ export async function POST(request: NextRequest) {
       deferTaskIds: taskIdsByEvent.get(u.googleEventId) ?? [],
     }));
 
+    // Displaceable blocks scheduled TOMORROW, offered as bump targets for the
+    // "prioritise tomorrow" option on an unplaceable block. Only future, not-done
+    // app blocks backed by deferrable work qualify — task/ad-hoc blocks (they have
+    // entries in taskIdsByEvent); rituals, breaks and meeting-prep are excluded
+    // (no taskIdsByEvent entry), and real Google meetings are never app blocks.
+    const tomorrow = new Date(ctx.now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = format(tomorrow, 'yyyy-MM-dd');
+    const tomorrowBlocks = blocks
+      .filter(
+        b =>
+          b.date === tomorrowStr &&
+          !b.done &&
+          b.startMs > nowMs &&
+          (taskIdsByEvent.get(b.googleEventId)?.length ?? 0) > 0
+      )
+      .map(b => ({
+        googleEventId: b.googleEventId,
+        googleIntegrationId: b.googleIntegrationId,
+        category: b.category,
+        titles: b.titles,
+        date: b.date,
+        start: b.start,
+        durationMinutes: b.durationMinutes,
+        taskIds: taskIdsByEvent.get(b.googleEventId) ?? [],
+      }));
+
     return NextResponse.json({
       weekStart: ctx.weekStartStr,
       weekEnd: ctx.weekEndStr,
       ...result,
       unplaceable,
+      tomorrowBlocks,
       reviewBlocks,
     });
   } catch (error) {

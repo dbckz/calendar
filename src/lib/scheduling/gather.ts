@@ -64,6 +64,9 @@ export interface WeekContext {
   now: Date;
   candidateTasks: CandidateTask[]; // unscheduled Asana + ad-hoc tasks
   asanaCandidates: AsanaCandidate[]; // raw Asana tasks (for priorities matching)
+  // gid -> live task name, including tasks COMPLETED this week (completed-inclusive
+  // like typeByGid), so a scheduled block's completed member still resolves its title.
+  asanaNameByGid: Map<string, string>;
   busyIntervals: BusyInterval[];
   weekEvents: CalendarEvent[]; // full events (for the prep step + "Prep:" dedupe)
   existingScheduledCounts: Record<string, number>;
@@ -99,12 +102,18 @@ export function adHocTypeSignals(taskType: string, customTypes: CustomTaskType[]
 //     completed member's type: it otherwise drops out of the live fetch, and a
 //     grouped block whose classifying member is done would lose its category and
 //     go uncounted (mirrors buildAsanaTypeMap in the dashboard capacity route).
+//   * nameByGid — a gid -> task name map with the SAME completed-inclusive reach,
+//     so a scheduled block's member that was completed this week still resolves
+//     its real title (rather than falling back to a generic placeholder) even
+//     though it's absent from the incomplete-only candidates.
 async function fetchAsanaData(completedSince: string): Promise<{
   candidates: AsanaCandidate[];
   typeByGid: Map<string, string | null>;
+  nameByGid: Map<string, string>;
 }> {
   const candidates: AsanaCandidate[] = [];
   const typeByGid = new Map<string, string | null>();
+  const nameByGid = new Map<string, string>();
   try {
     const integrations = await getEnabledAsanaIntegrations();
     await Promise.all(
@@ -128,6 +137,7 @@ async function fetchAsanaData(completedSince: string): Promise<{
           const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
           const typeValue = typeField?.displayValue ?? null;
           typeByGid.set(task.gid, typeValue);
+          if (task.name) nameByGid.set(task.gid, task.name);
           if (!task.completed) {
             candidates.push({ task, integrationId: integration.id, typeValue });
           }
@@ -144,7 +154,7 @@ async function fetchAsanaData(completedSince: string): Promise<{
     if (!b.task.dueOn) return -1;
     return a.task.dueOn.localeCompare(b.task.dueOn);
   });
-  return { candidates, typeByGid };
+  return { candidates, typeByGid, nameByGid };
 }
 
 // Fetch all timed/all-day events across enabled Google calendars for the week.
@@ -503,6 +513,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     now,
     candidateTasks,
     asanaCandidates,
+    asanaNameByGid: asanaData.nameByGid,
     busyIntervals,
     weekEvents,
     existingScheduledCounts,

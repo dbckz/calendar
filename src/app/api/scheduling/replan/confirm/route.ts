@@ -17,11 +17,13 @@ import {
   getAdHocTasks,
   getPrepBlocks,
   getRitualBlocks,
+  getScheduledAsanaTasks,
   addAdHocTask,
   updateAdHocTask,
   updatePrepBlock,
   deletePrepBlock,
   deleteRitualBlock,
+  unscheduleAsanaTask,
   scheduleAsanaTask,
   setBlockDoneOverride,
   removeGoogleEventAttribution,
@@ -88,6 +90,29 @@ interface DeferResult {
   error?: string;
 }
 
+// One "prioritise tomorrow" victim: its calendar event is removed and its stored
+// schedule cleared, freeing the slot for the prioritised block (which arrives as
+// a normal move). Its tasks are then deferred to next week ('defer') or left in
+// the pool to be re-planned ('leave') — the same disposition unplaceable blocks
+// get.
+interface DisplaceInput {
+  googleEventId: string;
+  googleIntegrationId?: string;
+  taskIds: string[];
+  mode: 'defer' | 'leave';
+  // The victim's own slot length and the prioritised block that will fill it. A
+  // victim shorter than the prioritised block is rejected, so the freed slot
+  // always fits without overlapping whatever follows it.
+  durationMinutes?: number;
+  priorityDurationMinutes?: number;
+}
+
+interface DisplaceResult {
+  googleEventId: string;
+  success: boolean;
+  error?: string;
+}
+
 // One created ritual addition, reported back by its proposal id.
 interface AdditionResult {
   id: string;
@@ -102,6 +127,16 @@ function toStartEnd(date: string, start: string, durationMinutes: number): { sta
   const startDate = new Date(y, mo - 1, d, h, m, 0, 0);
   const endDate = new Date(startDate.getTime() + durationMinutes * 60 * 1000);
   return { start: startDate, end: endDate };
+}
+
+// A calendar delete that 404s/410s means the event is already gone — the caller
+// treats that as success rather than an error.
+function isEventGoneError(err: unknown): boolean {
+  const status =
+    (err as { code?: number; status?: number; response?: { status?: number } })?.code ??
+    (err as { status?: number })?.status ??
+    (err as { response?: { status?: number } })?.response?.status;
+  return status === 404 || status === 410;
 }
 
 export async function POST(request: NextRequest) {
@@ -152,6 +187,35 @@ export async function POST(request: NextRequest) {
     const leaveEventIds: string[] = Array.isArray(body?.leaveUnscheduled)
       ? body.leaveUnscheduled.filter((id: unknown): id is string => typeof id === 'string')
       : [];
+    // "Prioritise tomorrow" victims: displace each so its tomorrow slot frees up
+    // for the prioritised block (which comes through as a normal move).
+    const displaceInputs: DisplaceInput[] = Array.isArray(body?.displace)
+      ? body.displace
+          .filter(
+            (d: unknown): d is { googleEventId: string } =>
+              !!d && typeof d === 'object' && typeof (d as { googleEventId?: unknown }).googleEventId === 'string'
+          )
+          .map(
+            (d: {
+              googleEventId: string;
+              googleIntegrationId?: unknown;
+              taskIds?: unknown;
+              mode?: unknown;
+              durationMinutes?: unknown;
+              priorityDurationMinutes?: unknown;
+            }) => ({
+              googleEventId: d.googleEventId,
+              googleIntegrationId: typeof d.googleIntegrationId === 'string' ? d.googleIntegrationId : undefined,
+              taskIds: Array.isArray(d.taskIds)
+                ? d.taskIds.filter((t: unknown): t is string => typeof t === 'string')
+                : [],
+              mode: d.mode === 'leave' ? 'leave' : ('defer' as 'defer' | 'leave'),
+              durationMinutes: typeof d.durationMinutes === 'number' ? d.durationMinutes : undefined,
+              priorityDurationMinutes:
+                typeof d.priorityDurationMinutes === 'number' ? d.priorityDurationMinutes : undefined,
+            })
+          )
+      : [];
     // Stale prep blocks the user dismissed: the prep record is deleted (its past
     // meeting is over, so there is nothing left to prepare for).
     const dismissEventIds: string[] = Array.isArray(body?.dismiss)
@@ -195,6 +259,7 @@ export async function POST(request: NextRequest) {
       adoptInputs.length === 0 &&
       deferInputs.length === 0 &&
       leaveEventIds.length === 0 &&
+      displaceInputs.length === 0 &&
       dismissEventIds.length === 0 &&
       additions.length === 0 &&
       deletions.length === 0
@@ -225,10 +290,11 @@ export async function POST(request: NextRequest) {
       return resolved;
     };
 
-    const [adHocTasks, prepBlocks, ritualBlocks] = await Promise.all([
+    const [adHocTasks, prepBlocks, ritualBlocks, scheduledAsana] = await Promise.all([
       getAdHocTasks(),
       getPrepBlocks(),
       getRitualBlocks(),
+      getScheduledAsanaTasks(),
     ]);
     const results: MoveResult[] = [];
 
@@ -436,12 +502,8 @@ export async function POST(request: NextRequest) {
               del.googleEventId
             );
           } catch (err) {
-            // A 404/410 means the event is already gone — the deletion still succeeds.
-            const status =
-              (err as { code?: number; status?: number; response?: { status?: number } })?.code ??
-              (err as { status?: number })?.status ??
-              (err as { response?: { status?: number } })?.response?.status;
-            if (status !== 404 && status !== 410) throw err;
+            // Already-gone events still count as a successful deletion.
+            if (!isEventGoneError(err)) throw err;
           }
         }
         if (record) await deleteRitualBlock(record.id);
@@ -455,6 +517,72 @@ export async function POST(request: NextRequest) {
           success: false,
           error: err instanceof Error ? err.message : 'Failed to delete break',
         });
+      }
+    }
+
+    // --- Displacements: free tomorrow's slot for a "prioritise tomorrow" block ---
+    // Delete the victim's calendar event, clear its stored schedule (so the slot
+    // is genuinely free and the task returns to the pool), then either defer its
+    // tasks to next week or leave them to be re-planned. The prioritised block
+    // itself arrives as a normal move into the freed slot (handled below).
+    const displaceResults: DisplaceResult[] = [];
+    if (displaceInputs.length > 0) {
+      const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+      const until = format(addDays(weekStart, 7), 'yyyy-MM-dd'); // next Monday
+      for (const d of displaceInputs) {
+        try {
+          // Reject a victim too short to hold the prioritised block, so the freed
+          // slot can never overlap what follows it. The paired move is skipped
+          // client-side; this is the server-side backstop.
+          if (
+            d.durationMinutes !== undefined &&
+            d.priorityDurationMinutes !== undefined &&
+            d.durationMinutes < d.priorityDurationMinutes
+          ) {
+            displaceResults.push({
+              googleEventId: d.googleEventId,
+              success: false,
+              error: `Block is too short (${d.durationMinutes}m) to hold the prioritised ${d.priorityDurationMinutes}m block`,
+            });
+            continue;
+          }
+          const resolved = await resolveGoogle(d.googleIntegrationId);
+          if (resolved) {
+            try {
+              await deleteCalendarEvent(
+                resolved.credentials,
+                resolved.integration.clientId,
+                resolved.integration.clientSecret,
+                d.googleEventId
+              );
+            } catch (err) {
+              // Already-gone events still count as a successful displacement.
+              if (!isEventGoneError(err)) throw err;
+            }
+          }
+          // Clear the stored schedule for whichever store owns the victim event.
+          for (const s of scheduledAsana.filter(s => s.googleEventId === d.googleEventId)) {
+            await unscheduleAsanaTask(s.id);
+          }
+          const adhoc = adHocTasks.find(t => t.googleEventId === d.googleEventId);
+          if (adhoc) {
+            await updateAdHocTask(adhoc.id, { googleEventId: undefined, dueDate: undefined, dueTime: undefined });
+          }
+          // Defer the freed work to next week, or leave it in the pool ('leave').
+          if (d.mode === 'defer' && d.taskIds.length > 0) {
+            await setTaskDeferrals(d.taskIds.map(taskId => ({ taskId, until })));
+          }
+          await removeBlockDoneOverride(d.googleEventId);
+          await removeGoogleEventAttribution(d.googleEventId);
+          displaceResults.push({ googleEventId: d.googleEventId, success: true });
+        } catch (err) {
+          console.error(`[Replan Confirm] Failed to displace ${d.googleEventId}:`, err);
+          displaceResults.push({
+            googleEventId: d.googleEventId,
+            success: false,
+            error: err instanceof Error ? err.message : 'Failed to displace block',
+          });
+        }
       }
     }
 
@@ -545,7 +673,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, additionResults });
+    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, displaceResults, additionResults });
   } catch (error) {
     console.error('Error confirming mid-week replan:', error);
     return NextResponse.json(

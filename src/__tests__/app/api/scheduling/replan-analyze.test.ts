@@ -64,8 +64,10 @@ const CONFIG: WorkflowConfig = {
   lastUpdated: '2026-07-12T00:00:00.000Z',
 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function setContext(over: { weekEvents?: any[]; asanaCandidates?: any[] } = {}) {
+function setContext(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  over: { weekEvents?: any[]; asanaCandidates?: any[]; asanaNameByGid?: Map<string, string> } = {}
+) {
   mockGather.mockResolvedValue({
     now: NOW,
     weekStart: WEEK_START,
@@ -73,13 +75,15 @@ function setContext(over: { weekEvents?: any[]; asanaCandidates?: any[] } = {}) 
     weekEndStr: '2026-07-19',
     weekEvents: over.weekEvents ?? [],
     asanaCandidates: over.asanaCandidates ?? [],
+    asanaNameByGid: over.asanaNameByGid ?? new Map(),
     quotas: [],
     config: CONFIG,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any);
 }
 
-async function analyze(): Promise<{ reviewBlocks: ReplanReviewBlock[] }> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function analyze(): Promise<{ reviewBlocks: ReplanReviewBlock[]; tomorrowBlocks: any[] }> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const res = await POST({ json: async () => ({}) } as any);
   return res.json();
@@ -212,6 +216,39 @@ describe('replan analyze — daily review blocks', () => {
     expect(block!.titles).toEqual(['First task', 'Second task']);
   });
 
+  it('resolves a completed grouped member from the completed-inclusive name map', async () => {
+    // A Batch block with two members: one still open (in the live incomplete
+    // fetch) and one completed this week (absent from candidates, present in
+    // asanaNameByGid). The completed member must show its real name, not the
+    // "Scheduled task" placeholder — no stored taskName, no event agenda.
+    const shared = {
+      scheduledDate: '2026-07-13',
+      scheduledTime: '09:00',
+      duration: 60,
+      googleEventId: 'evt-batch',
+      googleIntegrationId: 'gi1',
+    };
+    mockScheduled.mockResolvedValue([
+      { id: 's1', asanaTaskId: 'g-open', ...shared },
+      { id: 's2', asanaTaskId: 'g-done', ...shared },
+    ]);
+    setContext({
+      asanaCandidates: [{ task: { gid: 'g-open', name: 'Check MLex' }, typeValue: 'batch' }],
+      asanaNameByGid: new Map([
+        ['g-open', 'Check MLex'],
+        ['g-done', 'File the expenses'],
+      ]),
+    });
+
+    const { reviewBlocks } = await analyze();
+    const block = reviewBlocks.find(b => b.googleEventId === 'evt-batch');
+
+    expect(block!.titles).toEqual(['Check MLex', 'File the expenses']);
+    // The open member stays open; the completed one reads as complete in Asana.
+    expect(block!.tasks[0].completedInAsana).toBeUndefined();
+    expect(block!.tasks[1].completedInAsana).toBe(true);
+  });
+
   it('uses the matched calendar event interval for startMs (dragged event)', async () => {
     // Stored slot says 09:00; the live event was dragged to 14:00.
     const draggedStart = new Date(2026, 6, 13, 14, 0, 0, 0);
@@ -271,6 +308,72 @@ describe('replan analyze — daily review blocks', () => {
 
     const { reviewBlocks } = await analyze();
     expect(reviewBlocks.find(b => b.googleEventId === 'evt-old')).toBeUndefined();
+  });
+
+  it('offers tomorrow\'s displaceable task blocks as prioritise-tomorrow victims', async () => {
+    // NOW is Wed 2026-07-15 08:00 → tomorrow is Thu 2026-07-16. A future Thursday
+    // task block is a valid victim; a Wednesday (today) block is not.
+    mockScheduled.mockResolvedValue([
+      {
+        id: 's-thu',
+        asanaTaskId: 'g-thu',
+        scheduledDate: '2026-07-16',
+        scheduledTime: '09:00',
+        duration: 60,
+        googleEventId: 'evt-thu',
+        googleIntegrationId: 'gi1',
+        taskName: 'Thursday task',
+      },
+      {
+        id: 's-wed',
+        asanaTaskId: 'g-wed',
+        scheduledDate: '2026-07-15',
+        scheduledTime: '09:00',
+        duration: 60,
+        googleEventId: 'evt-wed',
+        googleIntegrationId: 'gi1',
+        taskName: 'Wednesday task',
+      },
+    ]);
+    setContext({
+      asanaCandidates: [
+        { task: { gid: 'g-thu', name: 'Thursday task' }, typeValue: 'deep' },
+        { task: { gid: 'g-wed', name: 'Wednesday task' }, typeValue: 'deep' },
+      ],
+      asanaNameByGid: new Map([
+        ['g-thu', 'Thursday task'],
+        ['g-wed', 'Wednesday task'],
+      ]),
+    });
+
+    const { tomorrowBlocks } = await analyze();
+    expect(tomorrowBlocks.map(b => b.googleEventId)).toEqual(['evt-thu']);
+    expect(tomorrowBlocks[0]).toMatchObject({
+      date: '2026-07-16',
+      start: '09:00',
+      durationMinutes: 60,
+      taskIds: ['g-thu'],
+    });
+  });
+
+  it('excludes rituals from tomorrow\'s displaceable blocks', async () => {
+    mockScheduled.mockResolvedValue([]);
+    // A Thursday ritual must never be offered as a bump victim.
+    mockRitual.mockResolvedValue([
+      {
+        id: 'r1',
+        title: '🏋️ Exercise',
+        date: '2026-07-16',
+        start: '15:00',
+        durationMinutes: 60,
+        googleEventId: 'evt-ritual',
+        googleIntegrationId: 'gi1',
+      },
+    ]);
+    setContext({});
+
+    const { tomorrowBlocks } = await analyze();
+    expect(tomorrowBlocks).toHaveLength(0);
   });
 
   it('drops a bare calendar event whose title was dismissed as "not a task"', async () => {

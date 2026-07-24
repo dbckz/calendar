@@ -150,6 +150,19 @@ export interface ConfirmWeekResponse {
 
 // --- Mid-week replan ---
 
+// A displaceable app block scheduled tomorrow, offered as a bump target for the
+// "prioritise tomorrow" option on an unplaceable block.
+export interface ReplanTomorrowBlock {
+  googleEventId: string;
+  googleIntegrationId?: string;
+  category: string;
+  titles: string[];
+  date: string;
+  start: string;
+  durationMinutes: number;
+  taskIds: string[];
+}
+
 export interface ReplanAnalyzeResponse {
   weekStart: string;
   weekEnd: string;
@@ -161,6 +174,13 @@ export interface ReplanAnalyzeResponse {
   additions: ProposedBlock[];
   // Conflicted break blocks to delete (a break has no fixed home to move to).
   deletions: ReplanDeletion[];
+  // Whether an evening-overflow window exists this week. When true but an
+  // unplaceable block has no overflowOption, the window filled up. Absent on
+  // older responses — treat as false.
+  overflowConfigured?: boolean;
+  // App blocks scheduled tomorrow that can be displaced to make room for a
+  // prioritised block. Absent on older responses — treat as [].
+  tomorrowBlocks?: ReplanTomorrowBlock[];
   // Past app blocks (task/prep) for the daily-review step. Absent on older
   // responses — treat as [].
   reviewBlocks?: ReplanReviewBlock[];
@@ -183,6 +203,14 @@ export interface ReplanAsanaResult {
 export interface ReplanDeferResult {
   taskIds: string[];
   googleEventId?: string;
+  success: boolean;
+  error?: string;
+}
+
+// One displaced-victim result from a "prioritise tomorrow" apply: the victim's
+// calendar event was removed and its tasks deferred / left unscheduled.
+export interface ReplanDisplaceResult {
+  googleEventId: string;
   success: boolean;
   error?: string;
 }
@@ -1103,7 +1131,20 @@ export const api = {
     leaveUnscheduled?: string[],
     // Daily-review adoptions: not-done bare calendar events to turn into local
     // records so the replan step can re-slot them.
-    adopt?: ReviewAdoptInput[]
+    adopt?: ReviewAdoptInput[],
+    // "Prioritise tomorrow" victims: each block's calendar event is removed and
+    // its tasks deferred to next week ('defer') or left unscheduled ('leave'),
+    // freeing tomorrow's slot for the prioritised block (sent as a normal move).
+    displace?: Array<{
+      googleEventId: string;
+      googleIntegrationId?: string;
+      taskIds: string[];
+      mode: 'defer' | 'leave';
+      // The victim's slot length and the prioritised block it must accommodate,
+      // so the server can reject a victim too short to hold the prioritised block.
+      durationMinutes: number;
+      priorityDurationMinutes: number;
+    }>
   ): Promise<{
     results: ReplanConfirmResult[];
     doneResults: ReplanConfirmResult[];
@@ -1111,6 +1152,7 @@ export const api = {
     asanaResults?: ReplanAsanaResult[];
     adoptResults?: ReplanConfirmResult[];
     deferResults?: ReplanDeferResult[];
+    displaceResults?: ReplanDisplaceResult[];
     additionResults: ReplanAdditionResult[];
   }> {
     return fetchWithRetry<{
@@ -1120,6 +1162,7 @@ export const api = {
       asanaResults?: ReplanAsanaResult[];
       adoptResults?: ReplanConfirmResult[];
       deferResults?: ReplanDeferResult[];
+      displaceResults?: ReplanDisplaceResult[];
       additionResults: ReplanAdditionResult[];
     }>(
       '/api/scheduling/replan/confirm',
@@ -1134,6 +1177,7 @@ export const api = {
           ...(adopt && adopt.length ? { adopt } : {}),
           ...(defer && defer.length ? { defer } : {}),
           ...(leaveUnscheduled && leaveUnscheduled.length ? { leaveUnscheduled } : {}),
+          ...(displace && displace.length ? { displace } : {}),
           ...(dismiss && dismiss.length ? { dismiss } : {}),
           ...(additions && additions.length ? { additions } : {}),
           ...(deletions && deletions.length ? { deletions } : {}),

@@ -226,7 +226,7 @@ describe('planReplan - re-slotting', () => {
       quotas: { Deep: { weeklyCount: 1, targetLength: '1h', preferredTimes: ['09:00-10:00'] } },
       scheduling: { workingDays: ['Wednesday'], workingHours: { start: '09:00', end: '10:00' } },
     });
-    const { unplaceable } = run({
+    const { unplaceable, overflowConfigured } = run({
       blocks: [block({ googleEventId: 'a', date: '2026-07-13', start: '09:00' })],
       otherBusy: [busy(15, 9, 0, 10, 0)],
       now: WED_8AM,
@@ -234,6 +234,36 @@ describe('planReplan - re-slotting', () => {
     });
     expect(unplaceable).toHaveLength(1);
     expect(unplaceable[0].overflowOption).toBeUndefined();
+    expect(overflowConfigured).toBe(false);
+  });
+
+  it('reports overflowConfigured when a window exists but a block still finds no evening slot', () => {
+    // One evening hour on the single remaining day; two 60-min blocks compete for
+    // it. The first reserves the slot, the second gets no overflowOption — but
+    // overflowConfigured stays true so the UI can explain the window is full.
+    const config = makeConfig({
+      quotas: { Deep: { weeklyCount: 2, targetLength: '1h', preferredTimes: ['09:00-10:00'] } },
+      scheduling: {
+        workingDays: ['Wednesday'],
+        workingHours: { start: '09:00', end: '10:00' },
+        overflow: { start: '21:00', end: '22:00' },
+      },
+    });
+    const { unplaceable, overflowConfigured } = run({
+      blocks: [
+        block({ googleEventId: 'a', date: '2026-07-13', start: '09:00' }),
+        block({ googleEventId: 'b', date: '2026-07-13', start: '10:00' }),
+      ],
+      otherBusy: [busy(15, 9, 0, 10, 0)], // the single working-hours slot is taken
+      now: WED_8AM,
+      config,
+    });
+    expect(overflowConfigured).toBe(true);
+    expect(unplaceable).toHaveLength(2);
+    const withOverflow = unplaceable.filter(u => u.overflowOption);
+    const withoutOverflow = unplaceable.filter(u => !u.overflowOption);
+    expect(withOverflow).toHaveLength(1); // only one evening hour to go round
+    expect(withoutOverflow).toHaveLength(1);
   });
 
   it('uses the afternoon default for a non-deep-work category with no preferred times', () => {

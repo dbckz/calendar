@@ -25,6 +25,8 @@ export function ReplanSections({
     setStaleMode,
     unplaceableMode,
     setUnplaceableMode,
+    unplaceableVictim,
+    setUnplaceableVictim,
     additionIncluded,
     additionResults,
     deletionIncluded,
@@ -40,6 +42,7 @@ export function ReplanSections({
   const stale = data.stale ?? [];
   const additions = data.additions ?? [];
   const deletions = data.deletions ?? [];
+  const tomorrowBlocks = data.tomorrowBlocks ?? [];
 
   return (
     <div className="space-y-6">
@@ -328,10 +331,21 @@ export function ReplanSections({
               const result = results[u.googleEventId];
               const mode = unplaceableMode[u.googleEventId] ?? 'defer';
               const hasOverflow = !!u.overflowOption;
+              // Evening overflow is configured but this block found no slot — the
+              // window filled up. Explain rather than silently dropping the option.
+              const overflowFull = !hasOverflow && !!data.overflowConfigured;
+              // Only tomorrow's blocks at least as long as this one can host it
+              // without overlapping what follows; the mode is offered only when one
+              // exists, and shorter blocks are shown disabled (see below).
+              const canPrioritise = tomorrowBlocks.some(t => t.durationMinutes >= u.durationMinutes);
+              const chosenVictim = tomorrowBlocks.find(
+                t => t.googleEventId === unplaceableVictim[u.googleEventId]
+              );
               const options: Array<{ v: UnplaceableMode; label: string }> = [
                 { v: 'defer', label: 'Defer to next week' },
                 { v: 'leave', label: 'Leave unscheduled' },
                 ...(hasOverflow ? [{ v: 'overflow' as UnplaceableMode, label: 'Try evening overflow' }] : []),
+                ...(canPrioritise ? [{ v: 'prioritise' as UnplaceableMode, label: 'Prioritise tomorrow' }] : []),
               ];
               return (
                 <li
@@ -353,10 +367,77 @@ export function ReplanSections({
                     <p className="mt-0.5 text-xs text-amber-600">
                       No free {formatDuration(u.durationMinutes)} slot in working hours this week.
                     </p>
+                    {overflowFull && (
+                      <p className="mt-0.5 text-xs text-amber-500">
+                        Evening overflow is full this week — no free {formatDuration(u.durationMinutes)} evening slot left.
+                      </p>
+                    )}
                     {mode === 'overflow' && u.overflowOption && (
                       <p className="mt-0.5 text-xs text-slate-600">
                         Evening slot: {slotLabel(u.overflowOption.date, u.overflowOption.start)}
                       </p>
+                    )}
+                    {mode === 'prioritise' && (
+                      <div className="mt-2">
+                        {chosenVictim ? (
+                          <p className="text-xs text-slate-600">
+                            Takes {chosenVictim.category}&apos;s slot ({slotLabel(chosenVictim.date, chosenVictim.start)});
+                            it&apos;s deferred to next week.
+                          </p>
+                        ) : (
+                          <p className="text-xs text-amber-600">Pick a block below to bump to next week:</p>
+                        )}
+                        {!hasResults && (
+                          <ul className="mt-1.5 space-y-1">
+                            {tomorrowBlocks.map(t => {
+                              const tColor = categoryColor(t.category);
+                              const picked = chosenVictim?.googleEventId === t.googleEventId;
+                              const vResult = results[t.googleEventId];
+                              // Too short to hold the prioritised block → not selectable.
+                              const tooShort = t.durationMinutes < u.durationMinutes;
+                              return (
+                                <li key={t.googleEventId}>
+                                  <button
+                                    disabled={tooShort}
+                                    title={tooShort ? 'Too short to hold this block' : undefined}
+                                    onClick={() =>
+                                      setUnplaceableVictim(prev => ({
+                                        ...prev,
+                                        [u.googleEventId]: picked ? '' : t.googleEventId,
+                                      }))
+                                    }
+                                    className={`flex w-full items-center gap-2 rounded-md border px-2 py-1 text-left text-[11px] transition-colors ${
+                                      tooShort
+                                        ? 'border-gray-100 bg-gray-50 opacity-50 cursor-not-allowed'
+                                        : picked
+                                          ? 'border-orange-300 bg-orange-50'
+                                          : 'border-gray-200 bg-white hover:bg-gray-50'
+                                    }`}
+                                  >
+                                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${tColor.dot}`} />
+                                    <span className="font-medium text-gray-700 truncate">
+                                      {titleLabel(t.titles)}
+                                    </span>
+                                    <span className="ml-auto flex-shrink-0 text-gray-400">
+                                      {slotLabel(t.date, t.start)} · {formatDuration(t.durationMinutes)}
+                                      {tooShort && ' · too short'}
+                                    </span>
+                                    {vResult &&
+                                      (vResult.success ? (
+                                        <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+                                      ) : (
+                                        <AlertTriangle
+                                          className="w-3.5 h-3.5 text-red-500 flex-shrink-0"
+                                          aria-label={vResult.error}
+                                        />
+                                      ))}
+                                  </button>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
+                      </div>
                     )}
                     {!hasResults && (
                       <div className="mt-2 inline-flex rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium">

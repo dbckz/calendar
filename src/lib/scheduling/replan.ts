@@ -218,6 +218,12 @@ export interface ReplanResult {
   additions: ProposedBlock[];
   // Break blocks that now conflict with a meeting → delete (no fixed home).
   deletions: ReplanDeletion[];
+  // Whether an evening-overflow window exists on any remaining working day. When
+  // true but an unplaceable block still has no `overflowOption`, the evening
+  // window filled up (earlier blocks reserved its slots) — the UI uses this to
+  // explain why the "try evening overflow" option is absent rather than hiding
+  // it silently. False when no overflow window is configured at all.
+  overflowConfigured: boolean;
 }
 
 const MS_PER_MINUTE = 60 * 1000;
@@ -429,7 +435,7 @@ export function planReplan(input: ReplanInput): ReplanResult {
     });
   }
 
-  return { kept, moves, unplaceable, stale, additions, deletions };
+  return { kept, moves, unplaceable, stale, additions, deletions, overflowConfigured: ofWindows.length > 0 };
 }
 
 // Build ritual re-slot windows across the remaining working days. Lunch prefers
