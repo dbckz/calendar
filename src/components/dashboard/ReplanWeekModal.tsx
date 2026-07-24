@@ -15,9 +15,14 @@ interface ReplanWeekModalProps {
   // Called after "Start week from scratch" resets the week, so the caller can
   // close this modal and open the Plan-week wizard (with fresh calendar data).
   onStartFromScratch?: () => void;
+  // The week to replan (yyyy-MM-dd Monday). Absent → the current week, as
+  // before. Only the ANALYZE side is week-scoped: nothing in a future week can
+  // have been missed, so the confirm route's current-week defer/carry dates are
+  // never reached for one.
+  weekStart?: string;
 }
 
-export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch }: ReplanWeekModalProps) {
+export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch, weekStart }: ReplanWeekModalProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<ReplanAnalyzeResponse | null>(null);
@@ -31,14 +36,14 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
     setIsLoading(true);
     setError(null);
     try {
-      const res = await api.analyzeReplan();
+      const res = await api.analyzeReplan(weekStart);
       setData(res);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to analyze your week');
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [weekStart]);
 
   // Fetch fresh on each open; reset transient state.
   useEffect(() => {

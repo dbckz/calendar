@@ -152,6 +152,18 @@ export interface WeekCandidatesResponse {
   categories: WeekCandidateCategory[];
 }
 
+// What the dashboard's single adaptive planning button should do next.
+export interface WeekStateResponse {
+  action: 'plan-this-week' | 'replan' | 'wrap-up' | 'plan-next-week' | 'replan-next-week';
+  weekStart: string; // yyyy-MM-dd Monday of the current week
+  nextWeekStart: string; // yyyy-MM-dd Monday of next week
+  currentWeekPlanned: boolean;
+  nextWeekPlanned: boolean;
+  endOfWeek: boolean;
+  endOfWeekReviewDone: boolean;
+  hasReviewableBlocks: boolean;
+}
+
 export interface ConfirmWeekResponse {
   results: ConfirmWeekResult[];
 }
@@ -1083,13 +1095,21 @@ export const api = {
 
   async confirmWeeklyPlan(
     proposals: ProposedBlock[],
-    googleIntegrationId?: string
+    googleIntegrationId?: string,
+    // The week being planned (yyyy-MM-dd Monday). Sent so the server's
+    // slot-conflict pre-flight checks the RIGHT week when the wizard is planning
+    // next week rather than this one.
+    weekStart?: string
   ): Promise<ConfirmWeekResponse> {
     return fetchWithRetry<ConfirmWeekResponse>('/api/scheduling/confirm', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ proposals, googleIntegrationId }),
+      body: JSON.stringify({ proposals, googleIntegrationId, ...(weekStart ? { weekStart } : {}) }),
     });
+  },
+
+  async getWeekState(): Promise<WeekStateResponse> {
+    return fetchWithRetry<WeekStateResponse>('/api/scheduling/week-state', { method: 'GET' });
   },
 
   // Mid-week replan: analyze which of this week's app blocks were missed or now

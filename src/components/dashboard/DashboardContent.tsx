@@ -1,11 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CalendarClock, Bot, Loader2, Archive, RefreshCw, ClipboardCheck, Search } from 'lucide-react';
+import { CalendarClock, Bot, Loader2, Archive, RefreshCw, ClipboardCheck, Search, ChevronDown } from 'lucide-react';
 
 import { CalendarEvent, DelegationQueueEntry, TaskMetadata } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
-import { api, DashboardCapacityResponse } from '@/lib/api';
+import { api, DashboardCapacityResponse, type WeekStateResponse } from '@/lib/api';
+import { WEEK_ACTION_LABELS, targetWeekForAction, type WeekAction } from '@/lib/scheduling/week-state';
 import { TodayColumn } from './TodayColumn';
 import { TopTasks } from './TopTasks';
 import { CapacityWidget } from './CapacityWidget';
@@ -89,6 +90,56 @@ export function DashboardContent({
   const [showReplanModal, setShowReplanModal] = useState(false);
   const [showDailyReviewModal, setShowDailyReviewModal] = useState(false);
   const [showSearchModal, setShowSearchModal] = useState(false);
+  // Which week the plan / replan modals are working on. Set by whichever entry
+  // point opened them, so "Plan next week" plans next week and nothing else has
+  // to know about the state machine.
+  const [planWeekStart, setPlanWeekStart] = useState<string | undefined>(undefined);
+  const [replanWeekStart, setReplanWeekStart] = useState<string | undefined>(undefined);
+
+  // The adaptive primary button's state. Cheap (local stores only), refetched
+  // whenever a plan/review is applied so the button keeps up.
+  const [weekState, setWeekState] = useState<WeekStateResponse | null>(null);
+  const [showActionMenu, setShowActionMenu] = useState(false);
+
+  const loadWeekState = useCallback(() => {
+    api.getWeekState()
+      .then(setWeekState)
+      .catch(() => setWeekState(null));
+  }, []);
+  useEffect(() => loadWeekState(), [loadWeekState]);
+
+  // Open the wizard / replan on a given week. `week` is 'current' or 'next';
+  // undefined weekStart means "the current week" to every downstream endpoint.
+  const openPlan = useCallback((week: 'current' | 'next') => {
+    setPlanWeekStart(week === 'next' ? weekState?.nextWeekStart : undefined);
+    setShowPlanModal(true);
+  }, [weekState]);
+  const openReplan = useCallback((week: 'current' | 'next') => {
+    setReplanWeekStart(week === 'next' ? weekState?.nextWeekStart : undefined);
+    setShowReplanModal(true);
+  }, [weekState]);
+
+  // Fall back to "Plan this week" until the state loads (or if it fails) — the
+  // menu below still offers every action, so nothing is ever unreachable.
+  const action: WeekAction = weekState?.action ?? 'plan-this-week';
+  const actionCopy = WEEK_ACTION_LABELS[action];
+
+  const runAction = useCallback((a: WeekAction) => {
+    const week = targetWeekForAction(a);
+    if (a === 'wrap-up') setShowDailyReviewModal(true);
+    else if (a === 'replan' || a === 'replan-next-week') openReplan(week);
+    else openPlan(week);
+  }, [openPlan, openReplan]);
+
+  // Escape hatch: every action, always, whatever the derived state says. Dave
+  // comes back from a week off to a state machine that can't know what he wants.
+  const menuItems: Array<{ label: string; run: () => void }> = [
+    { label: 'Plan this week', run: () => openPlan('current') },
+    { label: 'Plan next week', run: () => openPlan('next') },
+    { label: 'Replan this week', run: () => openReplan('current') },
+    { label: 'Replan next week', run: () => openReplan('next') },
+    { label: 'Daily review', run: () => setShowDailyReviewModal(true) },
+  ];
 
   // Incomplete Asana tasks for the Cmd/Ctrl+F search palette.
   const searchTasks = useMemo(() => asanaTasks.filter(t => !t.completed), [asanaTasks]);
@@ -179,21 +230,71 @@ export function DashboardContent({
             <ClipboardCheck className="w-4 h-4" />
             Daily review
           </button>
-          <button
-            onClick={() => setShowReplanModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium border border-orange-300 text-orange-700 rounded-lg hover:bg-orange-50 transition-colors"
-            title="Replan the rest of this week — reschedule missed or newly-clashing blocks"
-          >
-            <RefreshCw className="w-4 h-4" />
-            Replan week
-          </button>
-          <button
-            onClick={() => setShowPlanModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
-          >
-            <CalendarClock className="w-4 h-4" />
-            Plan my week
-          </button>
+          {/* One adaptive planning button: its label follows the week state
+              (plan / replan / wrap up / plan next week). The ▾ beside it always
+              lists every action, so no state can trap the user. */}
+          <div className="flex items-center">
+            <div className="flex flex-col items-end">
+              <div className="flex">
+                <button
+                  onClick={() => runAction(action)}
+                  title={actionCopy.title}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium bg-orange-500 text-white rounded-l-lg hover:bg-orange-600 transition-colors"
+                >
+                  {action === 'replan' || action === 'replan-next-week' ? (
+                    <RefreshCw className="w-4 h-4" />
+                  ) : action === 'wrap-up' ? (
+                    <ClipboardCheck className="w-4 h-4" />
+                  ) : (
+                    <CalendarClock className="w-4 h-4" />
+                  )}
+                  {actionCopy.label}
+                </button>
+                <div className="relative">
+                  <button
+                    onClick={() => setShowActionMenu(v => !v)}
+                    aria-haspopup="menu"
+                    aria-expanded={showActionMenu}
+                    aria-label="All planning actions"
+                    title="All planning actions"
+                    className="inline-flex items-center px-2 py-2 text-sm font-medium bg-orange-500 text-white rounded-r-lg border-l border-orange-400 hover:bg-orange-600 transition-colors h-full"
+                  >
+                    <ChevronDown className="w-4 h-4" />
+                  </button>
+                  {showActionMenu && (
+                    <>
+                      {/* Click-away layer */}
+                      <div
+                        className="fixed inset-0 z-40"
+                        onClick={() => setShowActionMenu(false)}
+                      />
+                      <div
+                        role="menu"
+                        className="absolute right-0 top-full mt-1 z-50 w-48 rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+                      >
+                        {menuItems.map(item => (
+                          <button
+                            key={item.label}
+                            role="menuitem"
+                            onClick={() => {
+                              setShowActionMenu(false);
+                              item.run();
+                            }}
+                            className="block w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+              {actionCopy.caption && (
+                <span className="mt-0.5 text-[11px] text-gray-400">{actionCopy.caption}</span>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -265,11 +366,13 @@ export function DashboardContent({
       <PlanWeekModal
         isOpen={showPlanModal}
         onClose={() => setShowPlanModal(false)}
+        weekStart={planWeekStart}
         asanaTasks={asanaTasks}
         typeFieldInfoByIntegration={typeFieldInfoByIntegration}
         asanaIntegrations={asanaIntegrations}
         onApplied={() => {
           refetch();
+          loadWeekState();
           onPlanApplied?.();
         }}
       />
@@ -279,6 +382,7 @@ export function DashboardContent({
         onClose={() => setShowDailyReviewModal(false)}
         onApplied={() => {
           refetch();
+          loadWeekState();
           onPlanApplied?.();
         }}
       />
@@ -286,15 +390,20 @@ export function DashboardContent({
       <ReplanWeekModal
         isOpen={showReplanModal}
         onClose={() => setShowReplanModal(false)}
+        weekStart={replanWeekStart}
         onApplied={() => {
           refetch();
+          loadWeekState();
           onPlanApplied?.();
         }}
         onStartFromScratch={() => {
-          // Reset chained into a fresh plan: refresh data, close replan, open the wizard.
+          // Reset chained into a fresh plan: refresh data, close replan, open the
+          // wizard on the same week that was just reset.
           refetch();
+          loadWeekState();
           onPlanApplied?.();
           setShowReplanModal(false);
+          setPlanWeekStart(replanWeekStart);
           setShowPlanModal(true);
         }}
       />

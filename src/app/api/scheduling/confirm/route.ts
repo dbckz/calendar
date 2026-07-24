@@ -56,7 +56,11 @@ export async function POST(request: NextRequest) {
     // Re-fetch the live week and refuse any proposal whose slot now overlaps a
     // real busy event, instead of blindly double-booking it. (Declined and
     // all-day events don't count as busy, matching the planner.)
-    const earliestDate = proposals.map(p => p.date).sort()[0];
+    // The week being planned: taken from the caller when supplied (the wizard
+    // can be planning NEXT week), else derived from the earliest proposal so
+    // older callers behave exactly as before.
+    const weekStartParam = typeof body?.weekStart === 'string' ? body.weekStart : undefined;
+    const earliestDate = weekStartParam ?? proposals.map(p => p.date).sort()[0];
     const [ey, em, ed] = earliestDate.split('-').map(Number);
     const liveWeekStart = startOfWeek(new Date(ey, em - 1, ed), { weekStartsOn: 1 });
     const { events: liveEvents } = await fetchWeekEvents(liveWeekStart);

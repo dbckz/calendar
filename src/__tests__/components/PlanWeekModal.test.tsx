@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 import '@testing-library/jest-dom';
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PlanWeekModal } from '@/components/dashboard/PlanWeekModal';
 
 // The modal imports the api layer at module load; mock it so no real network
@@ -23,6 +23,111 @@ jest.mock('@/lib/api', () => ({
     confirmWeeklyPlan: jest.fn(),
   },
 }));
+
+import { api } from '@/lib/api';
+
+// Walk the wizard forward with the footer's Skip/Next button until the review
+// step is reached, so every per-step fetch fires.
+async function skipThroughSteps() {
+  for (let i = 0; i < 6; i++) {
+    const next =
+      screen.queryByRole('button', { name: 'Skip' }) ??
+      screen.queryByRole('button', { name: /^Next/i });
+    if (!next) break;
+    await act(async () => {
+      fireEvent.click(next);
+    });
+  }
+}
+
+describe('PlanWeekModal — next-week targeting', () => {
+  const NEXT_MONDAY = '2026-07-20';
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (api.matchPriorities as jest.Mock).mockResolvedValue({
+      results: [],
+      asanaIntegrations: [],
+      categories: [],
+    });
+    (api.getAsanaProjects as jest.Mock).mockResolvedValue({ projects: [] });
+    (api.getPrepCandidates as jest.Mock).mockResolvedValue({
+      meetings: [],
+      unplaced: [],
+      workingDays: ['2026-07-20', '2026-07-21'],
+    });
+    (api.getWeekCandidates as jest.Mock).mockResolvedValue({ categories: [] });
+    (api.proposeWeeklyPlan as jest.Mock).mockResolvedValue({
+      proposals: [],
+      quotaSummary: [],
+      weekStart: NEXT_MONDAY,
+      weekEnd: '2026-07-26',
+    });
+  });
+
+  it('passes the target week to every wizard endpoint and shows its dates', async () => {
+    render(<PlanWeekModal isOpen onClose={jest.fn()} weekStart={NEXT_MONDAY} />);
+
+    // Type a priority so the matching call fires, then walk on through
+    // reminders/prep → tasks → review, which drives the remaining calls.
+    const box = screen.getByPlaceholderText(/One priority per line/i);
+    await act(async () => {
+      fireEvent.change(box, { target: { value: 'Ship the report' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Next/i }));
+    });
+    await waitFor(() => expect(api.matchPriorities).toHaveBeenCalled());
+    await skipThroughSteps();
+
+    await waitFor(() => expect(api.proposeWeeklyPlan).toHaveBeenCalled());
+
+    expect(api.matchPriorities).toHaveBeenCalledWith(expect.anything(), NEXT_MONDAY);
+    expect(api.getPrepCandidates).toHaveBeenCalledWith(
+      NEXT_MONDAY,
+      expect.anything(),
+      expect.anything()
+    );
+    expect(api.getWeekCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ weekStart: NEXT_MONDAY })
+    );
+    expect(api.proposeWeeklyPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ weekStart: NEXT_MONDAY })
+    );
+    // The header week range comes from the response, i.e. next week's dates.
+    await waitFor(() => expect(screen.getByText(/Jul 20 – Jul 26/)).toBeInTheDocument());
+  });
+
+  it('sends the target week on confirm so the server plans the right week', async () => {
+    (api.proposeWeeklyPlan as jest.Mock).mockResolvedValue({
+      proposals: [
+        {
+          id: 'p1',
+          category: 'Writing',
+          date: '2026-07-21',
+          start: '09:00',
+          durationMinutes: 60,
+          reason: 'quota',
+          task: { gid: 'g1', title: 'Draft', integrationId: 'ai1' },
+        },
+      ],
+      quotaSummary: [],
+      weekStart: NEXT_MONDAY,
+      weekEnd: '2026-07-26',
+    });
+    (api.confirmWeeklyPlan as jest.Mock).mockResolvedValue({ results: [{ id: 'p1', success: true }] });
+
+    render(<PlanWeekModal isOpen onClose={jest.fn()} weekStart={NEXT_MONDAY} />);
+    await skipThroughSteps();
+    await waitFor(() => expect(api.proposeWeeklyPlan).toHaveBeenCalled());
+
+    const apply = await screen.findByRole('button', { name: /to calendar/i });
+    await act(async () => {
+      fireEvent.click(apply);
+    });
+
+    await waitFor(() => expect(api.confirmWeeklyPlan).toHaveBeenCalled());
+    expect(api.confirmWeeklyPlan).toHaveBeenCalledWith(expect.anything(), undefined, NEXT_MONDAY);
+  });
+});
 
 describe('PlanWeekModal', () => {
   it('renders nothing when closed', () => {

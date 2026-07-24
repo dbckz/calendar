@@ -53,11 +53,17 @@ interface PlanWeekModalProps {
   // Asana integrations/workspaces (id + name), used by the reminders-triage step
   // to offer conversion destinations. Absent → the reminders step is skipped.
   asanaIntegrations?: Array<{ id: string; name: string }>;
+  // The week to plan (yyyy-MM-dd Monday). Absent → the current week, as before.
+  // Passed to EVERY wizard endpoint that reads it (prep candidates, task
+  // candidates, priority matching, propose, confirm) so the whole wizard agrees
+  // on which week it is planning.
+  weekStart?: string;
 }
 
 export function PlanWeekModal({
   isOpen,
   onClose,
+  weekStart,
   onApplied,
   asanaTasks,
   typeFieldInfoByIntegration,
@@ -421,14 +427,14 @@ export function PlanWeekModal({
     setIsLoading(true);
     setError(null);
     try {
-      const data = await api.getPrepCandidates(undefined, durations, days);
+      const data = await api.getPrepCandidates(weekStart, durations, days);
       setPrepData(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load meeting prep');
     } finally {
       setIsLoading(false);
     }
-  }, [prepDurations, prepDays]);
+  }, [prepDurations, prepDays, weekStart]);
 
   // Changing a prep row's length/day updates LOCAL state only — no refetch on
   // every change (that felt like a page reload). The proposed slots are
@@ -457,6 +463,7 @@ export function PlanWeekModal({
     setError(null);
     try {
       const data = await api.getWeekCandidates({
+        weekStart,
         priorityGids: priorityIds.length ? priorityIds : undefined,
         categoryOverrides: Object.keys(categoryOverrides).length ? categoryOverrides : undefined,
       });
@@ -482,7 +489,7 @@ export function PlanWeekModal({
     } finally {
       setIsLoading(false);
     }
-  }, [priorityIds, categoryOverrides]);
+  }, [priorityIds, categoryOverrides, weekStart]);
 
   const acceptedPrepBlocks = useMemo(
     () => (prepData?.meetings ?? []).filter(m => m.needsPrep && m.block).map(m => m.block!),
@@ -494,7 +501,7 @@ export function PlanWeekModal({
     setError(null);
     setResults({});
     try {
-      const body: ProposeWeekRequest = {};
+      const body: ProposeWeekRequest = weekStart ? { weekStart } : {};
       if (priorityIds.length) body.priorityGids = priorityIds;
       if (mustDoIds.size) body.mustDoIds = Array.from(mustDoIds);
       if (Object.keys(categoryOverrides).length) body.categoryOverrides = categoryOverrides;
@@ -523,7 +530,7 @@ export function PlanWeekModal({
     } finally {
       setIsLoading(false);
     }
-  }, [priorityIds, mustDoIds, categoryOverrides, prepEngaged, acceptedPrepBlocks, tasksEngaged, taskCats, selections, taskDurations, taskDurationOverrides]);
+  }, [priorityIds, mustDoIds, categoryOverrides, prepEngaged, acceptedPrepBlocks, tasksEngaged, taskCats, selections, taskDurations, taskDurationOverrides, weekStart]);
 
   // Lazy-fetch on entering a step. Prep/tasks fetch once (cached); review
   // re-proposes each entry since it depends on prior steps' choices.
@@ -556,7 +563,7 @@ export function PlanWeekModal({
       // required Asana project. Fetch alongside the match; a projects failure
       // shouldn't block matching.
       const [res, projectsRes] = await Promise.all([
-        api.matchPriorities(items),
+        api.matchPriorities(items, weekStart),
         api.getAsanaProjects().catch(() => ({ projects: [] as AsanaProject[] })),
       ]);
       const defaultIntegrationId = res.asanaIntegrations[0]?.id ?? '';
@@ -580,7 +587,7 @@ export function PlanWeekModal({
     } finally {
       setIsLoading(false);
     }
-  }, [priorityText, afterPriorities]);
+  }, [priorityText, afterPriorities, weekStart]);
 
   const confirmPriorities = useCallback(async () => {
     if (!matchRows) return;
@@ -647,7 +654,7 @@ export function PlanWeekModal({
       setError(null);
       try {
         await api.setPrepDecision(title, needsPrep);
-        const data = await api.getPrepCandidates(undefined, prepDurations, prepDays);
+        const data = await api.getPrepCandidates(weekStart, prepDurations, prepDays);
         setPrepData(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to update prep decision');
@@ -655,7 +662,7 @@ export function PlanWeekModal({
         setPrepBusy(false);
       }
     },
-    [prepDurations, prepDays]
+    [prepDurations, prepDays, weekStart]
   );
 
   // --- Step 3 actions ---
@@ -828,7 +835,7 @@ export function PlanWeekModal({
         meeting: p.meeting,
         title: p.title,
       }));
-      const { results: res } = await api.confirmWeeklyPlan(blocks);
+      const { results: res } = await api.confirmWeeklyPlan(blocks, undefined, weekStart);
       const map: Record<string, ConfirmWeekResult> = {};
       for (const r of res) map[r.id] = r;
       setResults(map);
@@ -847,7 +854,7 @@ export function PlanWeekModal({
     } finally {
       setIsConfirming(false);
     }
-  }, [proposals, onApplied, applyReminderConversions]);
+  }, [proposals, onApplied, applyReminderConversions, weekStart]);
 
   // --- Navigation ---
 

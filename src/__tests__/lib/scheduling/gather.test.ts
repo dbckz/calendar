@@ -70,6 +70,10 @@ describe('gatherWeekContext - week-scoped rollover', () => {
     (getPrepBlocks as jest.Mock).mockResolvedValue([]);
     (getRitualBlocks as jest.Mock).mockResolvedValue([]);
     (getEnabledGoogleIntegrations as jest.Mock).mockResolvedValue([]);
+    // Deferrals / carry-overs are per-test state: reset them so cases stay
+    // order-independent (clearAllMocks keeps implementations).
+    (getTaskDeferrals as jest.Mock).mockResolvedValue({});
+    (getCarryOvers as jest.Mock).mockResolvedValue({});
     (getEnabledAsanaIntegrations as jest.Mock).mockResolvedValue([
       {
         id: 'int1',
@@ -129,6 +133,37 @@ describe('gatherWeekContext - week-scoped rollover', () => {
       expect.objectContaining({ carriedOver: true, carriedFromWeek: '2026-07-06' })
     );
     expect(removeCarryOvers).not.toHaveBeenCalled();
+  });
+
+  it('planning NEXT week badges a task carried out of THIS week', async () => {
+    // The end-of-week review carries a task out of the current week (fromWeek =
+    // this Monday). Planning next week, that marker predates the planning week,
+    // so the wizard badges it — the whole point of the carry-over.
+    (getCarryOvers as jest.Mock).mockResolvedValue({
+      rollover: { fromWeek: '2026-07-13', at: 1 },
+    });
+
+    const thisWeek = await gatherWeekContext();
+    expect(thisWeek.candidateTasks.find(t => t.gid === 'rollover')).not.toHaveProperty('carriedOver');
+
+    const nextWeek = await gatherWeekContext('2026-07-20');
+    expect(nextWeek.weekStartStr).toBe('2026-07-20');
+    expect(nextWeek.candidateTasks.find(t => t.gid === 'rollover')).toEqual(
+      expect.objectContaining({ carriedOver: true, carriedFromWeek: '2026-07-13' })
+    );
+  });
+
+  it('planning NEXT week frees a task deferred to next Monday', async () => {
+    // Deferred until 2026-07-20: still parked for THIS week (resume date falls
+    // after this week's Sunday), available again once next week is the one
+    // being planned.
+    (getTaskDeferrals as jest.Mock).mockResolvedValue({ rollover: '2026-07-20' });
+
+    const thisWeek = await gatherWeekContext();
+    expect(thisWeek.candidateTasks.map(t => t.gid)).not.toContain('rollover');
+
+    const nextWeek = await gatherWeekContext('2026-07-20');
+    expect(nextWeek.candidateTasks.map(t => t.gid)).toContain('rollover');
   });
 
   it('prunes a carry-over marker older than four weeks', async () => {
