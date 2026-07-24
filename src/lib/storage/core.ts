@@ -16,6 +16,7 @@ import type {
   AiUserVerdict,
   StaleClassificationEntry,
   MeetingPrepDecision,
+  WeeklyStatsRecord,
 } from '@/types';
 
 export const DEFAULT_ASANA_FILTERS: AsanaFilterState = {
@@ -116,6 +117,9 @@ export interface UserData {
   // plan-week wizard (the parallel taskDeferral is what actually parks the task);
   // cleared once the task is scheduled or completed, and pruned when stale.
   carryOvers?: Record<string, CarryOverEntry>;
+  // Durable per-week analysis records, keyed by yyyy-MM-dd Monday. Append-only
+  // in spirit: a past week's record is final. See WeeklyStatsRecord.
+  weeklyStats?: Record<string, WeeklyStatsRecord>;
   // Daily-review state: when the review was last completed (so the next review
   // only covers what has finished SINCE then) and the bare calendar-event titles
   // the user has dismissed as "not a task" (so they never resurface in review).
@@ -147,6 +151,7 @@ const DEFAULT_USER_DATA: UserData = {
   blockDoneOverrides: {},
   taskDeferrals: {},
   carryOvers: {},
+  weeklyStats: {},
   dailyReviewState: {},
 };
 
@@ -205,6 +210,7 @@ export async function getUserData(): Promise<UserData> {
             typeof (v as CarryOverEntry).fromWeek === 'string'
         )
       ),
+      weeklyStats: parsed.weeklyStats || {},
       dailyReviewState: parsed.dailyReviewState || {},
     };
   } catch {

@@ -455,6 +455,54 @@ export interface TaskMetadata {
 // Recorded when he rejects a claim in the assessment review, and it BEATS the
 // AI classifier from then on (same precedence idea as meetingPrepDecisions): a
 // re-assessment can never re-claim a task he has already said no to.
+// --- Weekly stats (durable analysis record) ---------------------------------
+//
+// One record per planned week, keyed by its Monday. This is the app's LONG-TERM
+// memory: it is written at the moments that change it (plan confirm, replan
+// confirm, daily-review apply, time-tracking updates) and is NEVER rebuilt from
+// live Asana/Google state, so a completed week stays readable years later even
+// after the week is reset, the tasks are purged, or the calendar is cleared.
+//
+// Design rules, so a future reader can trust the numbers:
+//  * `tasks` is a HIGH-WATER MARK: an entry is added the first time a task is
+//    scheduled into the week and is NEVER removed. Carrying or dropping a task
+//    changes its `outcome`, not its presence — that is what makes end-of-week
+//    over-scheduling visible ("you planned 14, finished 6").
+//  * Only outcome 'done' counts as completed. 'carried' and 'dropped' are
+//    explicitly NOT completed.
+//  * Per-category totals are DERIVED from `tasks` (see summariseWeek) rather
+//    than stored, so the counters can never drift from the task list.
+//  * Times are per integration per day, so a week's OM/DBC split can be
+//    recovered without the (rolling) time-tracking file.
+export type WeeklyTaskOutcomeKind = 'scheduled' | 'done' | 'carried' | 'dropped';
+
+export interface WeeklyTaskOutcome {
+  taskId: string; // Asana gid or ad-hoc id
+  title?: string;
+  category: string;
+  integrationId?: string;
+  scheduledAt: string; // ISO — when it first entered this week's plan
+  outcome: WeeklyTaskOutcomeKind;
+  outcomeAt?: string; // ISO — when the outcome last changed
+}
+
+export interface WeeklyStatsIntegrationDay {
+  date: string; // yyyy-MM-dd
+  minutesScheduled: number;
+  minutesWorked: number;
+}
+
+export interface WeeklyStatsRecord {
+  weekStart: string; // yyyy-MM-dd Monday — the record key
+  createdAt: string;
+  updatedAt: string;
+  tasks: Record<string, WeeklyTaskOutcome>; // keyed by taskId
+  integrations: Record<
+    string, // Asana integration id
+    { integrationName: string; days: Record<string, WeeklyStatsIntegrationDay> }
+  >;
+}
+
 export interface AiUserVerdict {
   aiSuitable: boolean;
   decidedAt: string; // ISO timestamp

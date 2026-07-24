@@ -1,7 +1,7 @@
 // API utilities with retry logic and proper typing
 
 import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
-import type { CapacityRow } from '@/lib/capacity';
+import type { WeeklyProgressRow } from '@/lib/weekly-stats';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanReviewBlock, ReplanCarryBlock } from '@/lib/scheduling/replan';
 import type { ReviewAdoptInput } from '@/lib/scheduling/daily-review';
@@ -275,8 +275,14 @@ export interface ClientTimeRow {
 export interface DashboardCapacityResponse {
   weekStart: string;
   weekEnd: string;
-  capacity: CapacityRow[];
+  // Task-level progress for the planned week: X done of Y tasks scheduled into
+  // the week (Y is a high-water mark — see WeeklyStatsRecord).
+  weekProgress: WeeklyProgressRow[];
+  // False before the week has been planned (nothing recorded against it yet).
+  weekPlanned: boolean;
   clientTime: ClientTimeRow[];
+  // Minutes worked this week per Asana integration, for the header line.
+  weekWorkedByIntegration?: ClientTimeRow[];
 }
 
 interface RetryOptions {
@@ -1010,12 +1016,17 @@ export const api = {
       durationMinutes: number;
       source: 'google' | 'asana';
       linkedAsanaTaskId?: string;
-    }>
+    }>,
+    // Minutes actually worked so far today per integration (the elapsed part of
+    // each attributed event). `integrationTotals` stays the FULL scheduled
+    // minutes, so the long-running time-tracking file keeps its meaning; this
+    // extra map is what the durable weekly record stores as "worked".
+    workedMinutesByIntegration?: Record<string, number>
   ): Promise<{ success: boolean }> {
     return fetchWithRetry<{ success: boolean }>('/api/time-tracking', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date, integrationTotals, events }),
+      body: JSON.stringify({ date, integrationTotals, events, workedMinutesByIntegration }),
     });
   },
 

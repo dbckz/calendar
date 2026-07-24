@@ -1,10 +1,11 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { format, parseISO, isPast, isToday } from 'date-fns';
 import { Bot, Calendar, Zap } from 'lucide-react';
 import { CalendarEvent, TaskMetadata } from '@/types';
 import { usePaged, PageBar, useFitCount } from './PageBar';
+import { ExpandedTasksModal } from './ExpandedTasksModal';
 
 const ROW_PX = 46; // approx height of one compact task row incl. gap
 
@@ -34,10 +35,26 @@ export function AiRunnableTasks({ tasks, metadataByGid, onTaskClick, onDelegate 
   );
   const [listRef, perPage] = useFitCount<HTMLUListElement>(ROW_PX);
   const { page, pageCount, pageItems, next, prev } = usePaged(runnable, perPage);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const delegateButton = (task: CalendarEvent) =>
+    onDelegate && task.integrationId ? (
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelegate(task); }}
+        className="flex-shrink-0 flex items-center gap-1 px-2 py-0.5 text-[11px] rounded-md bg-indigo-600 text-white opacity-0 group-hover:opacity-100 hover:bg-indigo-700 transition-opacity"
+        title="Delegate to agent"
+      >
+        <Zap className="w-3 h-3" /> Delegate
+      </button>
+    ) : null;
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-4 h-full flex flex-col min-h-0">
-      <div className="flex items-center gap-2 mb-2 flex-shrink-0">
+      <div
+        onDoubleClick={() => setIsExpanded(true)}
+        title="Double-click to see every task"
+        className="flex items-center gap-2 mb-2 flex-shrink-0 select-none cursor-default"
+      >
         <Bot className="w-4 h-4 text-indigo-600" />
         <h2 className="text-base font-semibold text-gray-900">AI-runnable</h2>
         {runnable.length > 0 && <span className="text-xs text-gray-400">{runnable.length}</span>}
@@ -69,20 +86,21 @@ export function AiRunnableTasks({ tasks, metadataByGid, onTaskClick, onDelegate 
                   )}
                 </div>
               </div>
-              {onDelegate && task.integrationId && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); onDelegate(task); }}
-                  className="flex-shrink-0 flex items-center gap-1 px-2 py-0.5 text-[11px] rounded-md bg-indigo-600 text-white opacity-0 group-hover:opacity-100 hover:bg-indigo-700 transition-opacity"
-                  title="Delegate to agent"
-                >
-                  <Zap className="w-3 h-3" /> Delegate
-                </button>
-              )}
+              {delegateButton(task)}
             </li>
           ))}
         </ul>
       )}
       <PageBar page={page} pageCount={pageCount} onPrev={prev} onNext={next} />
+      <ExpandedTasksModal
+        isOpen={isExpanded}
+        onClose={() => setIsExpanded(false)}
+        title="AI-runnable"
+        icon={<Bot className="w-5 h-5 text-indigo-600" />}
+        tasks={runnable}
+        onTaskClick={onTaskClick}
+        renderAction={delegateButton}
+      />
     </div>
   );
 }

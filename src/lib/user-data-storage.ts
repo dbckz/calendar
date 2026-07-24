@@ -22,6 +22,7 @@ export * from './storage/ad-hoc-tasks';
 export * from './storage/schedule';
 export * from './storage/classifications';
 export * from './storage/ai-verdicts';
+export * from './storage/weekly-stats';
 export * from './storage/delegation-queue';
 export * from './storage/asana-filters';
 export * from './storage/attributions';

@@ -33,6 +33,7 @@ import {
   setTaskDeferrals,
   setCarryOvers,
   removeCarryOvers,
+  setWeeklyTaskOutcomes,
   updateScheduledAsanaTasksByGoogleEvent,
 } from '@/lib/user-data-storage';
 import type { ReviewAdoptInput } from '@/lib/scheduling/daily-review';
@@ -347,6 +348,21 @@ export async function POST(request: NextRequest) {
     ]);
     const results: MoveResult[] = [];
 
+    // --- Durable weekly record -------------------------------------------
+    // Outcomes collected as we go and written once at the end. The week is the
+    // CURRENT one: these actions only ever resolve work planned into it.
+    const weekStartStr = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd');
+    const weeklyOutcomes: Array<{ taskId: string; outcome: 'done' | 'carried' | 'scheduled' }> = [];
+    // The task ids behind a block's Google event, from whichever store owns it.
+    const taskIdsForEvent = (googleEventId: string): string[] => {
+      const asana = scheduledAsana
+        .filter(s => s.googleEventId === googleEventId)
+        .map(s => s.asanaTaskId);
+      if (asana.length > 0) return asana;
+      const adhoc = adHocTasks.find(t => t.googleEventId === googleEventId);
+      return adhoc ? [adhoc.id] : [];
+    };
+
     // --- Done markings (no calendar mutation; the event stays as history) ---
     const doneResults: DoneResult[] = [];
     for (const googleEventId of doneEventIds) {
@@ -364,6 +380,9 @@ export async function POST(request: NextRequest) {
             // Asana-backed (or unknown): a planning-only override.
             await setBlockDoneOverride(googleEventId);
           }
+        }
+        for (const taskId of taskIdsForEvent(googleEventId)) {
+          weeklyOutcomes.push({ taskId, outcome: 'done' });
         }
         doneResults.push({ googleEventId, success: true });
       } catch (err) {
@@ -391,6 +410,11 @@ export async function POST(request: NextRequest) {
         }
         // Always clear any planning override (Asana-backed or otherwise).
         await removeBlockDoneOverride(googleEventId);
+        // Reversing a done marking puts the task back in the week's outstanding
+        // set — it stays in the denominator either way.
+        for (const taskId of taskIdsForEvent(googleEventId)) {
+          weeklyOutcomes.push({ taskId, outcome: 'scheduled' });
+        }
         notDoneResults.push({ googleEventId, success: true });
       } catch (err) {
         console.error(`[Replan Confirm] Failed to mark not done ${googleEventId}:`, err);
@@ -471,6 +495,7 @@ export async function POST(request: NextRequest) {
         await completeTask(accessToken, gid, true);
         // A completed task is no longer carried over.
         await removeCarryOvers([gid]);
+        weeklyOutcomes.push({ taskId: gid, outcome: 'done' });
         asanaResults.push({ gid, success: true });
       } catch (err) {
         console.error(`[Replan Confirm] Failed to complete Asana task ${gid}:`, err);
@@ -494,6 +519,7 @@ export async function POST(request: NextRequest) {
             await setTaskDeferrals(d.taskIds.map(taskId => ({ taskId, until })));
           }
           if (d.googleEventId) await removeBlockDoneOverride(d.googleEventId);
+          for (const taskId of d.taskIds) weeklyOutcomes.push({ taskId, outcome: 'carried' });
           deferResults.push({ taskIds: d.taskIds, googleEventId: d.googleEventId, success: true });
         } catch (err) {
           console.error(`[Replan Confirm] Failed to defer ${d.googleEventId ?? d.taskIds.join(',')}:`, err);
@@ -563,6 +589,9 @@ export async function POST(request: NextRequest) {
               await setTaskDeferrals(taskIds.map(taskId => ({ taskId, until })));
             }
           }
+          // Carried (or dropped back to the backlog) — either way it did NOT get
+          // done this week, and it stays in the week's denominator.
+          for (const taskId of taskIds) weeklyOutcomes.push({ taskId, outcome: 'carried' });
           // Clear the planning override on every block behind the card.
           for (const id of c.blockIds) await removeBlockDoneOverride(id);
           carryResults.push({ blockId: c.blockId, taskIds, success: true });
@@ -679,6 +708,7 @@ export async function POST(request: NextRequest) {
           // Defer the freed work to next week, or leave it in the pool ('leave').
           if (d.mode === 'defer' && d.taskIds.length > 0) {
             await setTaskDeferrals(d.taskIds.map(taskId => ({ taskId, until })));
+            for (const taskId of d.taskIds) weeklyOutcomes.push({ taskId, outcome: 'carried' });
           }
           await removeBlockDoneOverride(d.googleEventId);
           await removeGoogleEventAttribution(d.googleEventId);
@@ -819,6 +849,16 @@ export async function POST(request: NextRequest) {
             error: err instanceof Error ? err.message : 'Failed to add block',
           });
         }
+      }
+    }
+
+    // One write for every outcome this confirm settled. Unknown task ids are
+    // ignored by the store, so nothing that was never planned can appear.
+    if (weeklyOutcomes.length > 0) {
+      try {
+        await setWeeklyTaskOutcomes(weekStartStr, weeklyOutcomes);
+      } catch (err) {
+        console.error('[Replan Confirm] Failed to record weekly outcomes:', err);
       }
     }
 

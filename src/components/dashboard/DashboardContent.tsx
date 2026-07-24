@@ -10,7 +10,7 @@ import { WEEK_ACTION_LABELS, targetWeekForAction, type WeekAction } from '@/lib/
 import { TodayColumn } from './TodayColumn';
 import { TopTasks } from './TopTasks';
 import { CapacityWidget } from './CapacityWidget';
-import { ClientTimeWidget } from './ClientTimeWidget';
+import { ClientTimeWidget, formatDuration } from './ClientTimeWidget';
 import { DelegationWidget } from './DelegationWidget';
 import { AiRunnableTasks } from './AiRunnableTasks';
 import { StaleTasksModal } from './StaleTasksModal';
@@ -39,6 +39,9 @@ interface DashboardContentProps {
   capacityLoading: boolean;
   onRefetchCapacity: () => void;
   timeWorkedByIntegration: Record<string, number>;
+  // Minutes scheduled today per integration (the denominator of the Time Worked
+  // Today bars). Absent → the bars show worked time with nothing to fill toward.
+  timeScheduledByIntegration?: Record<string, number>;
   rolloverHour?: number; // logical-day rollover hour, for the Today column label
   asanaIntegrations: Integration[];
   // Per-integration Type field info, for the Plan-my-week "type unclassified
@@ -58,6 +61,8 @@ interface DashboardContentProps {
   onStaleModalOpenChange?: (open: boolean) => void;
   // A task dialog is open on top of the triage modal (suppresses its Escape).
   taskDialogOpen?: boolean;
+  // Double-clicking the Today heading switches to the Daily Calendar tab.
+  onExpandToCalendar?: () => void;
 }
 
 // Fixed, viewport-height three-column layout — nothing scrolls the page itself;
@@ -71,6 +76,7 @@ export function DashboardContent({
   capacityLoading,
   onRefetchCapacity,
   timeWorkedByIntegration,
+  timeScheduledByIntegration,
   rolloverHour,
   asanaIntegrations,
   typeFieldInfoByIntegration,
@@ -83,9 +89,20 @@ export function DashboardContent({
   staleModalOpen = false,
   onStaleModalOpenChange,
   taskDialogOpen,
+  onExpandToCalendar,
 }: DashboardContentProps) {
   const data = capacityData;
   const isLoading = capacityLoading;
+  // Every connected workspace appears, including one with no time this week — a
+  // zero is information, a missing row reads as a bug.
+  const weekWorked = useMemo(() => {
+    const byId = new Map((capacityData?.weekWorkedByIntegration ?? []).map(r => [r.integrationId, r]));
+    return asanaIntegrations.map(i => ({
+      integrationId: i.id,
+      integrationName: i.name,
+      totalMinutes: byId.get(i.id)?.totalMinutes ?? 0,
+    }));
+  }, [capacityData, asanaIntegrations]);
   const refetch = onRefetchCapacity;
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [showReplanModal, setShowReplanModal] = useState(false);
@@ -204,7 +221,23 @@ export function DashboardContent({
     <div className="h-full flex flex-col p-4 md:p-6 min-h-0">
       {/* Header */}
       <div className="flex items-center justify-between mb-4 flex-shrink-0 gap-3">
-        <h1 className="text-xl font-semibold text-gray-900">Command Center</h1>
+        <div className="flex items-baseline gap-3 min-w-0">
+          <h1 className="text-xl font-semibold text-gray-900">Command Center</h1>
+          {/* Work done this week (Mon–Sun) per client, from the durable weekly
+              record so it survives a week reset. */}
+          {weekWorked.length > 0 && (
+            <p className="text-xs text-gray-500 truncate">
+              <span className="text-gray-400">Work done this week: </span>
+              {weekWorked.map((row, i) => (
+                <span key={row.integrationId}>
+                  {i > 0 && <span className="text-gray-300"> · </span>}
+                  <span className="font-medium text-gray-700">{row.integrationName}</span>{' '}
+                  {formatDuration(row.totalMinutes)}
+                </span>
+              ))}
+            </p>
+          )}
+        </div>
         <div className="flex items-center gap-3">
           {reassessNote && <span className="text-xs text-gray-500 hidden lg:inline">{reassessNote}</span>}
           <button
@@ -314,7 +347,12 @@ export function DashboardContent({
       <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
         {/* Left: Today (single box, internal scroll) */}
         <div className="min-h-0 min-w-0 h-full">
-          <TodayColumn events={todayEvents} rolloverHour={rolloverHour} onTaskClick={onOpenTask} />
+          <TodayColumn
+            events={todayEvents}
+            rolloverHour={rolloverHour}
+            onTaskClick={onOpenTask}
+            onExpandToCalendar={onExpandToCalendar}
+          />
         </div>
 
         {/* Middle: Top Tasks + AI-runnable, each half height, paginated */}
@@ -336,11 +374,16 @@ export function DashboardContent({
             Delegation takes the remaining height and scrolls internally. */}
         <div className="min-h-0 min-w-0 flex flex-col gap-4 md:gap-6">
           <div className="flex-shrink-0 min-w-0">
-            <CapacityWidget rows={data?.capacity ?? []} isLoading={isLoading} />
+            <CapacityWidget
+              rows={data?.weekProgress ?? []}
+              planned={data?.weekPlanned ?? false}
+              isLoading={isLoading}
+            />
           </div>
           <div className="flex-shrink-0 min-w-0">
             <ClientTimeWidget
               timeWorkedByIntegration={timeWorkedByIntegration}
+              timeScheduledByIntegration={timeScheduledByIntegration}
               integrations={asanaIntegrations}
             />
           </div>

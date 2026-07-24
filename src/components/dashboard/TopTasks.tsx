@@ -1,12 +1,13 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { format, parseISO, isPast, isToday } from 'date-fns';
 import { Calendar } from 'lucide-react';
 import { CalendarEvent, TaskMetadata } from '@/types';
 import { rankTasks } from '@/lib/task-ranking';
 import { TaskMetadataBadges } from '@/components/TaskMetadataEditor';
 import { usePaged, PageBar, useFitCount } from './PageBar';
+import { ExpandedTasksModal } from './ExpandedTasksModal';
 
 const ROW_PX = 46; // approx height of one compact task row incl. gap
 
@@ -31,10 +32,15 @@ export function TopTasks({ tasks, metadataByGid, onTaskClick }: TopTasksProps) {
   );
   const [listRef, perPage] = useFitCount<HTMLUListElement>(ROW_PX);
   const { page, pageCount, pageItems, next, prev } = usePaged(ranked, perPage);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-4 h-full flex flex-col min-h-0">
-      <div className="flex items-center justify-between mb-2 flex-shrink-0">
+      <div
+        onDoubleClick={() => setIsExpanded(true)}
+        title="Double-click to see every task"
+        className="flex items-center justify-between mb-2 flex-shrink-0 select-none cursor-default"
+      >
         <h2 className="text-base font-semibold text-gray-900">Top Tasks</h2>
         {ranked.length > 0 && <span className="text-xs text-gray-400">{ranked.length}</span>}
       </div>
@@ -68,6 +74,16 @@ export function TopTasks({ tasks, metadataByGid, onTaskClick }: TopTasksProps) {
         </ul>
       )}
       <PageBar page={page} pageCount={pageCount} onPrev={prev} onNext={next} />
+      <ExpandedTasksModal
+        isOpen={isExpanded}
+        onClose={() => setIsExpanded(false)}
+        title="Top Tasks"
+        tasks={ranked}
+        onTaskClick={onTaskClick}
+        renderAction={task => (
+          <TaskMetadataBadges metadata={metadataByGid[task.id]} className="flex-shrink-0" />
+        )}
+      />
     </div>
   );
 }

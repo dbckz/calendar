@@ -17,6 +17,8 @@ import {
   deleteRitualBlock,
   removeGoogleEventAttribution,
   removeBlockDoneOverride,
+  setWeeklyTaskOutcomes,
+  getWeeklyStats,
 } from '@/lib/user-data-storage';
 import {
   splitWeekResetEvents,
@@ -195,6 +197,24 @@ export async function POST(request: NextRequest) {
     for (const eventId of removedEventIds) {
       await removeGoogleEventAttribution(eventId);
       await removeBlockDoneOverride(eventId);
+    }
+
+    // The durable weekly record is NOT reset — a week that was planned and then
+    // wiped is exactly the history worth keeping. Its tasks are marked 'dropped'
+    // (already-done ones keep their outcome), so the week still shows what was
+    // taken on versus what happened.
+    try {
+      const weekRecord = await getWeeklyStats(weekStartStr);
+      const wiped = [
+        ...scheduledAsanaInWeek.map(s => s.asanaTaskId),
+        ...adHocInWeek.map(t => t.id),
+      ].filter(taskId => weekRecord?.tasks[taskId]?.outcome !== 'done');
+      await setWeeklyTaskOutcomes(
+        weekStartStr,
+        wiped.map(taskId => ({ taskId, outcome: 'dropped' as const }))
+      );
+    } catch (err) {
+      console.error('[Reset Week] Failed to record dropped outcomes:', err);
     }
 
     return NextResponse.json({ eventsDeleted, recordsCleared });

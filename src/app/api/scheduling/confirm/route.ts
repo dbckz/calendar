@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { startOfWeek } from 'date-fns';
+import { format, startOfWeek } from 'date-fns';
 
 import { createCalendarEvent, ensureValidCredentials } from '@/lib/google-calendar';
 import { fetchWeekEvents } from '@/lib/scheduling/gather';
@@ -15,6 +15,8 @@ import {
   setGoogleEventAttribution,
   addPrepBlock,
   removeCarryOvers,
+  recordWeeklyTasks,
+  type WeeklyTaskInput,
 } from '@/lib/user-data-storage';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import type { GoogleCalendarCredentials, GoogleIntegration } from '@/types';
@@ -180,6 +182,10 @@ export async function POST(request: NextRequest) {
     // A carried-over task that now has a slot is no longer carried over, so its
     // marker is dropped once the run finishes.
     const scheduledTaskIds: string[] = [];
+    // The same tasks with their category, for the durable weekly record: this is
+    // the moment a task enters the week's plan, and therefore the denominator of
+    // the week's progress (see WeeklyStatsRecord).
+    const weeklyTasks: WeeklyTaskInput[] = [];
 
     for (const proposal of proposals) {
       try {
@@ -256,7 +262,16 @@ export async function POST(request: NextRequest) {
           // Record each listed task as scheduled to the shared container event, so
           // they show as scheduled and drop out of future candidate pools.
           for (const t of proposal.tasks!) {
-            if (t.gid || t.adhocId) scheduledTaskIds.push((t.gid ?? t.adhocId)!);
+            if (t.gid || t.adhocId) {
+              const taskId = (t.gid ?? t.adhocId)!;
+              scheduledTaskIds.push(taskId);
+              weeklyTasks.push({
+                taskId,
+                category: proposal.category,
+                title: t.title,
+                ...(t.integrationId ? { integrationId: t.integrationId } : {}),
+              });
+            }
             if (t.gid) {
               await scheduleAsanaTask(
                 t.gid,
@@ -283,7 +298,16 @@ export async function POST(request: NextRequest) {
           }
         } else if (!isReserved && proposal.task) {
           const { gid, adhocId, integrationId } = proposal.task;
-          if (gid || adhocId) scheduledTaskIds.push((gid ?? adhocId)!);
+          if (gid || adhocId) {
+            const taskId = (gid ?? adhocId)!;
+            scheduledTaskIds.push(taskId);
+            weeklyTasks.push({
+              taskId,
+              category: proposal.category,
+              title: proposal.task.title,
+              ...(integrationId ? { integrationId } : {}),
+            });
+          }
           if (gid) {
             await scheduleAsanaTask(
               gid,
@@ -319,6 +343,16 @@ export async function POST(request: NextRequest) {
           success: false,
           error: err instanceof Error ? err.message : 'Failed to create event',
         });
+      }
+    }
+
+    // Durable weekly record: everything this confirm scheduled into the week.
+    // Additive, so re-running a plan never lowers the week's task count.
+    if (weeklyTasks.length > 0) {
+      try {
+        await recordWeeklyTasks(format(liveWeekStart, 'yyyy-MM-dd'), weeklyTasks);
+      } catch (err) {
+        console.error('[Scheduling Confirm] Failed to record weekly stats:', err);
       }
     }
 

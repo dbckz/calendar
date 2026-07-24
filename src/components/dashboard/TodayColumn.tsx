@@ -11,6 +11,7 @@ interface TodayColumnProps {
   events: CalendarEvent[]; // today's timed events, any order
   rolloverHour?: number; // logical-day rollover hour, for the date label
   onTaskClick?: (taskId: string) => void; // open the task dialog for events backed by an Asana task
+  onExpandToCalendar?: () => void; // double-click the heading to blow the day up into the calendar view
 }
 
 // A red current-time line, like a calendar's "now" indicator. Rendered between
@@ -27,7 +28,7 @@ const NowLine = forwardRef<HTMLLIElement, { now: Date }>(function NowLine({ now 
   );
 });
 
-export function TodayColumn({ events, rolloverHour = DEFAULT_ROLLOVER_HOUR, onTaskClick }: TodayColumnProps) {
+export function TodayColumn({ events, rolloverHour = DEFAULT_ROLLOVER_HOUR, onTaskClick, onExpandToCalendar }: TodayColumnProps) {
   const sorted = [...events].sort(
     (a, b) => a.startTime.getTime() - b.startTime.getTime()
   );
@@ -68,7 +69,13 @@ export function TodayColumn({ events, rolloverHour = DEFAULT_ROLLOVER_HOUR, onTa
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5 h-full flex flex-col min-h-0">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-gray-900">Today</h2>
+        <h2
+          onDoubleClick={onExpandToCalendar}
+          title={onExpandToCalendar ? 'Double-click to open the calendar view' : undefined}
+          className={`text-lg font-semibold text-gray-900 ${onExpandToCalendar ? 'select-none cursor-default' : ''}`}
+        >
+          Today
+        </h2>
         <span className="text-sm text-gray-500">{now ? format(logicalTodayDate(now, rolloverHour), 'EEEE, MMM d') : ''}</span>
       </div>
 

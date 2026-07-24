@@ -2,16 +2,21 @@ import { NextResponse } from 'next/server';
 import { format, startOfWeek, endOfWeek } from 'date-fns';
 
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
-import { getScheduledAsanaTasks, getAdHocTasks, getCustomTaskTypes } from '@/lib/user-data-storage';
+import {
+  getScheduledAsanaTasks,
+  getAdHocTasks,
+  getCustomTaskTypes,
+  getBlockDoneOverrides,
+  getWeeklyStats,
+  recordWeeklyTasks,
+  setWeeklyTaskOutcomes,
+  type WeeklyTaskInput,
+} from '@/lib/user-data-storage';
+import { summariseWeek, weeklyProgressRows } from '@/lib/weekly-stats';
 import { getDailyRecord } from '@/lib/time-tracking-storage';
 import { getEnabledAsanaIntegrations, updateIntegration } from '@/lib/integration-storage';
 import { getMyTasks, refreshAsanaToken } from '@/lib/asana';
-import {
-  CapacityQuota,
-  computeCapacity,
-  mergeBlocksByEventId,
-  EventScopedBlock,
-} from '@/lib/capacity';
+import { CapacityQuota, classifyBlockCategoryWithCatchAll } from '@/lib/capacity';
 import {
   AsanaIntegration,
   BUILT_IN_TASK_TYPE_LABELS,
@@ -86,11 +91,12 @@ export async function GET() {
     const weekEnd = format(endOfWeek(now, { weekStartsOn: 1 }), 'yyyy-MM-dd');
     const today = format(now, 'yyyy-MM-dd');
 
-    const [config, scheduledAsana, adHocTasks, customTypes, asanaTypeMap] = await Promise.all([
+    const [config, scheduledAsana, adHocTasks, customTypes, doneOverrides, asanaTypeMap] = await Promise.all([
       getWorkflowConfig(),
       getScheduledAsanaTasks(),
       getAdHocTasks(),
       getCustomTaskTypes(),
+      getBlockDoneOverrides(),
       // Use the local week-start instant, not the local date stamped as UTC: in
       // BST `${weekStart}T00:00:00.000Z` would exclude tasks completed in the
       // local 00:00–01:00 Monday window.
@@ -106,45 +112,70 @@ export async function GET() {
       })
     );
 
-    // App-scheduled blocks in the current ISO week. Grouped categories (e.g.
-    // Batch, Engagement) store one record per agenda task — Asana tasks AND
-    // ad-hoc tasks alike — all pointing at the SAME container event id; the
-    // weekly quota counts BLOCKS. So we combine both record types and merge by
-    // googleEventId across the COMBINED set: records sharing an event id collapse
-    // to one block (unioning their type signals so a completed member can't
-    // strip the block's classification), records with no event id (each its own
-    // block) always count. Merging per-type would over-count a Batch block that
-    // carries several ad-hoc tasks (N ad-hoc → N blocks) and could double-count
-    // an event carrying both an Asana and an ad-hoc record.
-    const records: EventScopedBlock[] = [];
+    // --- This week's TASKS (not blocks) ------------------------------------
+    // Weekly progress is task-level: a grouped block contributes one entry per
+    // member task (the schedule stores one record per agenda task, so this falls
+    // out naturally), a single-task block contributes one. Y is the count of
+    // tasks scheduled INTO the week, X the count marked done.
+    const scheduledTasks: WeeklyTaskInput[] = [];
+    const doneTaskIds: string[] = [];
 
     for (const s of scheduledAsana) {
       if (s.scheduledDate < weekStart || s.scheduledDate > weekEnd) continue;
       const info = asanaTypeMap.get(s.asanaTaskId);
-      records.push({
-        googleEventId: s.googleEventId,
-        block: {
-          typeSignals: info?.typeValue ? [info.typeValue] : [],
-          minutes: s.duration,
-          completed: info?.completed ?? false,
-        },
+      const category = classifyBlockCategoryWithCatchAll(
+        info?.typeValue ? [info.typeValue] : [],
+        quotas
+      );
+      if (!category) continue;
+      scheduledTasks.push({
+        taskId: s.asanaTaskId,
+        category,
+        ...(s.taskName ? { title: s.taskName } : {}),
+        ...(s.integrationId ? { integrationId: s.integrationId } : {}),
       });
+      // Done = complete in Asana, or the block was marked "done for planning".
+      const overridden = !!s.googleEventId && !!doneOverrides[s.googleEventId];
+      if (info?.completed || overridden) doneTaskIds.push(s.asanaTaskId);
     }
     for (const t of adHocTasks) {
       if (!t.dueDate || t.dueDate < weekStart || t.dueDate > weekEnd) continue;
-      records.push({
-        googleEventId: t.googleEventId,
-        block: {
-          typeSignals: adHocTypeSignals(t.taskType, customTypes),
-          minutes: t.duration ?? 30,
-          completed: t.completed,
-        },
-      });
+      const category = classifyBlockCategoryWithCatchAll(
+        adHocTypeSignals(t.taskType, customTypes),
+        quotas
+      );
+      if (!category) continue;
+      scheduledTasks.push({ taskId: t.id, category, title: t.title });
+      const overridden = !!t.googleEventId && !!doneOverrides[t.googleEventId];
+      if (t.completed || overridden) doneTaskIds.push(t.id);
     }
 
-    const blocks = mergeBlocksByEventId(records);
+    // Reconcile the durable weekly record from what is actually on the calendar.
+    // Additive by design: this backfills a week planned before the store existed
+    // and self-heals if a write point was missed, while never lowering Y or
+    // clobbering a 'carried' / 'dropped' outcome (only 'done' is asserted here).
+    await recordWeeklyTasks(weekStart, scheduledTasks);
+    if (doneTaskIds.length > 0) {
+      await setWeeklyTaskOutcomes(
+        weekStart,
+        doneTaskIds.map(taskId => ({ taskId, outcome: 'done' as const }))
+      );
+    }
 
-    const capacity = computeCapacity(quotas, blocks);
+    const record = await getWeeklyStats(weekStart);
+    const weekProgress = weeklyProgressRows(record, quotas.map(q => q.category));
+    // "Planned" = the durable record knows about at least one task this week.
+    const weekPlanned = weekProgress.some(r => r.scheduledTasks > 0);
+
+    // Minutes worked THIS WEEK per integration, straight from the durable record
+    // (it holds a per-day, per-integration split), for the header line.
+    const weekWorkedByIntegration = record
+      ? summariseWeek(record).minutesWorkedByIntegration.map(i => ({
+          integrationId: i.integrationId,
+          integrationName: i.integrationName,
+          totalMinutes: i.minutes,
+        }))
+      : [];
 
     // Client time worked today, per Asana integration, from recorded time tracking
     const dailyRecord = await getDailyRecord(today);
@@ -156,7 +187,14 @@ export async function GET() {
         }))
       : [];
 
-    return NextResponse.json({ weekStart, weekEnd, capacity, clientTime });
+    return NextResponse.json({
+      weekStart,
+      weekEnd,
+      weekProgress,
+      weekPlanned,
+      clientTime,
+      weekWorkedByIntegration,
+    });
   } catch (error) {
     console.error('Error computing dashboard capacity:', error);
     return NextResponse.json(

@@ -2,13 +2,14 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { format } from 'date-fns';
-import { Calendar, Repeat, LayoutDashboard, Bell } from 'lucide-react';
+import { Calendar, Repeat, LayoutDashboard, Bell, BarChart3 } from 'lucide-react';
 import { Header } from '@/components/Header';
 import { TaskDetailDialog } from '@/components/AsanaSidebar';
 import { DelegateModal } from '@/components/DelegateModal';
 import { AddTaskModal } from '@/components/AddTaskModal';
 import { RitualsContent } from '@/components/RitualsContent';
 import { Reminders } from '@/components/Reminders';
+import { AnalysisView } from '@/components/analysis/AnalysisView';
 import { DashboardContent } from '@/components/dashboard/DashboardContent';
 import { CalendarTab } from '@/components/home/CalendarTab';
 import { CalendarSelectionModal } from '@/components/home/CalendarSelectionModal';
@@ -87,17 +88,18 @@ const COLOR_SCHEMES = [
 ];
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'rituals' | 'reminders'>(() => {
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'rituals' | 'reminders' | 'analysis'>(() => {
     if (typeof window !== 'undefined') {
       if (window.location.hash === '#rituals') return 'rituals';
       if (window.location.hash === '#reminders') return 'reminders';
       if (window.location.hash === '#calendar') return 'calendar';
+      if (window.location.hash === '#analysis') return 'analysis';
     }
     return 'dashboard';
   });
 
   const handleTabChange = useCallback((tab: string) => {
-    const t = tab as 'dashboard' | 'calendar' | 'rituals' | 'reminders';
+    const t = tab as 'dashboard' | 'calendar' | 'rituals' | 'reminders' | 'analysis';
     setActiveTab(t);
     window.location.hash = t === 'dashboard' ? '' : t;
   }, []);
@@ -365,21 +367,50 @@ export default function Home() {
     return null;
   }, [googleEventAttributions]);
 
-  // Calculate time worked per Asana integration from timed events
-  // Counts: Asana-linked events, standalone Asana events, AND attributed Google events
-  const timeWorkedByIntegration = useMemo(() => {
-    const totals: Record<string, number> = {};
+  // A minute-resolution clock for the "worked so far" split below. Held in state
+  // (not read during render) so the figures stay pure and tick on their own.
+  const [nowMs, setNowMs] = useState(0);
+  useEffect(() => {
+    // Set from timers rather than the effect body so the first value arrives in
+    // a callback (no synchronous setState during the effect, no impure render).
+    const tick = () => setNowMs(Date.now());
+    const first = setTimeout(tick, 0);
+    const id = setInterval(tick, 60_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(id);
+    };
+  }, []);
+
+  // Time per Asana integration for the selected day, from timed events.
+  // Counts: Asana-linked events, standalone Asana events, AND attributed Google
+  // events. Two figures per integration:
+  //   * scheduled — the full length of every attributed block that day,
+  //   * worked    — the part that has actually elapsed (clamped to now), so the
+  //                 dashboard bar fills through the day instead of jumping to
+  //                 100% the moment the day is planned.
+  // A past day is fully elapsed, so the two are equal.
+  const { timeWorkedByIntegration, timeScheduledByIntegration } = useMemo(() => {
+    const scheduled: Record<string, number> = {};
+    const worked: Record<string, number> = {};
 
     for (const event of timedEvents) {
       const asanaIntegrationId = getAsanaIntegrationIdForEvent(event);
       if (!asanaIntegrationId) continue;
 
-      const minutes = (event.endTime.getTime() - event.startTime.getTime()) / 60000;
-      totals[asanaIntegrationId] = (totals[asanaIntegrationId] || 0) + minutes;
+      const startMs = event.startTime.getTime();
+      const endMs = event.endTime.getTime();
+      const minutes = (endMs - startMs) / 60000;
+      scheduled[asanaIntegrationId] = (scheduled[asanaIntegrationId] || 0) + minutes;
+
+      const elapsedMs = Math.min(endMs, nowMs) - startMs;
+      if (elapsedMs > 0) {
+        worked[asanaIntegrationId] = (worked[asanaIntegrationId] || 0) + elapsedMs / 60000;
+      }
     }
 
-    return totals;
-  }, [timedEvents, getAsanaIntegrationIdForEvent]);
+    return { timeWorkedByIntegration: worked, timeScheduledByIntegration: scheduled };
+  }, [timedEvents, getAsanaIntegrationIdForEvent, nowMs]);
 
   // Record time tracking data for longitudinal analysis
   // Only records for today or past dates, debounced to avoid excessive writes
@@ -398,7 +429,7 @@ export default function Home() {
     const timeoutId = setTimeout(() => {
       // Build integration totals with names
       const integrationTotals: Record<string, { integrationId: string; integrationName: string; totalMinutes: number }> = {};
-      for (const [integrationId, minutes] of Object.entries(timeWorkedByIntegration)) {
+      for (const [integrationId, minutes] of Object.entries(timeScheduledByIntegration)) {
         const integration = asanaIntegrations.find(i => i.id === integrationId);
         integrationTotals[integrationId] = {
           integrationId,
@@ -428,13 +459,13 @@ export default function Home() {
         .filter((record): record is NonNullable<typeof record> => record !== null);
 
       // Record the time data
-      api.recordTimeTracking(dateStr, integrationTotals, eventRecords).catch(err => {
+      api.recordTimeTracking(dateStr, integrationTotals, eventRecords, timeWorkedByIntegration).catch(err => {
         console.error('Failed to record time tracking data:', err);
       });
     }, 2000); // 2 second debounce
 
     return () => clearTimeout(timeoutId);
-  }, [selectedDate, timedEvents, timeWorkedByIntegration, asanaIntegrations, isLoading, getAsanaIntegrationIdForEvent, rolloverHour]);
+  }, [selectedDate, timedEvents, timeWorkedByIntegration, timeScheduledByIntegration, asanaIntegrations, isLoading, getAsanaIntegrationIdForEvent, rolloverHour]);
 
   const handleRefresh = useCallback(() => {
     // Rotate to a new random color scheme on refresh
@@ -938,7 +969,15 @@ export default function Home() {
     { id: 'calendar' as const, label: 'Daily Calendar', icon: Calendar },
     { id: 'rituals' as const, label: 'Rituals', icon: Repeat },
     { id: 'reminders' as const, label: 'Reminders', icon: Bell },
+    { id: 'analysis' as const, label: 'Analysis', icon: BarChart3 },
   ];
+
+  // Double-clicking the dashboard's Today heading blows the day up into the
+  // calendar view — the same destination as the nav tab.
+  const goToCalendarTab = useCallback(() => {
+    setActiveTab('calendar');
+    window.location.hash = 'calendar';
+  }, []);
 
   const handleOpenAsanaTask = useCallback((taskId: string) => {
     setActiveTab('calendar');
@@ -1063,6 +1102,7 @@ export default function Home() {
             capacityLoading={capacityLoading}
             onRefetchCapacity={refetchCapacity}
             timeWorkedByIntegration={timeWorkedByIntegration}
+            timeScheduledByIntegration={timeScheduledByIntegration}
             asanaIntegrations={asanaIntegrations}
             typeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
             onOpenTask={handleOpenTaskInPlace}
@@ -1073,6 +1113,7 @@ export default function Home() {
             onPlanApplied={fetchAllEvents}
             staleModalOpen={staleModalOpen}
             onStaleModalOpenChange={setStaleModalOpen}
+            onExpandToCalendar={goToCalendarTab}
             taskDialogOpen={Boolean(dashboardDialogTask)}
           />
           {delegateTask && delegateTask.integrationId && (
@@ -1123,6 +1164,12 @@ export default function Home() {
               asanaTypeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
               onCreateAsanaTask={handleSidebarAsanaCreate}
             />
+          </div>
+        </div>
+      ) : activeTab === 'analysis' ? (
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-4xl mx-auto p-6">
+            <AnalysisView />
           </div>
         </div>
       ) : (

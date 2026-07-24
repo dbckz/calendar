@@ -1,0 +1,168 @@
+/**
+ * The durable weekly record: task counting across grouped/single blocks, the
+ * high-water-mark rule (a carried-out task stays in the denominator and counts
+ * as not done), and the derived summaries the dashboard and Analysis view read.
+ */
+import {
+  getAllWeeklyStats,
+  getWeeklyStats,
+  recordWeeklyTasks,
+  setWeeklyTaskOutcomes,
+  recordWeeklyTime,
+} from '@/lib/user-data-storage';
+import { summariseWeek, weeklyProgressRows } from '@/lib/weekly-stats';
+import { __resetDbForTests } from '@/lib/storage/db';
+import type { WeeklyStatsRecord } from '@/types';
+
+const WEEK = '2026-07-20';
+
+// A grouped Engagement block carrying three agenda tasks plus two single-task
+// Writing blocks: 5 tasks scheduled into the week, not 3 blocks.
+const GROUPED_AND_SINGLES = [
+  { taskId: 'e1', category: 'Engagement', title: 'Email Ana' },
+  { taskId: 'e2', category: 'Engagement', title: 'Email Bo' },
+  { taskId: 'e3', category: 'Engagement', title: 'Email Cy' },
+  { taskId: 'w1', category: 'Writing', title: 'Draft the brief' },
+  { taskId: 'w2', category: 'Writing', title: 'Edit the brief' },
+];
+
+beforeEach(() => {
+  __resetDbForTests();
+});
+
+describe('weekly stats storage', () => {
+  it('counts every member task of a grouped block, and one per single block', async () => {
+    await recordWeeklyTasks(WEEK, GROUPED_AND_SINGLES);
+
+    const record = (await getWeeklyStats(WEEK))!;
+    expect(Object.keys(record.tasks)).toHaveLength(5);
+    const summary = summariseWeek(record);
+    expect(summary.categories).toEqual([
+      { category: 'Engagement', scheduled: 3, completed: 0, carried: 0, dropped: 0 },
+      { category: 'Writing', scheduled: 2, completed: 0, carried: 0, dropped: 0 },
+    ]);
+    expect(summary.totalScheduled).toBe(5);
+  });
+
+  it('grows Y when a task is added mid-week, and never lowers it', async () => {
+    await recordWeeklyTasks(WEEK, GROUPED_AND_SINGLES);
+    await recordWeeklyTasks(WEEK, [{ taskId: 'w3', category: 'Writing', title: 'Late addition' }]);
+    // Re-running the same plan must not duplicate or reset anything.
+    await recordWeeklyTasks(WEEK, GROUPED_AND_SINGLES);
+
+    const summary = summariseWeek((await getWeeklyStats(WEEK))!);
+    expect(summary.totalScheduled).toBe(6);
+  });
+
+  it('X rises as the review marks work done', async () => {
+    await recordWeeklyTasks(WEEK, GROUPED_AND_SINGLES);
+    await setWeeklyTaskOutcomes(WEEK, [
+      { taskId: 'e1', outcome: 'done' },
+      { taskId: 'w1', outcome: 'done' },
+    ]);
+
+    const summary = summariseWeek((await getWeeklyStats(WEEK))!);
+    expect(summary.totalCompleted).toBe(2);
+    expect(summary.completionRate).toBeCloseTo(0.4); // 2 of 5
+    expect(summary.categories.find(c => c.category === 'Writing')).toMatchObject({
+      scheduled: 2,
+      completed: 1,
+    });
+  });
+
+  it('a carried-out task keeps Y unchanged and counts as NOT done', async () => {
+    await recordWeeklyTasks(WEEK, GROUPED_AND_SINGLES);
+    await setWeeklyTaskOutcomes(WEEK, [{ taskId: 'e2', outcome: 'carried' }]);
+    // Carrying unschedules it, so a later reconcile no longer sees it — the
+    // record must keep it anyway (that is the over-scheduling evidence).
+    await recordWeeklyTasks(
+      WEEK,
+      GROUPED_AND_SINGLES.filter(t => t.taskId !== 'e2')
+    );
+
+    const summary = summariseWeek((await getWeeklyStats(WEEK))!);
+    expect(summary.totalScheduled).toBe(5);
+    expect(summary.totalCompleted).toBe(0);
+    expect(summary.categories.find(c => c.category === 'Engagement')).toMatchObject({
+      scheduled: 3,
+      carried: 1,
+      completed: 0,
+    });
+  });
+
+  it('a reconcile never resets an outcome that was already settled', async () => {
+    await recordWeeklyTasks(WEEK, GROUPED_AND_SINGLES);
+    await setWeeklyTaskOutcomes(WEEK, [{ taskId: 'e1', outcome: 'carried' }]);
+    await recordWeeklyTasks(WEEK, GROUPED_AND_SINGLES); // no outcome asserted
+
+    const record = (await getWeeklyStats(WEEK))!;
+    expect(record.tasks.e1.outcome).toBe('carried');
+  });
+
+  it('ignores an outcome for a task the week never scheduled', async () => {
+    await recordWeeklyTasks(WEEK, [{ taskId: 'w1', category: 'Writing' }]);
+    const changed = await setWeeklyTaskOutcomes(WEEK, [{ taskId: 'stranger', outcome: 'done' }]);
+
+    expect(changed).toBe(0);
+    expect(summariseWeek((await getWeeklyStats(WEEK))!).totalScheduled).toBe(1);
+  });
+
+  it('keeps a per-integration, per-day time split and totals it for the week', async () => {
+    await recordWeeklyTime(WEEK, '2026-07-20', [
+      { integrationId: 'om', integrationName: 'OM', minutesScheduled: 240, minutesWorked: 200 },
+      { integrationId: 'dbc', integrationName: 'DBC', minutesScheduled: 120, minutesWorked: 60 },
+    ]);
+    await recordWeeklyTime(WEEK, '2026-07-21', [
+      { integrationId: 'om', integrationName: 'OM', minutesScheduled: 180, minutesWorked: 180 },
+    ]);
+    // A re-report for the same day replaces that day, never doubles it.
+    await recordWeeklyTime(WEEK, '2026-07-20', [
+      { integrationId: 'om', integrationName: 'OM', minutesScheduled: 240, minutesWorked: 230 },
+    ]);
+
+    const summary = summariseWeek((await getWeeklyStats(WEEK))!);
+    expect(summary.minutesWorkedByIntegration).toEqual([
+      { integrationId: 'dbc', integrationName: 'DBC', minutes: 60 },
+      { integrationId: 'om', integrationName: 'OM', minutes: 410 },
+    ]);
+    expect(summary.totalMinutesWorked).toBe(470);
+  });
+
+  it('keeps each week separate and survives an unrelated week being written', async () => {
+    await recordWeeklyTasks('2026-07-13', [{ taskId: 'old', category: 'Writing' }]);
+    await recordWeeklyTasks(WEEK, [{ taskId: 'new', category: 'Writing' }]);
+
+    const all = await getAllWeeklyStats();
+    expect(Object.keys(all).sort()).toEqual(['2026-07-13', '2026-07-20']);
+    expect(Object.keys(all['2026-07-13'].tasks)).toEqual(['old']);
+  });
+});
+
+describe('weeklyProgressRows', () => {
+  const record: WeeklyStatsRecord = {
+    weekStart: WEEK,
+    createdAt: '',
+    updatedAt: '',
+    tasks: {
+      a: { taskId: 'a', category: 'Writing', scheduledAt: '', outcome: 'done' },
+      b: { taskId: 'b', category: 'Writing', scheduledAt: '', outcome: 'carried' },
+      c: { taskId: 'c', category: 'Retired category', scheduledAt: '', outcome: 'done' },
+    },
+    integrations: {},
+  };
+
+  it('reports X / Y per configured category, in configured order', () => {
+    expect(weeklyProgressRows(record, ['Writing', 'Engagement'])).toEqual([
+      { category: 'Writing', scheduledTasks: 2, completedTasks: 1 },
+      { category: 'Engagement', scheduledTasks: 0, completedTasks: 0 },
+      // History under a category the config dropped is still shown, last.
+      { category: 'Retired category', scheduledTasks: 1, completedTasks: 1 },
+    ]);
+  });
+
+  it('is all zeroes before the week is planned', () => {
+    expect(weeklyProgressRows(null, ['Writing'])).toEqual([
+      { category: 'Writing', scheduledTasks: 0, completedTasks: 0 },
+    ]);
+  });
+});

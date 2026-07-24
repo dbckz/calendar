@@ -11,6 +11,8 @@ import {
 } from '@/lib/time-tracking-storage';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import { logicalToday } from '@/lib/date-utils';
+import { recordWeeklyTime } from '@/lib/user-data-storage';
+import { weekStartStrFor } from '@/lib/scheduling/week-state';
 
 // GET /api/time-tracking - Retrieve historical data
 // Query params:
@@ -69,10 +71,11 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { date, integrationTotals, events } = body as {
+    const { date, integrationTotals, events, workedMinutesByIntegration } = body as {
       date: string;
       integrationTotals: Record<string, IntegrationTimeRecord>;
       events: EventTimeRecord[];
+      workedMinutesByIntegration?: Record<string, number>;
     };
 
     if (!date) {
@@ -94,6 +97,26 @@ export async function POST(request: NextRequest) {
     }
 
     const record = await recordDailyTime(date, integrationTotals || {}, events || []);
+
+    // Mirror the day's per-integration split into the durable weekly record, so
+    // a week's OM/DBC time survives independently of the rolling tracking file.
+    // Best-effort: never fail the recording over the analysis copy.
+    try {
+      const totals = Object.values(integrationTotals || {});
+      await recordWeeklyTime(
+        weekStartStrFor(new Date(`${date}T00:00:00`)),
+        date,
+        totals.map(t => ({
+          integrationId: t.integrationId,
+          integrationName: t.integrationName,
+          minutesScheduled: t.totalMinutes,
+          minutesWorked: workedMinutesByIntegration?.[t.integrationId] ?? t.totalMinutes,
+        }))
+      );
+    } catch (err) {
+      console.error('Failed to mirror time into weekly stats:', err);
+    }
+
     return NextResponse.json({ success: true, record });
   } catch (error) {
     console.error('Error recording time tracking data:', error);
