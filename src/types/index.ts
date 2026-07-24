@@ -451,6 +451,15 @@ export interface TaskMetadata {
 // Cached AI-suitability verdict for a task (keyed by Asana GID). Lets the
 // "Re-assess AI-runnable" action skip tasks whose content and the classifier
 // prompt are both unchanged since the last run.
+// Dave's own verdict on whether a task is AI-runnable, keyed by Asana GID.
+// Recorded when he rejects a claim in the assessment review, and it BEATS the
+// AI classifier from then on (same precedence idea as meetingPrepDecisions): a
+// re-assessment can never re-claim a task he has already said no to.
+export interface AiUserVerdict {
+  aiSuitable: boolean;
+  decidedAt: string; // ISO timestamp
+}
+
 export interface AiClassificationEntry {
   contentHash: string;   // fingerprint of title+description at assessment time
   promptVersion: string; // version of the classifier prompt used

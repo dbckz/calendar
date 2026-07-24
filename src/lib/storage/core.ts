@@ -13,6 +13,7 @@ import type {
   TaskMetadata,
   DelegationQueueEntry,
   AiClassificationEntry,
+  AiUserVerdict,
   StaleClassificationEntry,
   MeetingPrepDecision,
 } from '@/types';
@@ -93,6 +94,10 @@ export interface UserData {
   taskMetadata?: Record<string, TaskMetadata>; // Key is Asana task GID
   delegationQueue?: Record<string, DelegationQueueEntry>; // Key is Asana task GID
   aiClassification?: Record<string, AiClassificationEntry>; // Key is Asana task GID
+  // Dave's own AI-runnable verdicts (key: Asana task GID). Written when he
+  // rejects a claim in the assessment review; beats the cached AI verdict, so a
+  // rejected task never re-enters the AI-runnable list on re-assessment.
+  aiUserVerdicts?: Record<string, AiUserVerdict>;
   staleClassification?: Record<string, StaleClassificationEntry>; // Key is Asana task GID
   staleKeep?: Record<string, string>; // GID -> ISO timestamp: "keep active" until (snooze)
   meetingPrepDecisions?: Record<string, MeetingPrepDecision>; // Key is normalized meeting title
@@ -133,6 +138,7 @@ const DEFAULT_USER_DATA: UserData = {
   taskMetadata: {},
   delegationQueue: {},
   aiClassification: {},
+  aiUserVerdicts: {},
   staleClassification: {},
   staleKeep: {},
   meetingPrepDecisions: {},
@@ -167,6 +173,16 @@ export async function getUserData(): Promise<UserData> {
       taskMetadata: parsed.taskMetadata || {},
       delegationQueue: parsed.delegationQueue || {},
       aiClassification: parsed.aiClassification || {},
+      // Tolerant load: keep only well-formed { aiSuitable } entries.
+      aiUserVerdicts: Object.fromEntries(
+        Object.entries(parsed.aiUserVerdicts || {}).filter(
+          ([k, v]) =>
+            typeof k === 'string' &&
+            !!v &&
+            typeof v === 'object' &&
+            typeof (v as AiUserVerdict).aiSuitable === 'boolean'
+        )
+      ),
       staleClassification: parsed.staleClassification || {},
       staleKeep: parsed.staleKeep || {},
       meetingPrepDecisions: parsed.meetingPrepDecisions || {},

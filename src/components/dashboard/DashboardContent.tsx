@@ -5,7 +5,7 @@ import { CalendarClock, Bot, Loader2, Archive, RefreshCw, ClipboardCheck, Search
 
 import { CalendarEvent, DelegationQueueEntry, TaskMetadata } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
-import { api, DashboardCapacityResponse, type WeekStateResponse } from '@/lib/api';
+import { api, DashboardCapacityResponse, type WeekStateResponse, type AiClaim } from '@/lib/api';
 import { WEEK_ACTION_LABELS, targetWeekForAction, type WeekAction } from '@/lib/scheduling/week-state';
 import { TodayColumn } from './TodayColumn';
 import { TopTasks } from './TopTasks';
@@ -18,6 +18,7 @@ import { PlanWeekModal } from './PlanWeekModal';
 import { ReplanWeekModal } from './ReplanWeekModal';
 import { DailyReviewModal } from './DailyReviewModal';
 import { TaskSearchModal } from './TaskSearchModal';
+import { AiClaimsModal } from './AiClaimsModal';
 
 interface Integration {
   id: string;
@@ -165,6 +166,9 @@ export function DashboardContent({
 
   const [isReassessing, setIsReassessing] = useState(false);
   const [reassessNote, setReassessNote] = useState<string | null>(null);
+  // Manual assessment is GATED: new AI-runnable claims wait in this modal for
+  // Dave to confirm before they join the list.
+  const [aiClaims, setAiClaims] = useState<AiClaim[] | null>(null);
 
   const handleReassess = useCallback(async () => {
     setIsReassessing(true);
@@ -178,12 +182,17 @@ export function DashboardContent({
           title: t.title,
           description: t.description,
           integrationName: t.integrationName,
+          dueOn: t.dueOn,
         }));
-      const r = await api.classifyAiTasks(payload);
+      // 'review' mode: nothing newly claimed lands in the list until confirmed.
+      const r = await api.classifyAiTasks(payload, 'review');
       await onReloadMetadata?.();
       setReassessNote(
         `Assessed ${r.assessed}, ${r.cached} unchanged${r.changed ? `, ${r.changed} updated` : ''}.`
       );
+      // Always open the review — an empty result gets its own empty state rather
+      // than the button appearing to do nothing.
+      setAiClaims(r.claims ?? []);
     } catch (err) {
       setReassessNote(err instanceof Error ? err.message : 'Re-assessment failed.');
     } finally {
@@ -344,6 +353,16 @@ export function DashboardContent({
           </div>
         </div>
       </div>
+
+      <AiClaimsModal
+        isOpen={aiClaims !== null}
+        claims={aiClaims ?? []}
+        onClose={() => setAiClaims(null)}
+        onApplied={() => {
+          onReloadMetadata?.();
+          refetch();
+        }}
+      />
 
       {showSearchModal && (
         <TaskSearchModal

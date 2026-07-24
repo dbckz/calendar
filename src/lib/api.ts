@@ -5,6 +5,7 @@ import type { CapacityRow } from '@/lib/capacity';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanReviewBlock, ReplanCarryBlock } from '@/lib/scheduling/replan';
 import type { ReviewAdoptInput } from '@/lib/scheduling/daily-review';
+import type { AiClaim } from '@/lib/ai-verdicts';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 
 export interface QuotaSummaryRow {
@@ -153,6 +154,8 @@ export interface WeekCandidatesResponse {
 }
 
 // What the dashboard's single adaptive planning button should do next.
+export type { AiClaim } from '@/lib/ai-verdicts';
+
 export interface WeekStateResponse {
   action: 'plan-this-week' | 'replan' | 'wrap-up' | 'plan-next-week' | 'replan-next-week';
   weekStart: string; // yyyy-MM-dd Monday of the current week
@@ -626,14 +629,49 @@ export const api = {
   // Re-assess which tasks are AI-runnable. Cached tasks are skipped server-side;
   // only changed/new ones hit the model. No retry — the call is expensive.
   async classifyAiTasks(
-    tasks: Array<{ gid: string; integrationId: string; title: string; description?: string; integrationName?: string }>
-  ): Promise<{ total: number; assessed: number; cached: number; changed: number; promptVersion: string }> {
+    tasks: Array<{
+      gid: string;
+      integrationId: string;
+      title: string;
+      description?: string;
+      integrationName?: string;
+      dueOn?: string;
+    }>,
+    // 'review' holds new AI-runnable claims back for confirmation and returns
+    // them in `claims`; omit (or 'apply') for the original apply-immediately
+    // behaviour used by any non-interactive caller.
+    mode?: 'apply' | 'review'
+  ): Promise<{
+    total: number;
+    assessed: number;
+    cached: number;
+    changed: number;
+    claims?: AiClaim[];
+    promptVersion: string;
+  }> {
     return fetchWithRetry(
       '/api/tasks/classify-ai',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tasks }),
+        body: JSON.stringify({ tasks, ...(mode ? { mode } : {}) }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Apply the AI-runnable review: accepted claims join the list, rejected ones
+  // get a standing "not AI-runnable" verdict that outranks future assessments.
+  async applyAiVerdicts(
+    accept: Array<{ gid: string; integrationId: string }>,
+    reject: Array<{ gid: string; integrationId: string }>
+  ): Promise<{ accepted: number; rejected: number }> {
+    return fetchWithRetry(
+      '/api/tasks/ai-verdicts',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accept, reject }),
       },
       { maxRetries: 0 }
     );
