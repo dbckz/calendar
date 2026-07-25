@@ -188,7 +188,7 @@ describe('AnalysisView', () => {
       );
 
       const segment = screen.getByLabelText('OM, Unsplit: 2h, 100 per cent');
-      expect(segment).toHaveClass('bg-gray-300');
+      expect(segment).toHaveStyle({ backgroundColor: '#d1d5db' });
     });
 
     it('skips the section entirely when no time was recorded all week', async () => {

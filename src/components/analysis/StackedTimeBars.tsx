@@ -54,10 +54,13 @@ export function StackedTimeBars({
                         ),
                       })
                     }
-                    style={{ width: `${(segment.share * 100).toFixed(1)}%` }}
+                    style={{
+                      width: `${(segment.share * 100).toFixed(1)}%`,
+                      backgroundColor: categoryColour(segment.category),
+                    }}
                     title={`${segment.category} — ${formatMinutes(segment.minutes)} (${pct(segment.share)}%)`}
                     aria-label={`${entry.integrationName}, ${segment.category}: ${formatMinutes(segment.minutes)}, ${pct(segment.share)} per cent`}
-                    className={`group relative h-full first:rounded-l-full last:rounded-r-full transition-opacity hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-gray-400 ${categoryColour(segment.category)}`}
+                    className="group relative h-full first:rounded-l-full last:rounded-r-full transition-opacity hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-gray-400"
                   >
                     <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-[11px] font-medium text-white group-hover:block group-focus-visible:block">
                       {segment.category} · {formatMinutes(segment.minutes)} · {pct(segment.share)}%

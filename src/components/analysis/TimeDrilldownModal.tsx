@@ -50,7 +50,8 @@ export function TimeDrilldownModal({
         <div className="flex items-start justify-between px-5 py-4 border-b border-gray-200">
           <div className="flex items-start gap-2">
             <span
-              className={`w-3 h-3 mt-1.5 rounded-full flex-shrink-0 ${categoryColour(target.category)}`}
+              className="w-3 h-3 mt-1.5 rounded-full flex-shrink-0"
+              style={{ backgroundColor: categoryColour(target.category) }}
               aria-hidden="true"
             />
             <div>

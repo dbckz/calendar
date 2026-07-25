@@ -11,35 +11,31 @@ export function formatMinutes(minutes: number): string {
 }
 
 // Fixed palette for the categories the scheduler actually emits, so a category
-// keeps its colour from week to week and across workspaces. Anything unknown
-// falls back to a hash of the name — arbitrary, but stable for the same name.
+// keeps its colour from week to week and across workspaces. The eight main
+// slots are a CVD-validated categorical set (adjacent-pair ΔE checked in OKLab);
+// the three weekly rituals get their own distinct steps. Colours are never
+// generated or cycled — an unknown category renders grey alongside the other
+// "we don't know" buckets rather than risking a collision with a real one.
+const UNKNOWN_COLOUR = '#d1d5db';
+
 const CATEGORY_COLOURS: Record<string, string> = {
-  Meetings: 'bg-sky-500',
-  'Writing/Deep Work': 'bg-violet-500',
-  Emails: 'bg-amber-500',
-  Admin: 'bg-slate-400',
-  Policy: 'bg-rose-500',
-  Research: 'bg-teal-500',
-  Other: 'bg-gray-300',
-  Uncategorised: 'bg-gray-300',
-  // Time recorded before category tracking existed: grey, like the other
-  // "we don't know" buckets, so it never reads as a real category.
-  Unsplit: 'bg-gray-300',
+  Meetings: '#2a78d6',
+  'Engagement/Outreach': '#eb6834',
+  Batch: '#1baf7a',
+  Emails: '#eda100',
+  Blogs: '#e87ba4',
+  'General Todos': '#008300',
+  'Writing/Deep Work': '#4a3aa7',
+  'Meeting prep': '#e34948',
+  'Kindle notes': '#8c5a2b',
+  'Backlog grooming': '#0e7490',
+  Retrospective: '#64748b',
+  Other: UNKNOWN_COLOUR,
+  Uncategorised: UNKNOWN_COLOUR,
+  // Time recorded before category tracking existed.
+  Unsplit: UNKNOWN_COLOUR,
 };
 
-const FALLBACK_COLOURS = [
-  'bg-indigo-500',
-  'bg-emerald-500',
-  'bg-orange-500',
-  'bg-cyan-500',
-  'bg-fuchsia-500',
-  'bg-lime-500',
-];
-
 export function categoryColour(category: string): string {
-  const known = CATEGORY_COLOURS[category];
-  if (known) return known;
-  let hash = 0;
-  for (let i = 0; i < category.length; i += 1) hash = (hash * 31 + category.charCodeAt(i)) % 9973;
-  return FALLBACK_COLOURS[hash % FALLBACK_COLOURS.length];
+  return CATEGORY_COLOURS[category] ?? UNKNOWN_COLOUR;
 }

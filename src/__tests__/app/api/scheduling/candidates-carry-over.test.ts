@@ -16,7 +16,7 @@ import type { CandidateTask } from '@/lib/scheduling/types';
 const mockGather = gatherWeekContext as jest.MockedFunction<typeof gatherWeekContext>;
 
 const CONFIG: WorkflowConfig = {
-  taskQuotas: { Writing: { weeklyCount: 3, targetLength: '60min' } },
+  taskQuotas: { Writing: { weeklyCount: 3, targetLength: '60min', preferredTimes: [] } },
   typeMapping: { Writing: ['Writing'] },
   scheduling: {
     bufferBetweenTasks: '0min',
