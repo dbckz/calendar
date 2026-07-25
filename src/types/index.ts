@@ -472,13 +472,16 @@ export interface TaskMetadata {
 //    scheduled into the week and is NEVER removed. Carrying or dropping a task
 //    changes its `outcome`, not its presence — that is what makes end-of-week
 //    over-scheduling visible ("you planned 14, finished 6").
-//  * Only outcome 'done' counts as completed. 'carried' and 'dropped' are
-//    explicitly NOT completed.
+//  * Only outcome 'done' counts as completed. 'started' (worked on but not
+//    finished), 'carried' and 'dropped' are explicitly NOT completed — a started
+//    task still has to be finished, so it stays in the not-done pool for replan
+//    and carry-over. The progress display shows it separately so partial
+//    progress on a long task is visible rather than reading as a total miss.
 //  * Per-category totals are DERIVED from `tasks` (see summariseWeek) rather
 //    than stored, so the counters can never drift from the task list.
 //  * Times are per integration per day, so a week's OM/DBC split can be
 //    recovered without the (rolling) time-tracking file.
-export type WeeklyTaskOutcomeKind = 'scheduled' | 'done' | 'carried' | 'dropped';
+export type WeeklyTaskOutcomeKind = 'scheduled' | 'started' | 'done' | 'carried' | 'dropped';
 
 export interface WeeklyTaskOutcome {
   taskId: string; // Asana gid or ad-hoc id
@@ -509,6 +512,25 @@ export interface WeeklyStatsRecord {
     string, // Asana integration id
     { integrationName: string; days: Record<string, WeeklyStatsIntegrationDay> }
   >;
+}
+
+// A DURABLE attribution override for calendar events, matched by recurring
+// series or by exact title. Per-event googleEventAttributions can't help with a
+// recurring meeting (every instance has its own id, and a new instance appears
+// every week), so a rule attributes the whole series once and keeps working
+// through reconcile and future instances.
+export interface EventAttributionRule {
+  id: string;
+  // Match on the recurring series id where the fetch provides one (most precise),
+  // and/or on the exact event title (case- and space-insensitive). A rule needs
+  // at least one of the two.
+  recurringEventId?: string;
+  title?: string;
+  // The Asana workspace this event's time belongs to, or 'none' to force it to
+  // count toward NOTHING (personal time on a work calendar).
+  asanaIntegrationId: string | 'none';
+  note?: string;
+  createdAt: string;
 }
 
 export interface AiUserVerdict {

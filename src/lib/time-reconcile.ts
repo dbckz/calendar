@@ -32,6 +32,9 @@ import {
   getScheduledAsanaTasks,
   getGoogleEventAttributions,
   recordWeeklyTime,
+  getEventAttributionRules,
+  getAnalysisStartDate,
+  pruneWeeklyStatsBefore,
 } from '@/lib/user-data-storage';
 import { getEnabledAsanaIntegrations } from '@/lib/integration-storage';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
@@ -70,28 +73,45 @@ function enrichWithLocalRecords(
 export async function reconcilePastDays(days = DEFAULT_RECONCILE_DAYS): Promise<ReconcileResult> {
   const requested = Math.max(1, Math.min(Math.floor(days) || DEFAULT_RECONCILE_DAYS, MAX_RECONCILE_DAYS));
 
-  const [config, googleIntegrations, asanaIntegrations, scheduledAsana, adHocTasks, attributions, tracking] =
-    await Promise.all([
-      getWorkflowConfig(),
-      getEnabledGoogleIntegrations(),
-      getEnabledAsanaIntegrations(),
-      getScheduledAsanaTasks(),
-      getAdHocTasks(),
-      getGoogleEventAttributions(),
-      getTimeTrackingData(),
-    ]);
+  const [
+    config,
+    googleIntegrations,
+    asanaIntegrations,
+    scheduledAsana,
+    adHocTasks,
+    attributions,
+    tracking,
+    attributionRules,
+    analysisStartDate,
+  ] = await Promise.all([
+    getWorkflowConfig(),
+    getEnabledGoogleIntegrations(),
+    getEnabledAsanaIntegrations(),
+    getScheduledAsanaTasks(),
+    getAdHocTasks(),
+    getGoogleEventAttributions(),
+    getTimeTrackingData(),
+    getEventAttributionRules(),
+    getAnalysisStartDate(),
+  ]);
+
+  // One-off (idempotent) cleanup: weeks before the analysis start date are noise
+  // from before the app was in use, so they go and never come back.
+  await pruneWeeklyStatsBefore(analysisStartDate);
 
   const rolloverHour = normalizeRolloverHour(config.scheduling?.dayRolloverHour);
   const today = logicalToday(new Date(), rolloverHour);
 
-  // Never reach back before tracking began — there is nothing to correct there,
-  // and a blank stretch would otherwise be "reconciled" into existence.
+  // Two floors, whichever is later: the analysis start date (before it, the app
+  // wasn't in use) and the first tracked day (before that there is nothing to
+  // correct, and a blank stretch would be "reconciled" into existence).
   const earliestTracked = tracking.dailyRecords.map((r: { date: string }) => r.date).sort()[0];
+  const floor = [analysisStartDate, earliestTracked].filter(Boolean).sort().pop()!;
 
   const candidateDates: string[] = [];
   for (let i = 1; i <= requested; i++) {
     const date = format(addDays(new Date(`${today}T00:00:00`), -i), 'yyyy-MM-dd');
-    if (earliestTracked && date < earliestTracked) break;
+    if (date < floor) break;
     candidateDates.push(date);
   }
   if (candidateDates.length === 0) {
@@ -109,7 +129,7 @@ export async function reconcilePastDays(days = DEFAULT_RECONCILE_DAYS): Promise<
   for (const a of attributions) {
     attributionByEventId[a.googleEventId] = { asanaIntegrationId: a.asanaIntegrationId };
   }
-  const ctx: AttributionContext = { map, attributionByEventId };
+  const ctx: AttributionContext = { map, attributionByEventId, attributionRules };
 
   const scheduledByEventId = new Map<string, { taskId: string; integrationId?: string }>();
   for (const s of scheduledAsana) {

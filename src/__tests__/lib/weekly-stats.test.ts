@@ -38,8 +38,8 @@ describe('weekly stats storage', () => {
     expect(Object.keys(record.tasks)).toHaveLength(5);
     const summary = summariseWeek(record);
     expect(summary.categories).toEqual([
-      { category: 'Engagement', scheduled: 3, completed: 0, carried: 0, dropped: 0 },
-      { category: 'Writing', scheduled: 2, completed: 0, carried: 0, dropped: 0 },
+      { category: 'Engagement', scheduled: 3, completed: 0, started: 0, carried: 0, dropped: 0 },
+      { category: 'Writing', scheduled: 2, completed: 0, started: 0, carried: 0, dropped: 0 },
     ]);
     expect(summary.totalScheduled).toBe(5);
   });
@@ -153,16 +153,66 @@ describe('weeklyProgressRows', () => {
 
   it('reports X / Y per configured category, in configured order', () => {
     expect(weeklyProgressRows(record, ['Writing', 'Engagement'])).toEqual([
-      { category: 'Writing', scheduledTasks: 2, completedTasks: 1 },
-      { category: 'Engagement', scheduledTasks: 0, completedTasks: 0 },
+      { category: 'Writing', scheduledTasks: 2, completedTasks: 1, startedTasks: 0 },
+      { category: 'Engagement', scheduledTasks: 0, completedTasks: 0, startedTasks: 0 },
       // History under a category the config dropped is still shown, last.
-      { category: 'Retired category', scheduledTasks: 1, completedTasks: 1 },
+      { category: 'Retired category', scheduledTasks: 1, completedTasks: 1, startedTasks: 0 },
     ]);
   });
 
   it('is all zeroes before the week is planned', () => {
     expect(weeklyProgressRows(null, ['Writing'])).toEqual([
-      { category: 'Writing', scheduledTasks: 0, completedTasks: 0 },
+      { category: 'Writing', scheduledTasks: 0, completedTasks: 0, startedTasks: 0 },
     ]);
+  });
+});
+
+describe('started-but-unfinished outcome', () => {
+  const STARTED_WEEK = '2026-08-03';
+
+  it('counts a started task as progress but NOT as completed', async () => {
+    await recordWeeklyTasks(STARTED_WEEK, [
+      { taskId: 'a', category: 'Writing' },
+      { taskId: 'b', category: 'Writing' },
+      { taskId: 'c', category: 'Writing' },
+    ]);
+    await setWeeklyTaskOutcomes(STARTED_WEEK, [
+      { taskId: 'a', outcome: 'done' },
+      { taskId: 'b', outcome: 'started' },
+    ]);
+
+    const summary = summariseWeek((await getWeeklyStats(STARTED_WEEK))!);
+    expect(summary.totalCompleted).toBe(1);
+    expect(summary.totalStarted).toBe(1);
+    expect(summary.totalScheduled).toBe(3);
+    // Headline progress counts finished + started: 2 of 3.
+    expect(summary.completionRate).toBeCloseTo(2 / 3);
+    expect(summary.categories[0]).toMatchObject({ completed: 1, started: 1, scheduled: 3 });
+  });
+
+  it('keeps the finished / started split in the progress rows', async () => {
+    await recordWeeklyTasks(STARTED_WEEK, [
+      { taskId: 'a', category: 'Writing' },
+      { taskId: 'b', category: 'Writing' },
+    ]);
+    await setWeeklyTaskOutcomes(STARTED_WEEK, [{ taskId: 'b', outcome: 'started' }]);
+
+    const rows = weeklyProgressRows(await getWeeklyStats(STARTED_WEEK), ['Writing']);
+    expect(rows[0]).toEqual({
+      category: 'Writing',
+      scheduledTasks: 2,
+      completedTasks: 0,
+      startedTasks: 1,
+    });
+  });
+
+  it('lets a started task later become done or carried', async () => {
+    await recordWeeklyTasks(STARTED_WEEK, [{ taskId: 'a', category: 'Writing' }]);
+    await setWeeklyTaskOutcomes(STARTED_WEEK, [{ taskId: 'a', outcome: 'started' }]);
+    await setWeeklyTaskOutcomes(STARTED_WEEK, [{ taskId: 'a', outcome: 'carried' }]);
+
+    const summary = summariseWeek((await getWeeklyStats(STARTED_WEEK))!);
+    expect(summary.totalStarted).toBe(0);
+    expect(summary.categories[0]).toMatchObject({ carried: 1, started: 0, completed: 0 });
   });
 });

@@ -14,6 +14,8 @@
 import type { CalendarEvent } from '@/types';
 import { isBreakLikeTitle, isRitualLikeTitle, ritualKindForTitle } from '@/lib/scheduling/rituals';
 import { categoryForTitleEmoji, isPrepTitle } from '@/lib/scheduling/event-titles';
+import { resolveAttributionRule } from '@/lib/attribution-rules';
+import type { EventAttributionRule } from '@/types';
 
 // Google event types that are never work time. 'default' and 'focusTime' are.
 //  * birthday / workingLocation — calendar furniture, not time spent,
@@ -119,6 +121,9 @@ export interface AttributionContext {
   // Optional task id → quota category, so a block backed by a known task is
   // categorised by its real classification rather than only its title emoji.
   categoryByTaskId?: Record<string, string | undefined>;
+  // Durable series/title attribution overrides (see lib/attribution-rules.ts).
+  // Built-in rules always apply; these are the user's stored additions.
+  attributionRules?: readonly EventAttributionRule[];
 }
 
 // The Asana workspace an event's time belongs to, or null for "counts toward
@@ -128,6 +133,9 @@ export interface AttributionContext {
 //   1. an explicit task link / Asana-sourced event — the app knows the exact
 //      workspace, and it wins even if the event sits on another calendar,
 //   2. a manual attribution Dave set on that specific event,
+//   2b. a durable series/title rule (a recurring meeting attributed once). A
+//       rule of 'none' pins the event to "counts toward nothing", which beats the
+//       calendar it sits on,
 //   3. the calendar it lives on (sub-calendar mapping, then integration).
 export function attributeEventToWorkspace(
   event: CalendarEvent,
@@ -139,6 +147,9 @@ export function attributeEventToWorkspace(
 
   const manual = ctx.attributionByEventId?.[event.id]?.asanaIntegrationId;
   if (manual) return manual;
+
+  const ruled = resolveAttributionRule(event, ctx.attributionRules);
+  if (ruled) return ruled === 'none' ? null : ruled;
 
   if (event.calendarId && ctx.map.byCalendar[event.calendarId]) {
     return ctx.map.byCalendar[event.calendarId];

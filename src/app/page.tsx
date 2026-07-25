@@ -23,7 +23,7 @@ import { useDelegationQueue } from '@/hooks/useDelegationQueue';
 import { useDashboard } from '@/hooks/useDashboard';
 import { useToast } from '@/hooks/useToast';
 import { useGoogleEventModal } from '@/hooks/useGoogleEventModal';
-import { CalendarEvent, DelegationQueueEntry, DragItem, TaskType, SettingsResponse, AsanaFilterState } from '@/types';
+import { CalendarEvent, DelegationQueueEntry, DragItem, TaskType, SettingsResponse, AsanaFilterState, EventAttributionRule } from '@/types';
 import { api } from '@/lib/api';
 import { asanaTaskUrl, asanaTaskGidsFromText } from '@/lib/asana-url';
 import { stripLeadingEmoji } from '@/lib/scheduling/calendar-review';
@@ -224,6 +224,14 @@ export default function Home() {
   }, [toast]);
 
   const [calendarWorkspaceMap, setCalendarWorkspaceMap] = useState<Record<string, string>>({});
+  // Stored series/title attribution overrides. The built-in rules apply without
+  // this (they live in code), so a load failure degrades gracefully.
+  const [attributionRules, setAttributionRules] = useState<EventAttributionRule[]>([]);
+  useEffect(() => {
+    api.getAttributionRules()
+      .then(res => setAttributionRules(res.rules))
+      .catch(err => console.error('Failed to load attribution rules:', err));
+  }, []);
 
   // Opening the Analysis tab refreshes past days from the calendar first, so
   // retro-edits (a deleted meeting, a moved block) are already reflected in what
@@ -403,8 +411,12 @@ export default function Home() {
   );
 
   const attributionContext = useMemo(
-    () => ({ map: workspaceCalendarMap, attributionByEventId: googleEventAttributions }),
-    [workspaceCalendarMap, googleEventAttributions]
+    () => ({
+      map: workspaceCalendarMap,
+      attributionByEventId: googleEventAttributions,
+      attributionRules,
+    }),
+    [workspaceCalendarMap, googleEventAttributions, attributionRules]
   );
 
   // A minute-resolution clock for the "worked so far" split below. Held in state

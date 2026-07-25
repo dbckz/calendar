@@ -15,6 +15,8 @@ jest.mock('@/lib/api', () => ({
     getSettings: jest.fn().mockResolvedValue({ googleIntegrations: [], asanaIntegrations: [] }),
     getWorkflowConfig: jest.fn().mockResolvedValue({ scheduling: { dayRolloverHour: 4 } }),
     getGoogleEventAttributions: jest.fn().mockResolvedValue({ attributions: [] }),
+    getAttributionRules: jest.fn().mockResolvedValue({ rules: [] }),
+    reconcileTimeFromCalendar: jest.fn().mockResolvedValue({ days: 0, updated: 0, skipped: [], lastSyncedAt: null }),
     recordTimeTracking: jest.fn().mockResolvedValue(undefined),
     setGoogleEventAttribution: jest.fn().mockResolvedValue(undefined),
     removeGoogleEventAttribution: jest.fn().mockResolvedValue(undefined),
@@ -127,13 +129,14 @@ describe('Home page shell', () => {
     return utils;
   }
 
-  it('renders the tab bar with all four tabs and the dashboard by default', async () => {
+  it('renders the tab bar with every tab and the dashboard by default', async () => {
     await renderHome();
 
     expect(screen.getByRole('button', { name: 'Command Center' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Daily Calendar' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Rituals' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reminders' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Analysis' })).toBeInTheDocument();
 
     // Dashboard is the default active tab.
     expect(screen.getByText('Command Center Content')).toBeInTheDocument();

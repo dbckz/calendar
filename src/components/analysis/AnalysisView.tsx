@@ -9,9 +9,10 @@ import { StackedTimeBars } from './StackedTimeBars';
 import { TimeDrilldownModal, type DrilldownTarget } from './TimeDrilldownModal';
 import type { AnalysisResponse, ReconcileResponse, WeekSummary } from './types';
 
-// Colour scale shared by the per-category bars and the trend columns: green
-// when most of what was scheduled got done, amber in the middle, orange when
-// the week was heavily over-scheduled.
+// Colour scale for the trend columns: green when most of what was scheduled got
+// finished or started, amber in the middle, orange when the week was heavily
+// over-scheduled. The per-category bars split finished from started instead, so
+// they use the fixed emerald/amber pair rather than this scale.
 function rateColor(rate: number): string {
   if (rate >= 0.8) return 'bg-emerald-500';
   if (rate >= 0.5) return 'bg-amber-500';
@@ -46,7 +47,7 @@ function CompletionTrend({ weeks }: { weeks: WeekSummary[] }) {
     <div className={CARD}>
       <h2 className="text-base font-semibold text-gray-900">Completion trend</h2>
       <p className="text-[11px] text-gray-400 mb-3">
-        Share of scheduled tasks completed, oldest week first.
+        Share of scheduled tasks finished or started, oldest week first.
       </p>
       <ul className="flex items-end gap-2 h-24">
         {oldestFirst.map(week => (
@@ -56,7 +57,7 @@ function CompletionTrend({ weeks }: { weeks: WeekSummary[] }) {
               <div
                 className={`w-full rounded-full ${rateColor(week.completionRate)}`}
                 style={{ height: `${Math.max(pct(week.completionRate), 2)}%` }}
-                aria-label={`${shortWeekLabel(week.weekStart)}: ${pct(week.completionRate)} per cent completed`}
+                aria-label={`${shortWeekLabel(week.weekStart)}: ${pct(week.completionRate)} per cent finished or started`}
               />
             </div>
             <span className="text-[10px] text-gray-400 mt-1 truncate w-full text-center">
@@ -76,7 +77,9 @@ function WeekCard({
   week: WeekSummary;
   onSelectSegment: (target: DrilldownTarget) => void;
 }) {
-  const overScheduledBy = week.totalScheduled - week.totalCompleted;
+  const started = week.totalStarted ?? 0;
+  const progressed = week.totalCompleted + started;
+  const untouched = week.totalScheduled - progressed;
 
   return (
     <div className={CARD}>
@@ -86,15 +89,14 @@ function WeekCard({
           <span className={`font-semibold ${week.completionRate >= 0.8 ? 'text-emerald-600' : 'text-gray-800'}`}>
             {pct(week.completionRate)}%
           </span>{' '}
-          completed
+          finished or started
         </span>
       </div>
 
       <div className="text-[13px] text-gray-600 mb-3">
-        {week.totalCompleted} of {week.totalScheduled} scheduled tasks done
-        {overScheduledBy > 0 && (
-          <span className="text-orange-600"> — {overScheduledBy} left undone</span>
-        )}
+        {progressed} of {week.totalScheduled} scheduled tasks finished or started
+        {started > 0 && <span className="text-amber-600"> · {started} started</span>}
+        {untouched > 0 && <span className="text-orange-600"> — {untouched} untouched</span>}
       </div>
 
       {week.categories.length === 0 ? (
@@ -102,22 +104,24 @@ function WeekCard({
       ) : (
         <ul className="space-y-1.5">
           {week.categories.map(cat => {
-            const rate = cat.scheduled > 0 ? cat.completed / cat.scheduled : 0;
+            const catStarted = cat.started ?? 0;
+            const donePct = cat.scheduled > 0 ? pct(cat.completed / cat.scheduled) : 0;
+            const startedPct =
+              cat.scheduled > 0 ? Math.min(100 - donePct, pct(catStarted / cat.scheduled)) : 0;
             return (
               <li key={cat.category}>
                 <div className="flex items-center justify-between text-[13px] mb-0.5">
                   <span className="font-medium text-gray-800">{cat.category}</span>
                   <span className="text-gray-500">
-                    {cat.completed} / {cat.scheduled}
+                    {cat.completed + catStarted} / {cat.scheduled}
+                    {catStarted > 0 && <span className="text-amber-600"> ({catStarted} started)</span>}
                     {cat.carried > 0 && <span className="text-amber-600"> ({cat.carried} carried)</span>}
                     {cat.dropped > 0 && <span className="text-gray-400"> ({cat.dropped} dropped)</span>}
                   </span>
                 </div>
-                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full ${rateColor(rate)}`}
-                    style={{ width: `${pct(rate)}%` }}
-                  />
+                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden flex">
+                  <div className="h-full bg-emerald-500" style={{ width: `${donePct}%` }} />
+                  <div className="h-full bg-amber-500" style={{ width: `${startedPct}%` }} />
                 </div>
               </li>
             );

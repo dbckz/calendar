@@ -34,6 +34,8 @@ import {
   setCarryOvers,
   removeCarryOvers,
   setWeeklyTaskOutcomes,
+  setGoogleEventAttribution,
+  addEventAttributionRule,
   updateScheduledAsanaTasksByGoogleEvent,
 } from '@/lib/user-data-storage';
 import type { ReviewAdoptInput } from '@/lib/scheduling/daily-review';
@@ -91,6 +93,32 @@ interface DeferInput {
 interface DeferResult {
   taskIds: string[];
   googleEventId?: string;
+  success: boolean;
+  error?: string;
+}
+
+// One "didn't do" answer: the planned block's event is removed and, when the user
+// said what they did instead, a replacement is created in the same slot.
+//  * 'work'     — a replacement on the chosen workspace's calendar (with a manual
+//                 attribution as a belt-and-braces guarantee it counts there),
+//  * 'personal' — a replacement that counts toward NOTHING (a pinned 'none'
+//                 attribution rule for that event id),
+//  * 'none'     — deletion only.
+interface ReplacementInput {
+  googleEventId: string;
+  googleIntegrationId?: string;
+  date: string;
+  start: string;
+  durationMinutes: number;
+  mode: 'work' | 'personal' | 'none';
+  title?: string;
+  workspaceId?: string;
+}
+
+interface ReplacementResult {
+  googleEventId: string;
+  deleted: boolean;
+  replacementEventId?: string;
   success: boolean;
   error?: string;
 }
@@ -285,6 +313,35 @@ export async function POST(request: NextRequest) {
             !!d && typeof d === 'object' && typeof (d as { googleEventId?: unknown }).googleEventId === 'string'
         )
       : [];
+    // Blocks the user marked STARTED (worked on, not finished): recorded as a
+    // 'started' outcome for the week. They stay not-done everywhere else, and
+    // their calendar event is never touched — that time really was spent.
+    const startedEventIds: string[] = Array.isArray(body?.started)
+      ? body.started.filter((id: unknown): id is string => typeof id === 'string')
+      : [];
+    // "Didn't do" answers: delete the block's own event and, optionally, put what
+    // actually happened in the slot instead.
+    const replacementInputs: ReplacementInput[] = Array.isArray(body?.replacements)
+      ? body.replacements
+          .filter(
+            (r: unknown): r is Record<string, unknown> =>
+              !!r &&
+              typeof r === 'object' &&
+              typeof (r as { googleEventId?: unknown }).googleEventId === 'string'
+          )
+          .map((r: Record<string, unknown>) => ({
+            googleEventId: r.googleEventId as string,
+            googleIntegrationId:
+              typeof r.googleIntegrationId === 'string' ? r.googleIntegrationId : undefined,
+            date: typeof r.date === 'string' ? r.date : '',
+            start: typeof r.start === 'string' ? r.start : '',
+            durationMinutes: typeof r.durationMinutes === 'number' ? r.durationMinutes : 0,
+            mode: r.mode === 'work' || r.mode === 'personal' ? r.mode : ('none' as const),
+            title: typeof r.title === 'string' ? r.title : undefined,
+            workspaceId: typeof r.workspaceId === 'string' ? r.workspaceId : undefined,
+          }))
+      : [];
+
     // Bare calendar events (source 'calendar') the user left not-done: adopt each
     // into a local record so the replan step can re-slot it. Trust only the shape;
     // the record type is chosen server-side from whether a gid is present.
@@ -303,6 +360,8 @@ export async function POST(request: NextRequest) {
     if (
       moves.length === 0 &&
       doneEventIds.length === 0 &&
+      startedEventIds.length === 0 &&
+      replacementInputs.length === 0 &&
       notDoneEventIds.length === 0 &&
       asanaCompletions.length === 0 &&
       adoptInputs.length === 0 &&
@@ -352,7 +411,10 @@ export async function POST(request: NextRequest) {
     // Outcomes collected as we go and written once at the end. The week is the
     // CURRENT one: these actions only ever resolve work planned into it.
     const weekStartStr = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd');
-    const weeklyOutcomes: Array<{ taskId: string; outcome: 'done' | 'carried' | 'scheduled' }> = [];
+    const weeklyOutcomes: Array<{
+      taskId: string;
+      outcome: 'done' | 'started' | 'carried' | 'scheduled';
+    }> = [];
     // The task ids behind a block's Google event, from whichever store owns it.
     const taskIdsForEvent = (googleEventId: string): string[] => {
       const asana = scheduledAsana
@@ -545,6 +607,141 @@ export async function POST(request: NextRequest) {
           googleEventId,
           success: false,
           error: err instanceof Error ? err.message : 'Failed to leave unscheduled',
+        });
+      }
+    }
+
+    // --- Started: worked on but not finished --------------------------------
+    // Recorded for the week's stats only. No calendar change, no done marking:
+    // the task still needs finishing, so replan and carry-over still offer it.
+    for (const googleEventId of startedEventIds) {
+      for (const taskId of taskIdsForEvent(googleEventId)) {
+        weeklyOutcomes.push({ taskId, outcome: 'started' });
+      }
+    }
+
+    // --- "Didn't do": rewrite the calendar to match reality -----------------
+    // The planned block didn't happen, so its event goes (leaving it would inflate
+    // the time analysis with work that never took place). Deletion is scoped to
+    // the reviewed block's OWN event id — never a sweep. A failure is reported and
+    // the rest of the apply continues.
+    const replacementResults: ReplacementResult[] = [];
+    for (const r of replacementInputs) {
+      let deleted = false;
+      try {
+        const record = scheduledAsana.find(s => s.googleEventId === r.googleEventId);
+        const adhoc = adHocTasks.find(t => t.googleEventId === r.googleEventId);
+        const prep = prepBlocks.find(p => p.googleEventId === r.googleEventId);
+        const ritual = ritualBlocks.find(x => x.googleEventId === r.googleEventId);
+        const resolved = await resolveGoogle(
+          r.googleIntegrationId ??
+            record?.googleIntegrationId ??
+            adhoc?.googleIntegrationId ??
+            prep?.googleIntegrationId ??
+            ritual?.googleIntegrationId
+        );
+        if (resolved) {
+          try {
+            await deleteCalendarEvent(
+              resolved.credentials,
+              resolved.integration.clientId,
+              resolved.integration.clientSecret,
+              r.googleEventId
+            );
+            deleted = true;
+          } catch (err) {
+            if (isEventGoneError(err)) deleted = true;
+            else throw err;
+          }
+        }
+
+        // Clear the local records that pointed at the deleted event, so the task
+        // returns to the pool rather than looking scheduled at a time that no
+        // longer exists.
+        for (const s of scheduledAsana.filter(x => x.googleEventId === r.googleEventId)) {
+          await unscheduleAsanaTask(s.id);
+        }
+        if (adhoc) {
+          await updateAdHocTask(adhoc.id, {
+            googleEventId: undefined,
+            dueDate: undefined,
+            dueTime: undefined,
+          });
+        }
+        if (prep) await deletePrepBlock(prep.id);
+        if (ritual) await deleteRitualBlock(ritual.id);
+        await removeGoogleEventAttribution(r.googleEventId);
+        await removeBlockDoneOverride(r.googleEventId);
+
+        // Nothing to put in the slot: deletion was the whole answer.
+        if (r.mode === 'none' || !r.date || !r.start || r.durationMinutes <= 0) {
+          replacementResults.push({ googleEventId: r.googleEventId, deleted, success: true });
+          continue;
+        }
+
+        // Create what actually happened, in the same slot. Work goes to the
+        // workspace's own calendar where one is configured (so the normal
+        // calendar-as-source-of-truth attribution picks it up); personal time goes
+        // to the default calendar and is pinned to "counts toward nothing".
+        const workspaceGoogleId =
+          r.mode === 'work' && r.workspaceId
+            ? (await getIntegrationById(r.workspaceId).catch(() => null) as AsanaIntegration | null)
+                ?.eventGoogleIntegrationId
+            : undefined;
+        const target = await resolveGoogle(workspaceGoogleId);
+        if (!target) {
+          replacementResults.push({
+            googleEventId: r.googleEventId,
+            deleted,
+            success: false,
+            error: 'No authenticated Google integration to create the replacement on',
+          });
+          continue;
+        }
+        const title =
+          r.title?.trim() || (r.mode === 'personal' ? 'Personal time' : 'Worked on something else');
+        const { start, end } = toStartEnd(r.date, r.start, r.durationMinutes);
+        const created = await createCalendarEvent(
+          target.credentials,
+          target.integration.clientId,
+          target.integration.clientSecret,
+          title,
+          start,
+          end,
+          r.mode === 'personal' ? 'Personal time (not counted as work)' : 'Worked on this instead',
+          'default',
+          'primary',
+          { transparency: 'opaque' }
+        );
+
+        if (r.mode === 'work' && r.workspaceId) {
+          // Belt and braces: even if the replacement landed on a calendar that
+          // maps to no workspace, this pins it to the chosen one.
+          await setGoogleEventAttribution(created.id, target.integration.id, r.workspaceId);
+        } else if (r.mode === 'personal') {
+          // Pin it to "counts toward nothing", whatever calendar it landed on.
+          await addEventAttributionRule({
+            id: `personal-${created.id}`,
+            recurringEventId: created.id,
+            asanaIntegrationId: 'none',
+            note: 'Personal time recorded from a daily review',
+            createdAt: new Date().toISOString(),
+          });
+        }
+
+        replacementResults.push({
+          googleEventId: r.googleEventId,
+          deleted,
+          replacementEventId: created.id,
+          success: true,
+        });
+      } catch (err) {
+        console.error(`[Replan Confirm] Failed to rewrite slot for ${r.googleEventId}:`, err);
+        replacementResults.push({
+          googleEventId: r.googleEventId,
+          deleted,
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to rewrite the slot',
         });
       }
     }
@@ -862,7 +1059,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, carryResults, displaceResults, additionResults });
+    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, carryResults, displaceResults, additionResults, replacementResults });
   } catch (error) {
     console.error('Error confirming mid-week replan:', error);
     return NextResponse.json(

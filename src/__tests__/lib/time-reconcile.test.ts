@@ -19,6 +19,9 @@ jest.mock('@/lib/user-data-storage', () => ({
   getScheduledAsanaTasks: jest.fn(),
   getGoogleEventAttributions: jest.fn(),
   recordWeeklyTime: jest.fn(),
+  getEventAttributionRules: jest.fn(),
+  getAnalysisStartDate: jest.fn(),
+  pruneWeeklyStatsBefore: jest.fn(),
 }));
 jest.mock('@/lib/workflow-config-storage', () => ({ getWorkflowConfig: jest.fn() }));
 
@@ -31,6 +34,9 @@ import {
   getScheduledAsanaTasks,
   getGoogleEventAttributions,
   recordWeeklyTime,
+  getEventAttributionRules,
+  getAnalysisStartDate,
+  pruneWeeklyStatsBefore,
 } from '@/lib/user-data-storage';
 import { getWorkflowConfig } from '@/lib/workflow-config-storage';
 import type { CalendarEvent } from '@/types';
@@ -68,6 +74,10 @@ beforeEach(() => {
   (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([]);
   (getAdHocTasks as jest.Mock).mockResolvedValue([]);
   (getGoogleEventAttributions as jest.Mock).mockResolvedValue([]);
+  (getEventAttributionRules as jest.Mock).mockResolvedValue([]);
+  // Well before the test dates, so the start-date floor is not what limits them.
+  (getAnalysisStartDate as jest.Mock).mockResolvedValue('2026-01-01');
+  (pruneWeeklyStatsBefore as jest.Mock).mockResolvedValue([]);
   // Tracking began the day before yesterday, so only those days are candidates.
   (getTimeTrackingData as jest.Mock).mockResolvedValue({
     dailyRecords: [{ date: '2026-07-23', recordedAt: '', integrationTotals: {}, events: [] }],
@@ -179,5 +189,67 @@ describe('reconcilePastDays', () => {
     // The task link (DBC) beats the calendar it sits on (OM), just as it does live.
     const friday = (recordDailyTime as jest.Mock).mock.calls.find(c => c[0] === YESTERDAY)!;
     expect(Object.keys(friday[1])).toEqual(['asana-dbc']);
+  });
+});
+
+describe('reconcile floors and attribution rules', () => {
+  it('never reaches back before the analysis start date', async () => {
+    (getAnalysisStartDate as jest.Mock).mockResolvedValue('2026-07-24');
+    (getTimeTrackingData as jest.Mock).mockResolvedValue({
+      dailyRecords: [{ date: '2026-07-01', recordedAt: '', integrationTotals: {}, events: [] }],
+    });
+
+    const result = await reconcilePastDays(14);
+
+    expect(result.days).toBe(1);
+    expect((recordDailyTime as jest.Mock).mock.calls.map(c => c[0])).toEqual(['2026-07-24']);
+  });
+
+  it('prunes weekly-stats records from before the analysis start date', async () => {
+    (getAnalysisStartDate as jest.Mock).mockResolvedValue('2026-07-20');
+    await reconcilePastDays(1);
+    expect(pruneWeeklyStatsBefore).toHaveBeenCalledWith('2026-07-20');
+  });
+
+  it('applies a series/title attribution rule exactly as the live path does', async () => {
+    // "Weekly professional planning" is on no workspace-mapped calendar, so only
+    // the built-in rule can attribute it — to DBC.
+    (fetchEventsForDays as jest.Mock).mockResolvedValue({
+      events: [
+        event({
+          id: 'planning',
+          title: 'Weekly professional planning',
+          integrationId: 'google-life',
+          attendeeCount: undefined,
+        }),
+      ],
+      fetchedIntegrationIds: new Set(['google-life']),
+    });
+    (getEnabledGoogleIntegrations as jest.Mock).mockResolvedValue([{ id: 'google-life', name: 'Personal' }]);
+
+    await reconcilePastDays(1);
+
+    const friday = (recordDailyTime as jest.Mock).mock.calls.find(c => c[0] === YESTERDAY)!;
+    expect(Object.keys(friday[1])).toEqual(['29e78568-0681-4acc-b6b0-a7ffa9d31230']);
+  });
+
+  it('leaves "Weekly personal planning" attributed to nothing', async () => {
+    (fetchEventsForDays as jest.Mock).mockResolvedValue({
+      events: [
+        event({
+          id: 'personal-planning',
+          title: 'Weekly personal planning',
+          integrationId: 'google-life',
+          attendeeCount: undefined,
+        }),
+      ],
+      fetchedIntegrationIds: new Set(['google-life']),
+    });
+    (getEnabledGoogleIntegrations as jest.Mock).mockResolvedValue([{ id: 'google-life', name: 'Personal' }]);
+
+    await reconcilePastDays(1);
+
+    const friday = (recordDailyTime as jest.Mock).mock.calls.find(c => c[0] === YESTERDAY)!;
+    expect(friday[1]).toEqual({});
   });
 });

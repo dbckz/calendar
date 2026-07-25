@@ -2,7 +2,11 @@ import { NextResponse } from 'next/server';
 import { addDays, format } from 'date-fns';
 
 import { getIntegrations } from '@/lib/integration-storage';
-import { getAllWeeklyStats, getLastReconciledAt } from '@/lib/user-data-storage';
+import {
+  getAllWeeklyStats,
+  getLastReconciledAt,
+  getAnalysisStartDate,
+} from '@/lib/user-data-storage';
 import { getTimeTrackingData } from '@/lib/time-tracking-storage';
 import {
   categoryMinutesFromRecord,
@@ -28,11 +32,12 @@ interface AnalysisEventRow {
 // per-event time-tracking log. Past weeks are final, so the summaries are stable.
 export async function GET() {
   try {
-    const [records, settings, tracking, lastSyncedAt] = await Promise.all([
+    const [records, settings, tracking, lastSyncedAt, analysisStartDate] = await Promise.all([
       getAllWeeklyStats(),
       getIntegrations(),
       getTimeTrackingData(),
       getLastReconciledAt(),
+      getAnalysisStartDate(),
     ]);
 
     // Every enabled workspace appears in every week's time breakdown, zero or
@@ -74,6 +79,8 @@ export async function GET() {
     }
 
     const weeks = Object.values(records)
+      // Weeks before the analysis start date are from before the app was in use.
+      .filter(record => record.weekStart >= analysisStartDate)
       .map(record => {
         const week = withAllIntegrations(summariseWeek(record));
         return {

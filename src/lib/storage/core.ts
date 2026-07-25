@@ -17,6 +17,7 @@ import type {
   StaleClassificationEntry,
   MeetingPrepDecision,
   WeeklyStatsRecord,
+  EventAttributionRule,
 } from '@/types';
 
 export const DEFAULT_ASANA_FILTERS: AsanaFilterState = {
@@ -120,6 +121,12 @@ export interface UserData {
   // Durable per-week analysis records, keyed by yyyy-MM-dd Monday. Append-only
   // in spirit: a past week's record is final. See WeeklyStatsRecord.
   weeklyStats?: Record<string, WeeklyStatsRecord>;
+  // Durable attribution overrides matched by recurring series / title. See
+  // EventAttributionRule; the built-in defaults live in lib/attribution-rules.ts.
+  eventAttributionRules?: EventAttributionRule[];
+  // The date analysis starts from (yyyy-MM-dd). Weeks before it are hidden and
+  // never reconciled — the app wasn't in use, so that data is noise.
+  analysisStartDate?: string;
   // When the server last rebuilt past days' time records from the calendar.
   // Used to debounce the automatic reconcile the Analysis tab fires on load.
   timeSyncState?: { lastReconciledAt?: string };
@@ -155,6 +162,7 @@ const DEFAULT_USER_DATA: UserData = {
   taskDeferrals: {},
   carryOvers: {},
   weeklyStats: {},
+  eventAttributionRules: [],
   timeSyncState: {},
   dailyReviewState: {},
 };
@@ -215,6 +223,14 @@ export async function getUserData(): Promise<UserData> {
         )
       ),
       weeklyStats: parsed.weeklyStats || {},
+      eventAttributionRules: Array.isArray(parsed.eventAttributionRules)
+        ? parsed.eventAttributionRules.filter(
+            r => !!r && typeof r === 'object' && typeof r.asanaIntegrationId === 'string'
+          )
+        : [],
+      ...(typeof parsed.analysisStartDate === 'string'
+        ? { analysisStartDate: parsed.analysisStartDate }
+        : {}),
       timeSyncState: parsed.timeSyncState || {},
       dailyReviewState: parsed.dailyReviewState || {},
     };

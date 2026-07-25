@@ -1,10 +1,11 @@
 // API utilities with retry logic and proper typing
 
+import { EventAttributionRule } from '@/types';
 import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
 import type { WeeklyProgressRow } from '@/lib/weekly-stats';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanReviewBlock, ReplanCarryBlock } from '@/lib/scheduling/replan';
-import type { ReviewAdoptInput } from '@/lib/scheduling/daily-review';
+import type { ReviewAdoptInput, ReviewReplacementInput } from '@/lib/scheduling/daily-review';
 import type { AiClaim } from '@/lib/ai-verdicts';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 
@@ -1186,6 +1187,10 @@ export const api = {
     });
   },
 
+  async getAttributionRules(): Promise<{ rules: EventAttributionRule[] }> {
+    return fetchWithRetry<{ rules: EventAttributionRule[] }>('/api/attribution-rules');
+  },
+
   async getWeekState(): Promise<WeekStateResponse> {
     return fetchWithRetry<WeekStateResponse>('/api/scheduling/week-state', { method: 'GET' });
   },
@@ -1269,7 +1274,11 @@ export const api = {
     // End-of-week carry-overs: each entry marks a block's chosen tasks as carried
     // into next week's plan (and defers them past the weekend), or — with
     // quiet:true — quietly returns them to the backlog with no badge.
-    carry?: Array<{ blockId?: string; blockIds?: string[]; taskIds: string[]; quiet?: boolean }>
+    carry?: Array<{ blockId?: string; blockIds?: string[]; taskIds: string[]; quiet?: boolean }>,
+    // Daily-review outcomes: blocks worked on but not finished, and the
+    // "what were you doing instead" answers for blocks that didn't happen.
+    started?: string[],
+    replacements?: ReviewReplacementInput[]
   ): Promise<{
     results: ReplanConfirmResult[];
     doneResults: ReplanConfirmResult[];
@@ -1306,6 +1315,8 @@ export const api = {
           ...(leaveUnscheduled && leaveUnscheduled.length ? { leaveUnscheduled } : {}),
           ...(displace && displace.length ? { displace } : {}),
           ...(carry && carry.length ? { carry } : {}),
+          ...(started && started.length ? { started } : {}),
+          ...(replacements && replacements.length ? { replacements } : {}),
           ...(dismiss && dismiss.length ? { dismiss } : {}),
           ...(additions && additions.length ? { additions } : {}),
           ...(deletions && deletions.length ? { deletions } : {}),

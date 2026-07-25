@@ -1,12 +1,29 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { X, ClipboardCheck, Loader2, Check, AlertTriangle, ArrowRight, Sparkles, Ban } from 'lucide-react';
+import {
+  X,
+  ClipboardCheck,
+  Loader2,
+  Check,
+  AlertTriangle,
+  ArrowRight,
+  Sparkles,
+  Ban,
+  ChevronDown,
+  ChevronRight,
+} from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
 import { api, type ReplanAnalyzeResponse } from '@/lib/api';
 import type { ReplanReviewBlock } from '@/lib/scheduling/replan';
-import { buildReviewApplyPayload, type ReviewTaskMark } from '@/lib/scheduling/daily-review';
+import {
+  buildReviewApplyPayload,
+  markOutcome,
+  type ReviewOutcome,
+  type ReviewReplacementInput,
+  type ReviewTaskMark,
+} from '@/lib/scheduling/daily-review';
 import { categoryColor, slotLabelMs, titleLabel } from './replanFormat';
 import { ReplanSections, replanHasWork } from './ReplanSections';
 import { useReplanActions } from './useReplanActions';
@@ -15,15 +32,22 @@ interface DailyReviewModalProps {
   isOpen: boolean;
   onClose: () => void;
   onApplied?: () => void; // called after any successful mutation so the caller can refresh
+  // Asana workspaces offered when the user says they worked on something else in a
+  // block's slot. Empty (the default) hides that option entirely.
+  workspaceOptions?: Array<{ id: string; name: string }>;
 }
 
 type Marks = Record<string, ReviewTaskMark[]>; // eventId -> per-task marks
+// eventId -> the user's "what were you doing instead" answer. Only answered
+// blocks appear; an unanswered didn't-do block is left entirely alone.
+type Replacements = Record<string, ReviewReplacementInput | undefined>;
 
 function initMarks(blocks: ReplanReviewBlock[]): Marks {
   const marks: Marks = {};
   for (const b of blocks) {
     marks[b.googleEventId] = b.tasks.map(t => ({
       done: t.done,
+      outcome: t.done ? 'done' : 'notDone',
       // Default the "complete in Asana" box on for Asana tasks the user might tick
       // done — but not for ones already complete in Asana (nothing to complete).
       completeInAsana: !!t.gid && !t.completedInAsana,
@@ -32,12 +56,27 @@ function initMarks(blocks: ReplanReviewBlock[]): Marks {
   return marks;
 }
 
-export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModalProps) {
+// Whether a block counts as "didn't do" — nothing finished and nothing started —
+// which is the only state where a replacement answer means anything (matching
+// buildReviewApplyPayload, which drops replacements for done/started blocks).
+function isBlockNotDone(block: ReplanReviewBlock, marks: ReviewTaskMark[]): boolean {
+  if (block.tasks.length === 0) return false;
+  const outcomes = block.tasks.map((t, i) => markOutcome(marks[i], t.done));
+  return !outcomes.every(o => o === 'done') && !outcomes.some(o => o === 'started');
+}
+
+export function DailyReviewModal({
+  isOpen,
+  onClose,
+  onApplied,
+  workspaceOptions = [],
+}: DailyReviewModalProps) {
   const [step, setStep] = useState<1 | 2>(1);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<ReplanAnalyzeResponse | null>(null);
   const [marks, setMarks] = useState<Marks>({});
+  const [replacements, setReplacements] = useState<Replacements>({});
   const [isApplying, setIsApplying] = useState(false);
   // Closing "how your day went" message, shown at the top of the replan step.
   // Fired (best-effort) when the review is confirmed; never blocks the apply.
@@ -68,6 +107,7 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
     setStep(1);
     setData(null);
     setMarks({});
+    setReplacements({});
     setError(null);
     setIsApplying(false);
     setReviewMessage(null);
@@ -93,10 +133,12 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
 
   const reviewBlocks = useMemo(() => data?.reviewBlocks ?? [], [data]);
 
-  const setTaskDone = (eventId: string, idx: number, done: boolean) =>
+  // `done` stays in lockstep with the outcome so the payload builder and the
+  // complete-in-Asana affordance (both keyed off `done`) keep working.
+  const setTaskOutcome = (eventId: string, idx: number, outcome: ReviewOutcome) =>
     setMarks(prev => {
       const list = prev[eventId] ? [...prev[eventId]] : [];
-      if (list[idx]) list[idx] = { ...list[idx], done };
+      if (list[idx]) list[idx] = { ...list[idx], outcome, done: outcome === 'done' };
       return { ...prev, [eventId]: list };
     });
 
@@ -118,6 +160,11 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
         : prev
     );
     setMarks(prev => {
+      const next = { ...prev };
+      delete next[block.googleEventId];
+      return next;
+    });
+    setReplacements(prev => {
       const next = { ...prev };
       delete next[block.googleEventId];
       return next;
@@ -162,13 +209,16 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
     try {
       const payload = buildReviewApplyPayload(
         reviewBlocks,
-        Object.fromEntries(Object.entries(marks).map(([id, tasks]) => [id, { tasks }]))
+        Object.fromEntries(Object.entries(marks).map(([id, tasks]) => [id, { tasks }])),
+        replacements
       );
       const hasWork =
         payload.done.length > 0 ||
         payload.notDone.length > 0 ||
+        payload.started.length > 0 ||
         payload.completeAsana.length > 0 ||
-        payload.adopt.length > 0;
+        payload.adopt.length > 0 ||
+        payload.replacements.length > 0;
       if (hasWork) {
         const res = await api.confirmReplan(
           [],
@@ -180,7 +230,11 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
           payload.completeAsana,
           undefined,
           undefined,
-          payload.adopt
+          payload.adopt,
+          undefined,
+          undefined,
+          payload.started,
+          payload.replacements
         );
         const failed = [
           ...(res.doneResults ?? []),
@@ -202,7 +256,7 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
     } finally {
       setIsApplying(false);
     }
-  }, [reviewBlocks, marks, analyze, onApplied, summariseOutcome]);
+  }, [reviewBlocks, marks, replacements, analyze, onApplied, summariseOutcome]);
 
   if (!isOpen) return null;
 
@@ -270,9 +324,14 @@ export function DailyReviewModal({ isOpen, onClose, onApplied }: DailyReviewModa
                     key={block.googleEventId}
                     block={block}
                     marks={marks[block.googleEventId] ?? []}
-                    onToggleDone={(idx, done) => setTaskDone(block.googleEventId, idx, done)}
+                    onSetOutcome={(idx, outcome) => setTaskOutcome(block.googleEventId, idx, outcome)}
                     onToggleAsana={(idx, v) => setTaskCompleteAsana(block.googleEventId, idx, v)}
                     onDismiss={block.source === 'calendar' ? () => dismissCalendarBlock(block) : undefined}
+                    replacement={replacements[block.googleEventId]}
+                    onSetReplacement={value =>
+                      setReplacements(prev => ({ ...prev, [block.googleEventId]: value }))
+                    }
+                    workspaceOptions={workspaceOptions}
                   />
                 ))}
               </ul>
@@ -372,26 +431,80 @@ function ReviewMessageCard({ message, loading }: { message: string | null; loadi
   );
 }
 
-// One review row. Single-task blocks get a Done / Didn't-do segmented toggle;
-// grouped blocks list each task with its own Done checkbox (a shared block can be
-// partially done). Asana-backed tasks marked done show a default-on "Complete in
-// Asana" checkbox.
+// The three outcomes, in the order they appear in the segmented control.
+const OUTCOME_OPTIONS: Array<{ value: ReviewOutcome; label: string; activeClass: string }> = [
+  { value: 'done', label: 'Done', activeClass: 'bg-emerald-500 text-white' },
+  { value: 'started', label: 'Started', activeClass: 'bg-amber-500 text-white' },
+  { value: 'notDone', label: 'Didn’t do', activeClass: 'bg-gray-500 text-white' },
+];
+
+// Done / Started / Didn't-do segmented control. "Started" means worked on but not
+// finished: it stays not-done for planning, but never deletes the block's event.
+function OutcomeToggle({
+  value,
+  onChange,
+  groupLabel,
+  compact,
+}: {
+  value: ReviewOutcome;
+  onChange: (outcome: ReviewOutcome) => void;
+  groupLabel: string;
+  compact?: boolean;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={groupLabel}
+      className={`inline-flex rounded-md border border-gray-200 overflow-hidden font-medium flex-shrink-0 ${
+        compact ? 'text-[10px]' : 'text-[11px]'
+      }`}
+    >
+      {OUTCOME_OPTIONS.map(opt => (
+        <button
+          key={opt.value}
+          type="button"
+          onClick={() => onChange(opt.value)}
+          aria-pressed={value === opt.value}
+          title={opt.value === 'started' ? 'Started but didn’t finish' : undefined}
+          className={`${compact ? 'px-1.5 py-0.5' : 'px-2.5 py-1'} transition-colors ${
+            value === opt.value ? opt.activeClass : 'bg-white text-gray-600 hover:bg-gray-50'
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// One review row. Every task gets a Done / Started / Didn't-do segmented control:
+// single-task blocks show it inline in the header, grouped blocks give each member
+// its own compact copy (a shared block can be partially done). Asana-backed tasks
+// marked done show a default-on "Complete in Asana" checkbox. A block that is
+// wholly not done offers the "what were you doing instead?" panel.
 function ReviewRow({
   block,
   marks,
-  onToggleDone,
+  onSetOutcome,
   onToggleAsana,
   onDismiss,
+  replacement,
+  onSetReplacement,
+  workspaceOptions,
 }: {
   block: ReplanReviewBlock;
   marks: ReviewTaskMark[];
-  onToggleDone: (idx: number, done: boolean) => void;
+  onSetOutcome: (idx: number, outcome: ReviewOutcome) => void;
   onToggleAsana: (idx: number, v: boolean) => void;
   // Present only for bare calendar events: dismiss the row as "not a task".
   onDismiss?: () => void;
+  replacement?: ReviewReplacementInput;
+  onSetReplacement: (value: ReviewReplacementInput | undefined) => void;
+  workspaceOptions: Array<{ id: string; name: string }>;
 }) {
   const color = categoryColor(block.category);
   const grouped = block.tasks.length > 1;
+  const notDone = isBlockNotDone(block, marks);
 
   return (
     <li className="rounded-lg border border-gray-200 bg-white p-3">
@@ -428,42 +541,21 @@ function ReviewRow({
           </div>
         </div>
 
-        {/* Single-task blocks: Done / Didn't-do segmented control. */}
+        {/* Single-task blocks: the outcome control sits inline in the header. */}
         {!grouped && (
-          <div className="inline-flex rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium flex-shrink-0">
-            {[
-              { v: true, label: 'Done' },
-              { v: false, label: 'Didn’t do' },
-            ].map(opt => (
-              <button
-                key={opt.label}
-                onClick={() => onToggleDone(0, opt.v)}
-                className={`px-2.5 py-1 transition-colors ${
-                  (marks[0]?.done ?? false) === opt.v
-                    ? opt.v
-                      ? 'bg-emerald-500 text-white'
-                      : 'bg-gray-500 text-white'
-                    : 'bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+          <OutcomeToggle
+            value={markOutcome(marks[0], block.tasks[0]?.done ?? false)}
+            onChange={outcome => onSetOutcome(0, outcome)}
+            groupLabel={`Outcome for ${titleLabel(block.titles)}`}
+          />
         )}
       </div>
 
-      {/* Grouped block: per-task Done checkboxes. */}
+      {/* Grouped block: each member gets its own compact outcome control. */}
       {grouped && (
         <ul className="mt-2 space-y-1.5 pl-1">
           {block.tasks.map((t, i) => (
             <li key={i} className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={marks[i]?.done ?? false}
-                onChange={e => onToggleDone(i, e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 text-emerald-500 focus:ring-emerald-500"
-              />
               <span className={`text-sm ${marks[i]?.done ? 'text-gray-800' : 'text-gray-500'} truncate flex-1`}>
                 {t.title}
               </span>
@@ -482,6 +574,12 @@ function ReviewRow({
                   </label>
                 )
               )}
+              <OutcomeToggle
+                compact
+                value={markOutcome(marks[i], t.done)}
+                onChange={outcome => onSetOutcome(i, outcome)}
+                groupLabel={`Outcome for ${t.title}`}
+              />
             </li>
           ))}
         </ul>
@@ -504,6 +602,163 @@ function ReviewRow({
           Complete in Asana
         </label>
       )}
+
+      {/* Wholly not-done blocks: what were you doing instead? Optional. */}
+      {notDone && (
+        <ReplacementPanel
+          block={block}
+          value={replacement}
+          onChange={onSetReplacement}
+          workspaceOptions={workspaceOptions}
+          defaultWorkspaceIdForEvent={defaultWorkspaceIdForEvent}
+        />
+      )}
     </li>
+  );
+}
+
+// "What were you doing instead?" — shown under a block marked Didn't do. Entirely
+// optional: while it is unanswered the block behaves exactly as before (nothing
+// deleted, rescheduled in step 2). Answering replaces the slot, which means the
+// original block leaves the calendar, so the copy says so.
+function ReplacementPanel({
+  block,
+  value,
+  onChange,
+  workspaceOptions,
+}: {
+  block: ReplanReviewBlock;
+  value?: ReviewReplacementInput;
+  onChange: (value: ReviewReplacementInput | undefined) => void;
+  workspaceOptions: Array<{ id: string; name: string }>;
+}) {
+  const [isOpen, setIsOpen] = useState(!!value);
+  const offerWork = workspaceOptions.length > 0;
+
+  // The slot being replaced. Always the STORED slot, which is what the apply
+  // deletes and re-creates.
+  const slot = {
+    googleEventId: block.googleEventId,
+    googleIntegrationId: block.googleIntegrationId,
+    date: block.date,
+    start: block.start,
+    durationMinutes: block.durationMinutes,
+  };
+
+  const choose = (mode: ReviewReplacementInput['mode']) => {
+    if (mode === 'work') {
+      const workspaceId = value?.workspaceId ?? workspaceOptions[0]?.id;
+      onChange({ ...slot, mode, title: value?.title ?? '', workspaceId });
+      return;
+    }
+    if (mode === 'personal') {
+      onChange({ ...slot, mode, title: value?.mode === 'personal' ? value.title : '' });
+      return;
+    }
+    onChange({ ...slot, mode });
+  };
+
+  const modeOptions: Array<{ mode: ReviewReplacementInput['mode']; label: string }> = [
+    ...(offerWork ? [{ mode: 'work' as const, label: 'Worked on something else' }] : []),
+    { mode: 'personal', label: 'Personal / rest' },
+    { mode: 'none', label: 'Nothing — just remove it' },
+  ];
+
+  if (!isOpen) {
+    const answered = modeOptions.find(o => o.mode === value?.mode);
+    return (
+      <button
+        type="button"
+        onClick={() => setIsOpen(true)}
+        className="mt-2 inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-700 transition-colors"
+      >
+        <ChevronRight className="w-3 h-3" />
+        {answered ? `Instead: ${answered.label}` : 'What were you doing instead?'}
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded-lg border border-gray-200 bg-gray-50 p-2.5">
+      <button
+        type="button"
+        onClick={() => setIsOpen(false)}
+        className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-600 hover:text-gray-800 transition-colors"
+      >
+        <ChevronDown className="w-3 h-3" />
+        What were you doing instead?
+      </button>
+
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {modeOptions.map(opt => (
+          <button
+            key={opt.mode}
+            type="button"
+            onClick={() => choose(opt.mode)}
+            aria-pressed={value?.mode === opt.mode}
+            className={`px-2 py-1 rounded-md border text-[11px] font-medium transition-colors ${
+              value?.mode === opt.mode
+                ? 'border-orange-300 bg-orange-100 text-orange-800'
+                : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+        {value && (
+          <button
+            type="button"
+            onClick={() => onChange(undefined)}
+            className="px-2 py-1 rounded-md border border-transparent text-[11px] text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+          >
+            Leave unanswered
+          </button>
+        )}
+      </div>
+
+      {value?.mode === 'work' && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={value.title ?? ''}
+            onChange={e => onChange({ ...value, title: e.target.value })}
+            placeholder="What did you work on?"
+            aria-label="What did you work on instead?"
+            className="flex-1 min-w-[10rem] px-2 py-1 text-xs border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-orange-400"
+          />
+          <select
+            value={value.workspaceId ?? ''}
+            onChange={e => onChange({ ...value, workspaceId: e.target.value })}
+            aria-label="Workspace"
+            className="px-2 py-1 text-xs border border-gray-200 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-orange-400"
+          >
+            {workspaceOptions.map(w => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {value?.mode === 'personal' && (
+        <div className="mt-2">
+          <input
+            type="text"
+            value={value.title ?? ''}
+            onChange={e => onChange({ ...value, title: e.target.value })}
+            placeholder="Personal time"
+            aria-label="What were you doing?"
+            className="w-full px-2 py-1 text-xs border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-orange-400"
+          />
+        </div>
+      )}
+
+      <p className="mt-2 text-[10px] leading-relaxed text-gray-400">
+        {value
+          ? 'Answering removes this block from your calendar and records what you did instead.'
+          : 'Optional. Leave this unanswered and the block stays put, ready to reschedule in the next step.'}
+      </p>
+    </div>
   );
 }

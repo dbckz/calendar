@@ -276,7 +276,9 @@ export function DashboardContent({
               (plan / replan / wrap up / plan next week). The ▾ beside it always
               lists every action, so no state can trap the user. */}
           <div className="flex items-center">
-            <div className="flex flex-col items-end">
+            {/* The caption hangs below the button (absolute) so the split button
+                stays on the same baseline as the rest of the header row. */}
+            <div className="relative">
               <div className="flex">
                 <button
                   onClick={() => runAction(action)}
@@ -333,7 +335,9 @@ export function DashboardContent({
                 </div>
               </div>
               {actionCopy.caption && (
-                <span className="mt-0.5 text-[11px] text-gray-400">{actionCopy.caption}</span>
+                <span className="absolute right-0 top-full mt-0.5 whitespace-nowrap text-[11px] text-gray-400">
+                  {actionCopy.caption}
+                </span>
               )}
             </div>
           </div>
@@ -440,6 +444,11 @@ export function DashboardContent({
       />
 
       <DailyReviewModal
+        // The workspaces offered by the "worked on something else" answer. The
+        // picker defaults to the first; there is no per-event default because the
+        // review's blocks are fetched inside the modal, so the mapping from an
+        // event to its calendar's workspace isn't available out here.
+        workspaceOptions={asanaIntegrations}
         isOpen={showDailyReviewModal}
         onClose={() => setShowDailyReviewModal(false)}
         onApplied={() => {

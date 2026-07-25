@@ -8,12 +8,13 @@
 jest.mock('@/lib/user-data-storage', () => ({
   getAllWeeklyStats: jest.fn(),
   getLastReconciledAt: jest.fn(),
+  getAnalysisStartDate: jest.fn(),
 }));
 jest.mock('@/lib/integration-storage', () => ({ getIntegrations: jest.fn() }));
 jest.mock('@/lib/time-tracking-storage', () => ({ getTimeTrackingData: jest.fn() }));
 
 import { GET } from '@/app/api/analysis/route';
-import { getAllWeeklyStats, getLastReconciledAt } from '@/lib/user-data-storage';
+import { getAllWeeklyStats, getLastReconciledAt, getAnalysisStartDate } from '@/lib/user-data-storage';
 import { getIntegrations } from '@/lib/integration-storage';
 import { getTimeTrackingData } from '@/lib/time-tracking-storage';
 import type { WeeklyStatsRecord, WeeklyTaskOutcome, WeeklyTaskOutcomeKind } from '@/types';
@@ -54,6 +55,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   (getAllWeeklyStats as jest.Mock).mockResolvedValue({});
   (getLastReconciledAt as jest.Mock).mockResolvedValue(null);
+  (getAnalysisStartDate as jest.Mock).mockResolvedValue('2026-07-20');
   (getIntegrations as jest.Mock).mockResolvedValue({
     googleIntegrations: [],
     asanaIntegrations: [
@@ -73,22 +75,22 @@ describe('analysis endpoint', () => {
 
   it('sorts weeks newest first', async () => {
     (getAllWeeklyStats as jest.Mock).mockResolvedValue({
-      '2026-07-06': record('2026-07-06', [outcome('a', 'Policy', 'done')]),
-      '2026-07-20': record('2026-07-20', [outcome('c', 'Policy', 'done')]),
-      '2026-07-13': record('2026-07-13', [outcome('b', 'Policy', 'done')]),
+      '2026-07-20': record('2026-07-20', [outcome('a', 'Policy', 'done')]),
+      '2026-08-03': record('2026-08-03', [outcome('c', 'Policy', 'done')]),
+      '2026-07-27': record('2026-07-27', [outcome('b', 'Policy', 'done')]),
     });
     const { body } = await analysis();
     expect(body.weeks.map((w: { weekStart: string }) => w.weekStart)).toEqual([
+      '2026-08-03',
+      '2026-07-27',
       '2026-07-20',
-      '2026-07-13',
-      '2026-07-06',
     ]);
   });
 
   it('reports per-category numbers and the completion rate for an over-scheduled week', async () => {
     (getAllWeeklyStats as jest.Mock).mockResolvedValue({
-      '2026-07-13': record(
-        '2026-07-13',
+      '2026-07-20': record(
+        '2026-07-20',
         [
           outcome('p1', 'Policy', 'done'),
           outcome('p2', 'Policy', 'carried'),
@@ -100,7 +102,7 @@ describe('analysis endpoint', () => {
           om: {
             integrationName: 'OM',
             days: {
-              '2026-07-13': { date: '2026-07-13', minutesScheduled: 120, minutesWorked: 90 },
+              '2026-07-20': { date: '2026-07-20', minutesScheduled: 120, minutesWorked: 90 },
               '2026-07-14': { date: '2026-07-14', minutesScheduled: 60, minutesWorked: 60 },
             },
           },
@@ -231,5 +233,31 @@ describe('analysis endpoint — stacked time bars and drill-down', () => {
     (getLastReconciledAt as jest.Mock).mockResolvedValue('2026-07-25T08:00:00.000Z');
     const { body } = await analysis();
     expect(body.lastSyncedAt).toBe('2026-07-25T08:00:00.000Z');
+  });
+});
+
+describe('analysis endpoint — analysis start date', () => {
+  it('hides weeks from before the app was in use', async () => {
+    (getAllWeeklyStats as jest.Mock).mockResolvedValue({
+      // The week of 13 July: recorded, but before the start date.
+      '2026-07-13': record('2026-07-13', [outcome('old', 'Policy', 'done')]),
+      '2026-07-20': record('2026-07-20', [outcome('new', 'Policy', 'done')]),
+    });
+
+    const { body } = await analysis();
+
+    expect(body.weeks.map((w: { weekStart: string }) => w.weekStart)).toEqual(['2026-07-20']);
+  });
+
+  it('follows a moved start date', async () => {
+    (getAnalysisStartDate as jest.Mock).mockResolvedValue('2026-07-13');
+    (getAllWeeklyStats as jest.Mock).mockResolvedValue({
+      '2026-07-13': record('2026-07-13', [outcome('old', 'Policy', 'done')]),
+      '2026-07-20': record('2026-07-20', [outcome('new', 'Policy', 'done')]),
+    });
+
+    const { body } = await analysis();
+
+    expect(body.weeks).toHaveLength(2);
   });
 });

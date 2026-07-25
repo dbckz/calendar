@@ -11,6 +11,8 @@ export interface WeekCategorySummary {
   category: string;
   scheduled: number;
   completed: number;
+  // Worked on but not finished. Not completed, but not a total miss either.
+  started: number;
   carried: number;
   dropped: number;
 }
@@ -26,7 +28,12 @@ export interface WeekSummary {
   categories: WeekCategorySummary[];
   totalScheduled: number;
   totalCompleted: number;
-  completionRate: number; // 0..1; 0 when nothing was scheduled
+  totalStarted: number;
+  // Progress rate: (finished + started) / scheduled, 0 when nothing was
+  // scheduled. Dave's headline figure — a long task half-done is progress, not a
+  // miss — while the finished/started split stays visible in the bars and
+  // per-category numbers so it can't hide an unfinished pile.
+  completionRate: number;
   minutesWorkedByIntegration: WeekIntegrationSummary[];
   totalMinutesWorked: number;
 }
@@ -39,9 +46,10 @@ export function summariseWeek(record: WeeklyStatsRecord): WeekSummary {
     const category = task.category || UNCATEGORISED;
     const row =
       byCategory.get(category) ??
-      { category, scheduled: 0, completed: 0, carried: 0, dropped: 0 };
+      { category, scheduled: 0, completed: 0, started: 0, carried: 0, dropped: 0 };
     row.scheduled += 1; // every recorded task counts toward the high-water mark
     if (task.outcome === 'done') row.completed += 1;
+    else if (task.outcome === 'started') row.started += 1;
     else if (task.outcome === 'carried') row.carried += 1;
     else if (task.outcome === 'dropped') row.dropped += 1;
     byCategory.set(category, row);
@@ -51,6 +59,7 @@ export function summariseWeek(record: WeeklyStatsRecord): WeekSummary {
   const categories = [...byCategory.values()].sort((a, b) => a.category.localeCompare(b.category));
   const totalScheduled = categories.reduce((n, c) => n + c.scheduled, 0);
   const totalCompleted = categories.reduce((n, c) => n + c.completed, 0);
+  const totalStarted = categories.reduce((n, c) => n + c.started, 0);
 
   const minutesWorkedByIntegration: WeekIntegrationSummary[] = Object.entries(
     record.integrations ?? {}
@@ -67,7 +76,8 @@ export function summariseWeek(record: WeeklyStatsRecord): WeekSummary {
     categories,
     totalScheduled,
     totalCompleted,
-    completionRate: totalScheduled > 0 ? totalCompleted / totalScheduled : 0,
+    totalStarted,
+    completionRate: totalScheduled > 0 ? (totalCompleted + totalStarted) / totalScheduled : 0,
     minutesWorkedByIntegration,
     totalMinutesWorked: minutesWorkedByIntegration.reduce((n, i) => n + i.minutes, 0),
   };
@@ -78,7 +88,8 @@ export function summariseWeek(record: WeeklyStatsRecord): WeekSummary {
 export interface WeeklyProgressRow {
   category: string;
   scheduledTasks: number; // Y
-  completedTasks: number; // X
+  completedTasks: number; // finished
+  startedTasks: number; // worked on but not finished
 }
 
 export function weeklyProgressRows(
@@ -93,12 +104,18 @@ export function weeklyProgressRows(
     category,
     scheduledTasks: byCategory.get(category)?.scheduled ?? 0,
     completedTasks: byCategory.get(category)?.completed ?? 0,
+    startedTasks: byCategory.get(category)?.started ?? 0,
   }));
   // Anything recorded under a category the config no longer lists still shows,
   // after the configured ones — a past week must not lose its history.
   for (const c of summary?.categories ?? []) {
     if (!categories.includes(c.category)) {
-      rows.push({ category: c.category, scheduledTasks: c.scheduled, completedTasks: c.completed });
+      rows.push({
+        category: c.category,
+        scheduledTasks: c.scheduled,
+        completedTasks: c.completed,
+        startedTasks: c.started,
+      });
     }
   }
   return rows;

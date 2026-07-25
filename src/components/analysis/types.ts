@@ -8,6 +8,9 @@ export interface WeekCategorySummary {
   category: string;
   scheduled: number;
   completed: number;
+  // Worked on but not finished. Optional: records written before the daily
+  // review gained a "Started" outcome have no such field, and read as 0.
+  started?: number;
   carried: number;
   dropped: number;
 }
@@ -38,7 +41,8 @@ export interface WeekSummary {
   categories: WeekCategorySummary[];
   totalScheduled: number;
   totalCompleted: number;
-  completionRate: number; // 0..1; 0 when nothing was scheduled
+  totalStarted?: number;
+  completionRate: number; // (completed + started) / scheduled; 0 when nothing was scheduled
   totalMinutesWorked: number;
   timeByIntegration: TimeByIntegration[];
   events: AnalysisEvent[];

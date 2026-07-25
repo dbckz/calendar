@@ -69,7 +69,7 @@ describe('buildReviewApplyPayload', () => {
       e1: mark({ done: false }),
       e2: mark({ done: false }),
     });
-    expect(out).toEqual({ done: [], notDone: [], completeAsana: [], adopt: [] });
+    expect(out).toEqual({ done: [], notDone: [], started: [], completeAsana: [], adopt: [], replacements: [] });
   });
 
   it('marks a prep block done', () => {
@@ -156,7 +156,7 @@ describe('buildReviewApplyPayload', () => {
     const out = buildReviewApplyPayload(blocks, {
       e1: mark({ done: true, completeInAsana: true }),
     });
-    expect(out).toEqual({ done: [], notDone: [], completeAsana: [], adopt: [] });
+    expect(out).toEqual({ done: [], notDone: [], started: [], completeAsana: [], adopt: [], replacements: [] });
   });
 
   it('emits nothing for a task already complete in Asana (completedInAsana)', () => {
@@ -169,7 +169,7 @@ describe('buildReviewApplyPayload', () => {
     const out = buildReviewApplyPayload([block], {
       e1: mark({ done: true, completeInAsana: true }),
     });
-    expect(out).toEqual({ done: [], notDone: [], completeAsana: [], adopt: [] });
+    expect(out).toEqual({ done: [], notDone: [], started: [], completeAsana: [], adopt: [], replacements: [] });
   });
 });
 
@@ -248,5 +248,144 @@ describe('buildReviewApplyPayload — calendar events', () => {
     const out = buildReviewApplyPayload([calendarBlock('e1', true)], { e1: mark({ done: false }) });
     expect(out.notDone).toEqual(['e1']);
     expect(out.adopt).toHaveLength(1);
+  });
+});
+
+describe('buildReviewApplyPayload — started, and rewriting a missed slot', () => {
+  const slot = {
+    date: '2026-07-21',
+    start: '09:00',
+    durationMinutes: 30,
+    googleIntegrationId: 'gi1',
+  };
+
+  it('records a started block as started, and never as done', () => {
+    const block = adhocBlock('evt', false);
+    const payload = buildReviewApplyPayload([block], {
+      evt: { tasks: [{ done: false, completeInAsana: false, outcome: 'started' }] },
+    });
+
+    expect(payload.started).toEqual(['evt']);
+    expect(payload.done).toEqual([]);
+  });
+
+  it('leaves a STARTED block\'s calendar event alone, even with an answer attached', () => {
+    const block = adhocBlock('evt', false);
+    const payload = buildReviewApplyPayload(
+      [block],
+      { evt: { tasks: [{ done: false, completeInAsana: false, outcome: 'started' }] } },
+      { evt: { googleEventId: 'evt', ...slot, mode: 'none' } }
+    );
+
+    expect(payload.started).toEqual(['evt']);
+    expect(payload.replacements).toEqual([]);
+  });
+
+  it('carries a work replacement for a didn\'t-do block', () => {
+    const block = adhocBlock('evt', false);
+    const payload = buildReviewApplyPayload(
+      [block],
+      { evt: { tasks: [{ done: false, completeInAsana: false, outcome: 'notDone' }] } },
+      {
+        evt: {
+          googleEventId: 'evt',
+          ...slot,
+          mode: 'work',
+          title: 'Firefighting for a client',
+          workspaceId: 'asana-dbc',
+        },
+      }
+    );
+
+    expect(payload.replacements).toEqual([
+      expect.objectContaining({ mode: 'work', workspaceId: 'asana-dbc', title: 'Firefighting for a client' }),
+    ]);
+    expect(payload.started).toEqual([]);
+  });
+
+  it('carries a personal replacement, and a bare deletion', () => {
+    const block = adhocBlock('evt', false);
+    const personal = buildReviewApplyPayload(
+      [block],
+      { evt: { tasks: [{ done: false, completeInAsana: false, outcome: 'notDone' }] } },
+      { evt: { googleEventId: 'evt', ...slot, mode: 'personal', title: 'Walk' } }
+    );
+    expect(personal.replacements[0]).toMatchObject({ mode: 'personal', title: 'Walk' });
+
+    const bare = buildReviewApplyPayload(
+      [block],
+      { evt: { tasks: [{ done: false, completeInAsana: false, outcome: 'notDone' }] } },
+      { evt: { googleEventId: 'evt', ...slot, mode: 'none' } }
+    );
+    expect(bare.replacements[0]).toMatchObject({ mode: 'none' });
+  });
+
+  it('never deletes a DONE block\'s event, whatever answer is attached', () => {
+    const block = adhocBlock('evt', false);
+    const payload = buildReviewApplyPayload(
+      [block],
+      { evt: { tasks: [{ done: true, completeInAsana: false, outcome: 'done' }] } },
+      { evt: { googleEventId: 'evt', ...slot, mode: 'none' } }
+    );
+    expect(payload.replacements).toEqual([]);
+    expect(payload.done).toEqual(['evt']);
+  });
+
+  it('leaves an unanswered didn\'t-do block exactly as before (no deletion)', () => {
+    const block = adhocBlock('evt', false);
+    const payload = buildReviewApplyPayload([block], {
+      evt: { tasks: [{ done: false, completeInAsana: false, outcome: 'notDone' }] },
+    });
+    expect(payload.replacements).toEqual([]);
+  });
+
+  it('treats a grouped block as missed only when NO member was done or started', () => {
+    const grouped: ReplanReviewBlock = {
+      googleEventId: 'evt-group',
+      kind: 'task',
+      category: 'Engagement',
+      date: '2026-07-21',
+      start: '09:00',
+      durationMinutes: 60,
+      startMs: 0,
+      endMs: 0,
+      done: false,
+      titles: ['A', 'B'],
+      tasks: [
+        { title: 'A', done: false, gid: 'g1', integrationId: 'ai1' },
+        { title: 'B', done: false, gid: 'g2', integrationId: 'ai1' },
+      ],
+    };
+
+    // One member started → the block is started, and its event survives.
+    const partly = buildReviewApplyPayload(
+      [grouped],
+      {
+        'evt-group': {
+          tasks: [
+            { done: false, completeInAsana: false, outcome: 'started' },
+            { done: false, completeInAsana: false, outcome: 'notDone' },
+          ],
+        },
+      },
+      { 'evt-group': { googleEventId: 'evt-group', ...slot, mode: 'none' } }
+    );
+    expect(partly.started).toEqual(['evt-group']);
+    expect(partly.replacements).toEqual([]);
+
+    // Nothing done or started → the whole block was missed, so the answer applies.
+    const wholly = buildReviewApplyPayload(
+      [grouped],
+      {
+        'evt-group': {
+          tasks: [
+            { done: false, completeInAsana: false, outcome: 'notDone' },
+            { done: false, completeInAsana: false, outcome: 'notDone' },
+          ],
+        },
+      },
+      { 'evt-group': { googleEventId: 'evt-group', ...slot, mode: 'none' } }
+    );
+    expect(wholly.replacements).toHaveLength(1);
   });
 });

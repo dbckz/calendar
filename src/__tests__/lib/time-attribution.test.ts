@@ -350,3 +350,96 @@ describe('overlap resolution', () => {
     expect(scheduled).toEqual({ [OM_ASANA]: 60, [DBC_ASANA]: 60 });
   });
 });
+
+describe('durable series / title attribution rules', () => {
+  const FUTURE = new Date(2026, 6, 26).getTime();
+  const LIFE_GOOGLE = 'google-life';
+  const DBC_BUILT_IN = '29e78568-0681-4acc-b6b0-a7ffa9d31230';
+
+  it('attributes "Weekly professional planning" to DBC wherever it sits', () => {
+    // On no workspace-mapped calendar, so without the rule it counts toward nothing.
+    const planning = event({
+      id: 'planning-instance-1',
+      title: 'Weekly professional planning',
+      integrationId: LIFE_GOOGLE,
+      recurringEventId: 'series-professional',
+    });
+    expect(attributeEventToWorkspace(planning, ctx())).toBe(DBC_BUILT_IN);
+
+    // A different instance of the same series attributes identically — the point
+    // of a rule over a per-event attribution.
+    const nextWeek = event({
+      id: 'planning-instance-2',
+      title: 'Weekly professional planning',
+      integrationId: LIFE_GOOGLE,
+      recurringEventId: 'series-professional',
+    });
+    expect(attributeEventToWorkspace(nextWeek, ctx())).toBe(DBC_BUILT_IN);
+  });
+
+  it('is title-exact: "Weekly personal planning" is untouched', () => {
+    const personal = event({
+      id: 'personal-planning',
+      title: 'Weekly personal planning',
+      integrationId: LIFE_GOOGLE,
+    });
+    expect(attributeEventToWorkspace(personal, ctx())).toBeNull();
+
+    // A superset title is not the rule either.
+    const prep = event({
+      id: 'prep',
+      title: 'Weekly professional planning prep',
+      integrationId: LIFE_GOOGLE,
+    });
+    expect(attributeEventToWorkspace(prep, ctx())).toBeNull();
+  });
+
+  it('matches a stored rule by series id, and lets it pin an event to nothing', () => {
+    const rules = [
+      {
+        id: 'r1',
+        recurringEventId: 'series-standup',
+        asanaIntegrationId: 'none' as const,
+        createdAt: '',
+      },
+    ];
+    // On the OM calendar, so it would otherwise count as OM.
+    const pinned = event({
+      id: 'standup-1',
+      title: 'Daily standup',
+      integrationId: OM_GOOGLE,
+      recurringEventId: 'series-standup',
+      attendeeCount: 4,
+    });
+    expect(attributeEventToWorkspace(pinned, ctx({ attributionRules: rules }))).toBeNull();
+
+    const { scheduled } = attributeMinutes([pinned], ctx({ attributionRules: rules }), FUTURE);
+    expect(scheduled).toEqual({});
+  });
+
+  it('keeps a task link and a per-event attribution ahead of a rule', () => {
+    const linked = event({
+      id: 'planning-linked',
+      title: 'Weekly professional planning',
+      integrationId: LIFE_GOOGLE,
+      linkedAsanaIntegrationId: OM_ASANA,
+    });
+    expect(attributeEventToWorkspace(linked, ctx())).toBe(OM_ASANA);
+
+    const manual = event({ id: 'planning-manual', title: 'Weekly professional planning' });
+    expect(
+      attributeEventToWorkspace(
+        manual,
+        ctx({ attributionByEventId: { 'planning-manual': { asanaIntegrationId: OM_ASANA } } })
+      )
+    ).toBe(OM_ASANA);
+  });
+
+  it('still applies the exclusion rules first', () => {
+    // An all-day "Weekly professional planning" is not a measurable slice of time.
+    const allDay = event({ id: 'planning-allday', title: 'Weekly professional planning', allDay: true });
+    expect(isCountableWorkEvent(allDay)).toBe(false);
+    const { scheduled } = attributeMinutes([allDay], ctx(), FUTURE);
+    expect(scheduled).toEqual({});
+  });
+});

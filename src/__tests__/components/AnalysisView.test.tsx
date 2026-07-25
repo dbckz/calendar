@@ -14,9 +14,10 @@ import type { AnalysisResponse, WeekSummary } from '@/components/analysis/types'
 function week(overrides: Partial<WeekSummary> = {}): WeekSummary {
   return {
     weekStart: '2026-07-13',
-    categories: [{ category: 'Policy', scheduled: 4, completed: 1, carried: 2, dropped: 1 }],
+    categories: [{ category: 'Policy', scheduled: 4, completed: 1, started: 0, carried: 2, dropped: 1 }],
     totalScheduled: 4,
     totalCompleted: 1,
+    totalStarted: 0,
     completionRate: 0.25,
     totalMinutesWorked: 180,
     timeByIntegration: [
@@ -70,8 +71,9 @@ afterEach(() => {
 
 async function renderLoaded(body: unknown = response()) {
   const deferred = mockFetch(body);
-  render(<AnalysisView />);
+  const view = render(<AnalysisView />);
   await act(async () => { deferred.resolve(); });
+  return view;
 }
 
 describe('AnalysisView', () => {
@@ -98,8 +100,8 @@ describe('AnalysisView', () => {
     await renderLoaded();
 
     expect(screen.getByText('1 / 4')).toBeInTheDocument();
-    expect(screen.getByText(/1 of 4 scheduled tasks done/)).toBeInTheDocument();
-    expect(screen.getByText(/3 left undone/)).toBeInTheDocument();
+    expect(screen.getByText(/1 of 4 scheduled tasks finished or started/)).toBeInTheDocument();
+    expect(screen.getByText(/3 untouched/)).toBeInTheDocument();
     expect(screen.getByText('25%')).toBeInTheDocument();
   });
 
@@ -114,8 +116,8 @@ describe('AnalysisView', () => {
       response({ weeks: [week({ weekStart: '2026-07-20', completionRate: 0.9 }), week()] })
     );
 
-    expect(screen.getByLabelText('13 Jul: 25 per cent completed')).toBeInTheDocument();
-    expect(screen.getByLabelText('20 Jul: 90 per cent completed')).toBeInTheDocument();
+    expect(screen.getByLabelText('13 Jul: 25 per cent finished or started')).toBeInTheDocument();
+    expect(screen.getByLabelText('20 Jul: 90 per cent finished or started')).toBeInTheDocument();
   });
 
   it('shows an error state when the request fails', async () => {
@@ -124,6 +126,95 @@ describe('AnalysisView', () => {
     await act(async () => { deferred.resolve(); });
 
     expect(screen.getByText('store unavailable')).toBeInTheDocument();
+  });
+
+  describe('finished versus started', () => {
+    it('counts started work in the category headline and splits the bar', async () => {
+      const { container } = await renderLoaded(
+        response({
+          weeks: [
+            week({
+              categories: [
+                { category: 'Policy', scheduled: 4, completed: 1, started: 2, carried: 0, dropped: 0 },
+              ],
+              totalCompleted: 1,
+              totalStarted: 2,
+              completionRate: 0.75,
+            }),
+          ],
+        })
+      );
+
+      expect(screen.getByText('3 / 4')).toBeInTheDocument();
+      expect(screen.getByText('(2 started)')).toBeInTheDocument();
+
+      const done = container.querySelector('.bg-emerald-500') as HTMLElement;
+      const inProgress = container.querySelector('.bg-amber-500') as HTMLElement;
+      expect(done).toHaveStyle({ width: '25%' });
+      expect(inProgress).toHaveStyle({ width: '50%' });
+    });
+
+    it('reports the week total as finished or started, naming the started count', async () => {
+      await renderLoaded(
+        response({
+          weeks: [
+            week({
+              categories: [
+                { category: 'Policy', scheduled: 4, completed: 1, started: 2, carried: 0, dropped: 0 },
+              ],
+              totalCompleted: 1,
+              totalStarted: 2,
+              completionRate: 0.75,
+            }),
+          ],
+        })
+      );
+
+      expect(screen.getByText(/3 of 4 scheduled tasks finished or started/)).toBeInTheDocument();
+      expect(screen.getByText('· 2 started')).toBeInTheDocument();
+      expect(screen.getByText(/1 untouched/)).toBeInTheDocument();
+      expect(screen.getByText('75%')).toBeInTheDocument();
+    });
+
+    it('treats a legacy record with no started field as zero started', async () => {
+      const { container } = await renderLoaded(
+        response({
+          weeks: [
+            week({
+              categories: [{ category: 'Policy', scheduled: 4, completed: 3, carried: 1, dropped: 0 }],
+              totalCompleted: 3,
+              totalStarted: undefined,
+              completionRate: 0.75,
+            }),
+          ],
+        })
+      );
+
+      expect(screen.getByText('3 / 4')).toBeInTheDocument();
+      expect(screen.queryByText(/started\)/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/· \d+ started/)).not.toBeInTheDocument();
+      expect(container.querySelector('.bg-amber-500')).toHaveStyle({ width: '0%' });
+    });
+
+    it('never lets the started segment overflow the track', async () => {
+      const { container } = await renderLoaded(
+        response({
+          weeks: [
+            week({
+              categories: [
+                { category: 'Policy', scheduled: 2, completed: 1, started: 3, carried: 0, dropped: 0 },
+              ],
+              totalCompleted: 1,
+              totalStarted: 3,
+              completionRate: 1,
+            }),
+          ],
+        })
+      );
+
+      expect(container.querySelector('.bg-emerald-500')).toHaveStyle({ width: '50%' });
+      expect(container.querySelector('.bg-amber-500')).toHaveStyle({ width: '50%' });
+    });
   });
 
   describe('stacked time bars', () => {
