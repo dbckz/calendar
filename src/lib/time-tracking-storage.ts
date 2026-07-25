@@ -22,6 +22,16 @@ export interface EventTimeRecord {
   durationMinutes: number;
   source: 'google' | 'asana';
   linkedAsanaTaskId?: string;
+  // The work category this event's time counts under (Meetings / Writing/Deep
+  // Work / Emails / …). Stored per event so the breakdown is durable and the
+  // Analysis drill-down can list what made up a segment. Absent on records
+  // written before category tracking existed.
+  category?: string;
+  // Minutes this event actually contributes after overlap resolution — a task
+  // block interrupted by a meeting counts only its uncovered part, so a day's
+  // counted minutes never exceed the time that passed. Absent on older records
+  // (treat durationMinutes as the contribution).
+  countedMinutes?: number;
 }
 
 export interface DailyTimeRecord {

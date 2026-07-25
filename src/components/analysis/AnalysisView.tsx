@@ -1,15 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { format, parseISO } from 'date-fns';
+import { useCallback, useEffect, useState } from 'react';
+import { format, formatDistanceToNow, parseISO } from 'date-fns';
+import { Loader2, RefreshCw } from 'lucide-react';
 
-import type { summariseWeek } from '@/lib/weekly-stats';
-
-type WeekSummary = ReturnType<typeof summariseWeek>;
-
-interface AnalysisResponse {
-  weeks: WeekSummary[];
-}
+import { pct } from './format';
+import { StackedTimeBars } from './StackedTimeBars';
+import { TimeDrilldownModal, type DrilldownTarget } from './TimeDrilldownModal';
+import type { AnalysisResponse, ReconcileResponse, WeekSummary } from './types';
 
 // Colour scale shared by the per-category bars and the trend columns: green
 // when most of what was scheduled got done, amber in the middle, orange when
@@ -20,18 +18,6 @@ function rateColor(rate: number): string {
   return 'bg-orange-400';
 }
 
-function pct(rate: number): number {
-  return Math.min(100, Math.round(rate * 100));
-}
-
-function formatMinutes(minutes: number): string {
-  const rounded = Math.round(minutes);
-  if (rounded < 60) return `${rounded}m`;
-  const hours = Math.floor(rounded / 60);
-  const rest = rounded % 60;
-  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
-}
-
 function weekLabel(weekStart: string): string {
   const parsed = parseISO(weekStart);
   return Number.isNaN(parsed.getTime()) ? weekStart : `Week of ${format(parsed, 'd MMM yyyy')}`;
@@ -40,6 +26,13 @@ function weekLabel(weekStart: string): string {
 function shortWeekLabel(weekStart: string): string {
   const parsed = parseISO(weekStart);
   return Number.isNaN(parsed.getTime()) ? weekStart : format(parsed, 'd MMM');
+}
+
+function syncedLabel(lastSyncedAt: string | null): string {
+  if (!lastSyncedAt) return 'Never synced';
+  const parsed = parseISO(lastSyncedAt);
+  if (Number.isNaN(parsed.getTime())) return 'Never synced';
+  return `Last synced ${formatDistanceToNow(parsed, { addSuffix: true })}`;
 }
 
 const CARD = 'bg-white rounded-xl border border-gray-200 p-4';
@@ -76,7 +69,13 @@ function CompletionTrend({ weeks }: { weeks: WeekSummary[] }) {
   );
 }
 
-function WeekCard({ week }: { week: WeekSummary }) {
+function WeekCard({
+  week,
+  onSelectSegment,
+}: {
+  week: WeekSummary;
+  onSelectSegment: (target: DrilldownTarget) => void;
+}) {
   const overScheduledBy = week.totalScheduled - week.totalCompleted;
 
   return (
@@ -126,79 +125,98 @@ function WeekCard({ week }: { week: WeekSummary }) {
         </ul>
       )}
 
-      <div className="mt-4 pt-3 border-t border-gray-100">
-        <div className="flex items-baseline justify-between text-[13px] mb-1.5">
-          <span className="font-medium text-gray-800">Time worked</span>
-          <span className="text-gray-500">{formatMinutes(week.totalMinutesWorked)} total</span>
-        </div>
-        {week.minutesWorkedByIntegration.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">No time recorded this week.</p>
-        ) : (
-          <ul className="space-y-1.5">
-            {week.minutesWorkedByIntegration.map(entry => {
-              const share = week.totalMinutesWorked > 0 ? entry.minutes / week.totalMinutesWorked : 0;
-              return (
-                <li key={entry.integrationId}>
-                  <div className="flex items-center justify-between text-[13px] mb-0.5">
-                    <span className="text-gray-700">{entry.integrationName}</span>
-                    <span className="text-gray-500">{formatMinutes(entry.minutes)}</span>
-                  </div>
-                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-indigo-400"
-                      style={{ width: `${pct(share)}%` }}
-                    />
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
+      <StackedTimeBars week={week} onSelect={onSelectSegment} />
     </div>
   );
 }
 
 export function AnalysisView() {
   const [weeks, setWeeks] = useState<WeekSummary[] | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [drilldown, setDrilldown] = useState<DrilldownTarget | null>(null);
+
+  const load = useCallback(async () => {
+    const res = await fetch('/api/analysis');
+    const body = (await res.json()) as AnalysisResponse & { error?: string };
+    if (!res.ok) throw new Error(body.error || 'Failed to load analysis');
+    return body;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/analysis')
-      .then(async res => {
-        const body = (await res.json()) as AnalysisResponse & { error?: string };
-        if (!res.ok) throw new Error(body.error || 'Failed to load analysis');
-        return body;
-      })
+    load()
       .then(body => {
-        if (!cancelled) setWeeks(body.weeks ?? []);
+        if (cancelled) return;
+        setWeeks(body.weeks ?? []);
+        setLastSyncedAt(body.lastSyncedAt ?? null);
       })
       .catch(err => {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load analysis');
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [load]);
 
+  // Pull fresh calendar time, then re-read the summaries so the bars move.
+  const sync = async () => {
+    setIsSyncing(true);
+    setSyncError(null);
+    try {
+      const res = await fetch('/api/time-tracking/reconcile', { method: 'POST' });
+      const body = (await res.json()) as ReconcileResponse & { error?: string };
+      if (!res.ok) throw new Error(body.error || 'Failed to sync from calendar');
+      const refreshed = await load();
+      setWeeks(refreshed.weeks ?? []);
+      setLastSyncedAt(refreshed.lastSyncedAt ?? body.lastSyncedAt ?? null);
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : 'Failed to sync from calendar');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const header = (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={sync}
+          disabled={isSyncing}
+          className="flex items-center gap-2 px-3 py-1.5 text-[13px] font-medium bg-white border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {isSyncing ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <RefreshCw className="w-4 h-4 text-gray-400" />
+          )}
+          Sync from calendar
+        </button>
+        {weeks !== null && (
+          <span className="text-xs text-gray-400">{syncedLabel(lastSyncedAt)}</span>
+        )}
+      </div>
+      {syncError && <span className="text-xs text-red-600">{syncError}</span>}
+    </div>
+  );
+
+  let body;
   if (error) {
-    return (
+    body = (
       <div className={CARD}>
         <h2 className="text-base font-semibold text-gray-900">Analysis</h2>
         <p className="text-sm text-red-600 mt-1">{error}</p>
       </div>
     );
-  }
-
-  if (weeks === null) {
-    return (
+  } else if (weeks === null) {
+    body = (
       <div className={`${CARD} flex items-center justify-center py-10`}>
         <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-orange-500" />
       </div>
     );
-  }
-
-  if (weeks.length === 0) {
-    return (
+  } else if (weeks.length === 0) {
+    body = (
       <div className={CARD}>
         <h2 className="text-base font-semibold text-gray-900">Analysis</h2>
         <p className="text-sm text-gray-500 mt-1">
@@ -207,24 +225,32 @@ export function AnalysisView() {
         </p>
       </div>
     );
+  } else {
+    body = (
+      <>
+        {weeks.length >= 2 ? (
+          <CompletionTrend weeks={weeks} />
+        ) : (
+          <div className={CARD}>
+            <h2 className="text-base font-semibold text-gray-900">Completion trend</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              One week recorded so far. The trend appears once a second week completes.
+            </p>
+          </div>
+        )}
+
+        {weeks.map(week => (
+          <WeekCard key={week.weekStart} week={week} onSelectSegment={setDrilldown} />
+        ))}
+      </>
+    );
   }
 
   return (
     <div className="space-y-4">
-      {weeks.length >= 2 ? (
-        <CompletionTrend weeks={weeks} />
-      ) : (
-        <div className={CARD}>
-          <h2 className="text-base font-semibold text-gray-900">Completion trend</h2>
-          <p className="text-sm text-gray-500 mt-1">
-            One week recorded so far. The trend appears once a second week completes.
-          </p>
-        </div>
-      )}
-
-      {weeks.map(week => (
-        <WeekCard key={week.weekStart} week={week} />
-      ))}
+      {header}
+      {body}
+      <TimeDrilldownModal target={drilldown} onClose={() => setDrilldown(null)} />
     </div>
   );
 }

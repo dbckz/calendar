@@ -209,7 +209,7 @@ export function firstWorkingDaysOfNextWeek(
 // sub-fetch returned without error. Reconcile only trusts "the event is gone"
 // for integrations in that set, so a swallowed partial failure never triggers a
 // mass purge.
-async function fetchEventsForDays(
+export async function fetchEventsForDays(
   integrations: GoogleIntegration[],
   days: Date[]
 ): Promise<{ events: CalendarEvent[]; fetchedIntegrationIds: Set<string> }> {

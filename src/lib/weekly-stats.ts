@@ -103,3 +103,80 @@ export function weeklyProgressRows(
   }
   return rows;
 }
+
+// --- Stacked time bars ------------------------------------------------------
+// The Analysis page shows one bar per workspace, segmented by work category.
+// Totals stay authoritative (the overlap-deduped minutes the week recorded); the
+// segments are the category split. When the split doesn't account for the whole
+// total — days recorded before category tracking existed — the remainder shows
+// as UNSPLIT_CATEGORY rather than silently shrinking the bar.
+export const UNSPLIT_CATEGORY = 'Unsplit';
+
+export interface TimeSegment {
+  category: string;
+  minutes: number;
+  share: number; // 0..1 of the integration's total
+}
+
+export interface IntegrationTime {
+  integrationId: string;
+  integrationName: string;
+  totalMinutes: number;
+  segments: TimeSegment[]; // largest first, no zero-minute segments
+}
+
+export function stackedTime(
+  totals: Array<{ integrationId: string; integrationName: string; minutes: number }>,
+  categoryMinutes: Array<{ integrationId: string; category: string; minutes: number }>
+): IntegrationTime[] {
+  const byIntegration = new Map<string, Map<string, number>>();
+  for (const row of categoryMinutes) {
+    if (row.minutes <= 0) continue;
+    const inner = byIntegration.get(row.integrationId) ?? new Map<string, number>();
+    inner.set(row.category, (inner.get(row.category) ?? 0) + row.minutes);
+    byIntegration.set(row.integrationId, inner);
+  }
+
+  return totals.map(total => {
+    const inner = byIntegration.get(total.integrationId) ?? new Map<string, number>();
+    const categorised = [...inner.values()].reduce((n, m) => n + m, 0);
+    const segments: TimeSegment[] = [...inner.entries()].map(([category, minutes]) => ({
+      category,
+      minutes,
+      share: 0,
+    }));
+
+    // Anything the categories don't account for is shown, not dropped.
+    const remainder = total.minutes - categorised;
+    if (remainder > 0.5) segments.push({ category: UNSPLIT_CATEGORY, minutes: remainder, share: 0 });
+
+    const sum = segments.reduce((n, s) => n + s.minutes, 0);
+    for (const segment of segments) segment.share = sum > 0 ? segment.minutes / sum : 0;
+    segments.sort((a, b) => b.minutes - a.minutes || a.category.localeCompare(b.category));
+
+    return {
+      integrationId: total.integrationId,
+      integrationName: total.integrationName,
+      // The bar's total is what its segments add up to, so the two can never
+      // disagree on screen.
+      totalMinutes: Math.max(total.minutes, sum),
+      segments,
+    };
+  });
+}
+
+// The per-category minutes a week's durable record already knows (written per
+// day, per integration by the live recorder and the reconcile).
+export function categoryMinutesFromRecord(
+  record: WeeklyStatsRecord
+): Array<{ integrationId: string; category: string; minutes: number }> {
+  const rows: Array<{ integrationId: string; category: string; minutes: number }> = [];
+  for (const [integrationId, entry] of Object.entries(record.integrations ?? {})) {
+    for (const day of Object.values(entry.days ?? {})) {
+      for (const [category, minutes] of Object.entries(day.byCategory ?? {})) {
+        rows.push({ integrationId, category, minutes });
+      }
+    }
+  }
+  return rows;
+}

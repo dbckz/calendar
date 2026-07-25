@@ -71,6 +71,18 @@ const CATEGORY_EMOJI: ReadonlyArray<readonly [string, string]> = [
 ];
 const UNKNOWN_CATEGORY_EMOJI = '🗂️';
 
+// Inverse of categoryEmoji: the category an app-created event title's emoji
+// prefix denotes, or null when the title carries no known category emoji. Time
+// attribution uses this so the breakdown follows the SAME emoji conventions the
+// planner writes, rather than a second mapping that could drift.
+export function categoryForTitleEmoji(title: string): string | null {
+  const trimmed = title.trim();
+  for (const [cat, emoji] of CATEGORY_EMOJI) {
+    if (trimmed.startsWith(emoji)) return cat;
+  }
+  return null;
+}
+
 export function categoryEmoji(category: string): string {
   const n = normalize(category);
   for (const [cat, emoji] of CATEGORY_EMOJI) {

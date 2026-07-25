@@ -5,10 +5,17 @@
  * week first. Storage is mocked; summariseWeek runs for real so the per-category
  * numbers the view renders are exercised end to end.
  */
-jest.mock('@/lib/user-data-storage', () => ({ getAllWeeklyStats: jest.fn() }));
+jest.mock('@/lib/user-data-storage', () => ({
+  getAllWeeklyStats: jest.fn(),
+  getLastReconciledAt: jest.fn(),
+}));
+jest.mock('@/lib/integration-storage', () => ({ getIntegrations: jest.fn() }));
+jest.mock('@/lib/time-tracking-storage', () => ({ getTimeTrackingData: jest.fn() }));
 
 import { GET } from '@/app/api/analysis/route';
-import { getAllWeeklyStats } from '@/lib/user-data-storage';
+import { getAllWeeklyStats, getLastReconciledAt } from '@/lib/user-data-storage';
+import { getIntegrations } from '@/lib/integration-storage';
+import { getTimeTrackingData } from '@/lib/time-tracking-storage';
 import type { WeeklyStatsRecord, WeeklyTaskOutcome, WeeklyTaskOutcomeKind } from '@/types';
 
 const outcome = (
@@ -46,13 +53,22 @@ async function analysis() {
 beforeEach(() => {
   jest.clearAllMocks();
   (getAllWeeklyStats as jest.Mock).mockResolvedValue({});
+  (getLastReconciledAt as jest.Mock).mockResolvedValue(null);
+  (getIntegrations as jest.Mock).mockResolvedValue({
+    googleIntegrations: [],
+    asanaIntegrations: [
+      { id: 'om', name: 'OM', enabled: true },
+      { id: 'dbc', name: 'DBC', enabled: true },
+    ],
+  });
+  (getTimeTrackingData as jest.Mock).mockResolvedValue({ dailyRecords: [] });
 });
 
 describe('analysis endpoint', () => {
   it('returns an empty list when nothing has been recorded', async () => {
     const { status, body } = await analysis();
     expect(status).toBe(200);
-    expect(body).toEqual({ weeks: [] });
+    expect(body).toEqual({ weeks: [], lastSyncedAt: null });
   });
 
   it('sorts weeks newest first', async () => {
@@ -127,5 +143,93 @@ describe('analysis endpoint', () => {
     const { status, body } = await analysis();
     expect(status).toBe(500);
     expect(body.error).toBe('disk on fire');
+  });
+});
+
+describe('analysis endpoint — stacked time bars and drill-down', () => {
+  const WEEK = '2026-07-20';
+
+  beforeEach(() => {
+    (getAllWeeklyStats as jest.Mock).mockResolvedValue({
+      [WEEK]: record(WEEK, [outcome('t1', 'Writing/Deep Work', 'done')], {
+        om: {
+          integrationName: 'OM',
+          days: {
+            '2026-07-20': {
+              date: '2026-07-20',
+              minutesScheduled: 180,
+              minutesWorked: 180,
+              byCategory: { Meetings: 120, Emails: 60 },
+            },
+            '2026-07-21': {
+              date: '2026-07-21',
+              minutesScheduled: 60,
+              minutesWorked: 60,
+              byCategory: { 'Writing/Deep Work': 60 },
+            },
+          },
+        },
+      }),
+    });
+    (getTimeTrackingData as jest.Mock).mockResolvedValue({
+      dailyRecords: [
+        {
+          date: '2026-07-20',
+          recordedAt: '',
+          integrationTotals: {},
+          events: [
+            { eventId: 'e1', title: 'Board meeting', integrationId: 'om', integrationName: 'OM', startTime: '', endTime: '', durationMinutes: 120, source: 'google', category: 'Meetings', countedMinutes: 120 },
+            { eventId: 'e2', title: 'Emails', integrationId: 'om', integrationName: 'OM', startTime: '', endTime: '', durationMinutes: 60, source: 'google', category: 'Emails', countedMinutes: 60 },
+            // Wholly covered by the meeting → contributes nothing, so it is not
+            // offered as a drill-down row.
+            { eventId: 'e3', title: 'Swallowed block', integrationId: 'om', integrationName: 'OM', startTime: '', endTime: '', durationMinutes: 30, source: 'google', category: 'Writing/Deep Work', countedMinutes: 0 },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('stacks each workspace bar by category, summing to its total', async () => {
+    const { body } = await analysis();
+    const om = body.weeks[0].timeByIntegration.find(
+      (i: { integrationId: string }) => i.integrationId === 'om'
+    );
+
+    expect(om.totalMinutes).toBe(240);
+    expect(om.segments.map((s: { category: string; minutes: number }) => [s.category, s.minutes])).toEqual([
+      ['Meetings', 120],
+      ['Emails', 60],
+      ['Writing/Deep Work', 60],
+    ]);
+    // Segments sum to the bar total, and shares sum to 1.
+    const sum = om.segments.reduce((n: number, s: { minutes: number }) => n + s.minutes, 0);
+    expect(sum).toBe(om.totalMinutes);
+    expect(om.segments.reduce((n: number, s: { share: number }) => n + s.share, 0)).toBeCloseTo(1);
+  });
+
+  it('keeps a workspace with no time as a zero bar', async () => {
+    const { body } = await analysis();
+    const dbc = body.weeks[0].timeByIntegration.find(
+      (i: { integrationId: string }) => i.integrationId === 'dbc'
+    );
+    expect(dbc).toMatchObject({ integrationName: 'DBC', totalMinutes: 0, segments: [] });
+  });
+
+  it('serves drill-down rows for the contributing events only', async () => {
+    const { body } = await analysis();
+    const titles = body.weeks[0].events.map((e: { title: string }) => e.title);
+    expect(titles).toEqual(['Board meeting', 'Emails']);
+    expect(body.weeks[0].events[0]).toMatchObject({
+      integrationId: 'om',
+      category: 'Meetings',
+      date: '2026-07-20',
+      durationMinutes: 120,
+    });
+  });
+
+  it('reports when the calendar was last synced', async () => {
+    (getLastReconciledAt as jest.Mock).mockResolvedValue('2026-07-25T08:00:00.000Z');
+    const { body } = await analysis();
+    expect(body.lastSyncedAt).toBe('2026-07-25T08:00:00.000Z');
   });
 });

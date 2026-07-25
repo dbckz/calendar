@@ -9,12 +9,7 @@ import { DelegateModal } from '@/components/DelegateModal';
 import { AddTaskModal } from '@/components/AddTaskModal';
 import { RitualsContent } from '@/components/RitualsContent';
 import { Reminders } from '@/components/Reminders';
-import {
-  attributeEventToWorkspace,
-  attributeMinutes,
-  buildWorkspaceCalendarMap,
-  isCountableWorkEvent,
-} from '@/lib/time-attribution';
+import { attributeMinutes, buildWorkspaceCalendarMap } from '@/lib/time-attribution';
 import { AnalysisView } from '@/components/analysis/AnalysisView';
 import { DashboardContent } from '@/components/dashboard/DashboardContent';
 import { CalendarTab } from '@/components/home/CalendarTab';
@@ -230,6 +225,37 @@ export default function Home() {
 
   const [calendarWorkspaceMap, setCalendarWorkspaceMap] = useState<Record<string, string>>({});
 
+  // Opening the Analysis tab refreshes past days from the calendar first, so
+  // retro-edits (a deleted meeting, a moved block) are already reflected in what
+  // it renders. The server debounces this to at most one pass per ~10 minutes,
+  // so flipping between tabs is cheap; the manual "Sync from calendar" button on
+  // the page itself bypasses the debounce. The view is mounted after the pass
+  // settles (and remounted via its key) so it never reads half-updated data.
+  const [analysisSyncing, setAnalysisSyncing] = useState(false);
+  const [analysisKey, setAnalysisKey] = useState(0);
+  useEffect(() => {
+    if (activeTab !== 'analysis') return;
+    let cancelled = false;
+    // Kicked off from a timer so the setState lands in a callback, not in the
+    // effect body.
+    const id = setTimeout(async () => {
+      setAnalysisSyncing(true);
+      try {
+        await api.reconcileTimeFromCalendar({ auto: true });
+      } catch (err) {
+        // A sync failure must not block the page — it just shows what it has.
+        console.error('Automatic calendar sync failed:', err);
+      }
+      if (cancelled) return;
+      setAnalysisSyncing(false);
+      setAnalysisKey(k => k + 1);
+    }, 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [activeTab]);
+
   // Load the configured day-rollover hour. If it differs from the default we
   // assumed at init and the user hasn't navigated away from the auto-selected
   // "today", re-sync the selected date to the configured logical today.
@@ -381,15 +407,6 @@ export default function Home() {
     [workspaceCalendarMap, googleEventAttributions]
   );
 
-  // Resolve the Asana workspace an event's time counts toward. The calendar is
-  // the source of truth: an event on a workspace's calendar counts toward that
-  // workspace however it got there, with an explicit task link or a manual
-  // attribution taking precedence. See lib/time-attribution.ts.
-  const getAsanaIntegrationIdForEvent = useCallback(
-    (event: CalendarEvent): string | null => attributeEventToWorkspace(event, attributionContext),
-    [attributionContext]
-  );
-
   // A minute-resolution clock for the "worked so far" split below. Held in state
   // (not read during render) so the figures stay pure and tick on their own.
   const [nowMs, setNowMs] = useState(0);
@@ -407,11 +424,14 @@ export default function Home() {
 
   // Minutes per workspace for the selected day: the full length of every
   // countable attributed block, and the part that has actually elapsed. Both
-  // come from one filter + attribution, so they can never disagree.
-  const { timeWorkedByIntegration, timeScheduledByIntegration } = useMemo(() => {
-    const { scheduled, worked } = attributeMinutes(timedEvents, attributionContext, nowMs);
-    return { timeWorkedByIntegration: worked, timeScheduledByIntegration: scheduled };
-  }, [timedEvents, attributionContext, nowMs]);
+  // come from one filter, attribution and overlap resolution, so they can never
+  // disagree — and overlapping blocks (a meeting over a task block) count once.
+  const attributedTime = useMemo(
+    () => attributeMinutes(timedEvents, attributionContext, nowMs),
+    [timedEvents, attributionContext, nowMs]
+  );
+  const timeWorkedByIntegration = attributedTime.worked;
+  const timeScheduledByIntegration = attributedTime.scheduled;
 
   // Record time tracking data for longitudinal analysis
   // Only records for today or past dates, debounced to avoid excessive writes
@@ -439,38 +459,42 @@ export default function Home() {
         };
       }
 
-      // Build event records for detailed analysis. Same countability filter as
-      // the totals above, so the per-event log and the per-workspace minutes
-      // can never tell different stories (no declined meeting or lunch block
-      // logged against time that was never counted).
-      const eventRecords = timedEvents
-        .map(event => {
-          if (!isCountableWorkEvent(event)) return null;
-          const asanaIntegrationId = getAsanaIntegrationIdForEvent(event);
-          if (!asanaIntegrationId) return null;
-          const integration = asanaIntegrations.find(i => i.id === asanaIntegrationId);
-          return {
-            eventId: event.id,
-            title: event.title,
-            integrationId: asanaIntegrationId,
-            integrationName: integration?.name || 'Unknown',
-            startTime: event.startTime.toISOString(),
-            endTime: event.endTime.toISOString(),
-            durationMinutes: Math.round((event.endTime.getTime() - event.startTime.getTime()) / 60000),
-            source: event.source as 'google' | 'asana',
-            linkedAsanaTaskId: event.linkedAsanaTaskId,
-          };
-        })
-        .filter((record): record is NonNullable<typeof record> => record !== null);
+      // Build event records for detailed analysis, straight from the attributed
+      // events so the log carries the same category and overlap-resolved
+      // contribution the totals were built from.
+      const eventById = new Map(timedEvents.map(e => [e.id, e]));
+      const eventRecords = attributedTime.events.map(attributed => {
+        const event = eventById.get(attributed.eventId);
+        const integration = asanaIntegrations.find(i => i.id === attributed.workspaceId);
+        return {
+          eventId: attributed.eventId,
+          title: attributed.title,
+          integrationId: attributed.workspaceId,
+          integrationName: integration?.name || 'Unknown',
+          startTime: new Date(attributed.startMs).toISOString(),
+          endTime: new Date(attributed.endMs).toISOString(),
+          durationMinutes: Math.round(attributed.fullMinutes),
+          source: (event?.source === 'asana' ? 'asana' : 'google') as 'google' | 'asana',
+          ...(event?.linkedAsanaTaskId ? { linkedAsanaTaskId: event.linkedAsanaTaskId } : {}),
+          category: attributed.category,
+          countedMinutes: Math.round(attributed.countedMinutes),
+        };
+      });
 
       // Record the time data
-      api.recordTimeTracking(dateStr, integrationTotals, eventRecords, timeWorkedByIntegration).catch(err => {
+      api.recordTimeTracking(
+        dateStr,
+        integrationTotals,
+        eventRecords,
+        timeWorkedByIntegration,
+        attributedTime.workedByCategory
+      ).catch(err => {
         console.error('Failed to record time tracking data:', err);
       });
     }, 2000); // 2 second debounce
 
     return () => clearTimeout(timeoutId);
-  }, [selectedDate, timedEvents, timeWorkedByIntegration, timeScheduledByIntegration, asanaIntegrations, isLoading, getAsanaIntegrationIdForEvent, rolloverHour]);
+  }, [selectedDate, timedEvents, attributedTime, timeWorkedByIntegration, timeScheduledByIntegration, asanaIntegrations, isLoading, rolloverHour]);
 
   const handleRefresh = useCallback(() => {
     // Rotate to a new random color scheme on refresh
@@ -1174,7 +1198,14 @@ export default function Home() {
       ) : activeTab === 'analysis' ? (
         <div className="flex-1 overflow-y-auto">
           <div className="max-w-4xl mx-auto p-6">
-            <AnalysisView />
+            {analysisSyncing ? (
+              <div className="flex items-center justify-center gap-3 py-16 text-sm text-gray-500">
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-orange-500" />
+                Syncing from your calendar…
+              </div>
+            ) : (
+              <AnalysisView key={analysisKey} />
+            )}
           </div>
         </div>
       ) : (

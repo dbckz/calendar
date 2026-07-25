@@ -8,6 +8,7 @@ import {
   attributeEventToWorkspace,
   attributeMinutes,
   buildWorkspaceCalendarMap,
+  categoriseEvent,
   isCountableWorkEvent,
 } from '@/lib/time-attribution';
 import type { CalendarEvent } from '@/types';
@@ -214,5 +215,138 @@ describe('attributeMinutes', () => {
     const laterMs = new Date(2026, 6, 25, 9, 0).getTime();
     const { scheduled, worked } = attributeMinutes(events, ctx(), laterMs);
     expect(worked).toEqual(scheduled);
+  });
+});
+
+describe('categoriseEvent', () => {
+  it('reads an app block\'s category from the emoji convention the planner writes', () => {
+    const cases: Array<[string, string]> = [
+      ['✍️ Draft the brief', 'Writing/Deep Work'],
+      ['🤝 Engagement / Outreach', 'Engagement/Outreach'],
+      ['📦 Batch', 'Batch'],
+      ['📝 Blog post', 'Blogs'],
+      ['✅ General Todos', 'General Todos'],
+    ];
+    for (const [title, category] of cases) {
+      expect(categoriseEvent(event({ id: 'e', title }), ctx())).toBe(category);
+    }
+  });
+
+  it('gives each work ritual its own segment', () => {
+    expect(categoriseEvent(event({ id: 'e', title: '📧 Emails' }), ctx())).toBe('Emails');
+    expect(categoriseEvent(event({ id: 'e', title: 'Emails' }), ctx())).toBe('Emails');
+    expect(categoriseEvent(event({ id: 'e', title: '📚 Kindle notes' }), ctx())).toBe('Kindle notes');
+    expect(categoriseEvent(event({ id: 'e', title: '🔄 Retrospective' }), ctx())).toBe('Retrospective');
+  });
+
+  it('recognises meeting prep by its own prefix, legacy titles included', () => {
+    expect(categoriseEvent(event({ id: 'e', title: '📖 Prep: Board' }), ctx())).toBe('Meeting prep');
+    expect(categoriseEvent(event({ id: 'e', title: 'Prep: Board' }), ctx())).toBe('Meeting prep');
+  });
+
+  it('treats anything with an attendee list as a meeting', () => {
+    expect(categoriseEvent(event({ id: 'e', title: 'Board sync', attendeeCount: 4 }), ctx())).toBe('Meetings');
+    expect(categoriseEvent(event({ id: 'e', title: 'One-to-one', attendeeCount: 1 }), ctx())).toBe('Meetings');
+  });
+
+  it('prefers a linked task\'s real classification over the title emoji', () => {
+    const linked = event({
+      id: 'e',
+      title: '✍️ Actually an outreach task',
+      linkedAsanaTaskId: 'g1',
+    });
+    expect(categoriseEvent(linked, ctx({ categoryByTaskId: { g1: 'Engagement/Outreach' } }))).toBe(
+      'Engagement/Outreach'
+    );
+  });
+
+  it('falls back to the catch-all for an unmarked, attendee-less block', () => {
+    expect(categoriseEvent(event({ id: 'e', title: 'Think about the thing' }), ctx())).toBe('Other');
+  });
+});
+
+describe('overlap resolution', () => {
+  const FUTURE = new Date(2026, 6, 25).getTime();
+
+  it('counts overlapping time once, giving it to the meeting', () => {
+    // A 2h task block with a 1h meeting dropped in the middle of it.
+    const events = [
+      event({
+        id: 'block',
+        title: '✍️ Deep work',
+        integrationId: OM_GOOGLE,
+        startTime: new Date(2026, 6, 24, 9, 0),
+        endTime: new Date(2026, 6, 24, 11, 0),
+      }),
+      event({
+        id: 'meeting',
+        title: 'Interrupting meeting',
+        integrationId: OM_GOOGLE,
+        attendeeCount: 3,
+        startTime: new Date(2026, 6, 24, 9, 30),
+        endTime: new Date(2026, 6, 24, 10, 30),
+      }),
+    ];
+
+    const { scheduled, scheduledByCategory, events: attributed } = attributeMinutes(events, ctx(), FUTURE);
+
+    // Two hours passed, not three.
+    expect(scheduled[OM_ASANA]).toBe(120);
+    expect(scheduledByCategory[OM_ASANA]).toEqual({ Meetings: 60, 'Writing/Deep Work': 60 });
+    // The block keeps only its uncovered halves.
+    expect(attributed.find(e => e.eventId === 'block')).toMatchObject({
+      fullMinutes: 120,
+      countedMinutes: 60,
+    });
+    expect(attributed.find(e => e.eventId === 'meeting')).toMatchObject({ countedMinutes: 60 });
+  });
+
+  it('gives a task block precedence over a ritual it overlaps', () => {
+    const events = [
+      event({
+        id: 'emails',
+        title: '📧 Emails',
+        integrationId: OM_GOOGLE,
+        startTime: new Date(2026, 6, 24, 16, 0),
+        endTime: new Date(2026, 6, 24, 16, 30),
+      }),
+      event({
+        id: 'block',
+        title: '✍️ Deep work',
+        integrationId: OM_GOOGLE,
+        startTime: new Date(2026, 6, 24, 16, 0),
+        endTime: new Date(2026, 6, 24, 16, 30),
+      }),
+    ];
+
+    const { scheduled, scheduledByCategory } = attributeMinutes(events, ctx(), FUTURE);
+    expect(scheduled[OM_ASANA]).toBe(30);
+    expect(scheduledByCategory[OM_ASANA]).toEqual({ 'Writing/Deep Work': 30 });
+  });
+
+  it('stacked category totals always sum to the workspace total', () => {
+    const events = [
+      event({ id: 'a', title: '✍️ A', integrationId: OM_GOOGLE, startTime: new Date(2026, 6, 24, 9, 0), endTime: new Date(2026, 6, 24, 10, 0) }),
+      event({ id: 'b', title: 'Meeting', attendeeCount: 2, integrationId: OM_GOOGLE, startTime: new Date(2026, 6, 24, 9, 45), endTime: new Date(2026, 6, 24, 10, 15) }),
+      event({ id: 'c', title: '📧 Emails', integrationId: OM_GOOGLE, startTime: new Date(2026, 6, 24, 10, 10), endTime: new Date(2026, 6, 24, 10, 40) }),
+    ];
+
+    const { scheduled, scheduledByCategory } = attributeMinutes(events, ctx(), FUTURE);
+    const sum = Object.values(scheduledByCategory[OM_ASANA]).reduce((n, m) => n + m, 0);
+    expect(sum).toBe(scheduled[OM_ASANA]);
+    // 09:00–10:40 with no gaps = 100 minutes of real time.
+    expect(scheduled[OM_ASANA]).toBe(100);
+  });
+
+  it('does not dedupe across workspaces — parallel calendars are separate time', () => {
+    const map = buildWorkspaceCalendarMap([{ id: OM_ASANA, eventGoogleIntegrationId: OM_GOOGLE }], {
+      [DBC_CALENDAR]: DBC_ASANA,
+    });
+    const events = [
+      event({ id: 'om', title: 'OM meeting', attendeeCount: 2, integrationId: OM_GOOGLE }),
+      event({ id: 'dbc', title: 'DBC call', attendeeCount: 2, integrationId: PERSONAL_GOOGLE, calendarId: DBC_CALENDAR }),
+    ];
+    const { scheduled } = attributeMinutes(events, { map }, FUTURE);
+    expect(scheduled).toEqual({ [OM_ASANA]: 60, [DBC_ASANA]: 60 });
   });
 });

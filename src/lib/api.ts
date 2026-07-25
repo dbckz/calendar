@@ -1021,13 +1021,42 @@ export const api = {
     // each attributed event). `integrationTotals` stays the FULL scheduled
     // minutes, so the long-running time-tracking file keeps its meaning; this
     // extra map is what the durable weekly record stores as "worked".
-    workedMinutesByIntegration?: Record<string, number>
+    workedMinutesByIntegration?: Record<string, number>,
+    // Worked minutes split by work category, keyed by integration then category.
+    // Feeds the Analysis page's category-stacked bars.
+    workedByCategory?: Record<string, Record<string, number>>
   ): Promise<{ success: boolean }> {
     return fetchWithRetry<{ success: boolean }>('/api/time-tracking', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date, integrationTotals, events, workedMinutesByIntegration }),
+      body: JSON.stringify({
+        date,
+        integrationTotals,
+        events,
+        workedMinutesByIntegration,
+        workedByCategory,
+      }),
     });
+  },
+
+  // Rebuild past days' time records from the calendar (retro-edits). `auto` is
+  // debounced server-side; a manual press should omit it.
+  async reconcileTimeFromCalendar(options?: { days?: number; auto?: boolean }): Promise<{
+    days: number;
+    updated: number;
+    skipped: string[];
+    lastSyncedAt: string;
+    debounced?: boolean;
+  }> {
+    return fetchWithRetry(
+      '/api/time-tracking/reconcile',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(options ?? {}),
+      },
+      { maxRetries: 0 }
+    );
   },
 
   // Task metadata (enrichment layer, keyed by Asana task GID)

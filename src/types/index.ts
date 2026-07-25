@@ -494,6 +494,10 @@ export interface WeeklyStatsIntegrationDay {
   date: string; // yyyy-MM-dd
   minutesScheduled: number;
   minutesWorked: number;
+  // Worked minutes split by work category (Meetings / Writing/Deep Work /
+  // Emails / …), overlap-deduped so the segments sum to minutesWorked. Absent on
+  // records written before category tracking existed — treat as "unsplit".
+  byCategory?: Record<string, number>;
 }
 
 export interface WeeklyStatsRecord {

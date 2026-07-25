@@ -126,6 +126,8 @@ export async function recordWeeklyTime(
     integrationName: string;
     minutesScheduled: number;
     minutesWorked: number;
+    // Worked minutes split by category; must sum to minutesWorked.
+    byCategory?: Record<string, number>;
   }>,
   at: string = new Date().toISOString()
 ): Promise<void> {
@@ -147,6 +149,13 @@ export async function recordWeeklyTime(
           date,
           minutesScheduled: Math.max(0, Math.round(e.minutesScheduled)),
           minutesWorked: Math.max(0, Math.round(e.minutesWorked)),
+          ...(e.byCategory && Object.keys(e.byCategory).length > 0
+            ? {
+                byCategory: Object.fromEntries(
+                  Object.entries(e.byCategory).map(([c, m]) => [c, Math.max(0, Math.round(m))])
+                ),
+              }
+            : {}),
         },
       },
     };

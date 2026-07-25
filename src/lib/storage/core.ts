@@ -120,6 +120,9 @@ export interface UserData {
   // Durable per-week analysis records, keyed by yyyy-MM-dd Monday. Append-only
   // in spirit: a past week's record is final. See WeeklyStatsRecord.
   weeklyStats?: Record<string, WeeklyStatsRecord>;
+  // When the server last rebuilt past days' time records from the calendar.
+  // Used to debounce the automatic reconcile the Analysis tab fires on load.
+  timeSyncState?: { lastReconciledAt?: string };
   // Daily-review state: when the review was last completed (so the next review
   // only covers what has finished SINCE then) and the bare calendar-event titles
   // the user has dismissed as "not a task" (so they never resurface in review).
@@ -152,6 +155,7 @@ const DEFAULT_USER_DATA: UserData = {
   taskDeferrals: {},
   carryOvers: {},
   weeklyStats: {},
+  timeSyncState: {},
   dailyReviewState: {},
 };
 
@@ -211,6 +215,7 @@ export async function getUserData(): Promise<UserData> {
         )
       ),
       weeklyStats: parsed.weeklyStats || {},
+      timeSyncState: parsed.timeSyncState || {},
       dailyReviewState: parsed.dailyReviewState || {},
     };
   } catch {

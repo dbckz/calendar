@@ -71,11 +71,12 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { date, integrationTotals, events, workedMinutesByIntegration } = body as {
+    const { date, integrationTotals, events, workedMinutesByIntegration, workedByCategory } = body as {
       date: string;
       integrationTotals: Record<string, IntegrationTimeRecord>;
       events: EventTimeRecord[];
       workedMinutesByIntegration?: Record<string, number>;
+      workedByCategory?: Record<string, Record<string, number>>;
     };
 
     if (!date) {
@@ -111,6 +112,7 @@ export async function POST(request: NextRequest) {
           integrationName: t.integrationName,
           minutesScheduled: t.totalMinutes,
           minutesWorked: workedMinutesByIntegration?.[t.integrationId] ?? t.totalMinutes,
+          byCategory: workedByCategory?.[t.integrationId],
         }))
       );
     } catch (err) {
