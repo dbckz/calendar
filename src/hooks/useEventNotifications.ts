@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CalendarEvent } from '@/types';
 
-const STORAGE_KEY = 'eventNotificationsEnabled';
+// Shared with the planning nudges (see usePlanningNudge) so the bell toggle
+// governs BOTH: one switch, as the user expects.
+export const NOTIFICATIONS_STORAGE_KEY = 'eventNotificationsEnabled';
+const STORAGE_KEY = NOTIFICATIONS_STORAGE_KEY;
 
 // Notify this many minutes before an event starts, plus at the start itself (0).
 const OFFSETS_MINUTES = [10, 0];

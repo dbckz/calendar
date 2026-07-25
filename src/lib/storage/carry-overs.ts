@@ -16,15 +16,69 @@ export async function getCarryOvers(): Promise<Record<string, CarryOverEntry>> {
   return data.carryOvers || {};
 }
 
-// Upsert carry-overs; a later call for the same taskId overwrites its fromWeek
-// (so a task carried two weeks running reports the most recent week).
+// Record a carry. An existing entry has its streak INCREMENTED (that is the
+// point: a task carried three weeks running is a different problem from one
+// carried once) and its fromWeek moved to the week just ended. Carrying twice
+// out of the SAME week is idempotent — it counts once.
 export async function setCarryOvers(
-  entries: Array<{ taskId: string; fromWeek: string; at?: number }>
+  entries: Array<{ taskId: string; fromWeek: string; at?: number; mustDo?: boolean }>
 ): Promise<void> {
   if (entries.length === 0) return;
   const data = await getUserData();
   const next = { ...(data.carryOvers || {}) };
-  for (const { taskId, fromWeek, at } of entries) next[taskId] = { fromWeek, at: at ?? Date.now() };
+  for (const { taskId, fromWeek, at, mustDo } of entries) {
+    const existing = next[taskId];
+    const sameWeekAgain = existing?.fromWeek === fromWeek;
+    const carries = existing ? (existing.carries ?? 1) + (sameWeekAgain ? 0 : 1) : 1;
+    next[taskId] = {
+      ...existing,
+      fromWeek,
+      at: at ?? Date.now(),
+      carries,
+      ...(mustDo !== undefined ? { mustDo } : {}),
+    };
+  }
+  data.carryOvers = next;
+  await saveUserData(data);
+}
+
+// Stamp the week a carried task was actually scheduled into. Keeps the entry
+// (and therefore the streak) alive across the schedule → not-done → carry cycle;
+// completion is what removes it.
+export async function markCarryOversScheduled(
+  taskIds: string[],
+  weekStart: string
+): Promise<void> {
+  if (taskIds.length === 0) return;
+  const data = await getUserData();
+  const current = data.carryOvers || {};
+  const next = { ...current };
+  let changed = false;
+  for (const taskId of taskIds) {
+    const existing = next[taskId];
+    if (!existing || existing.scheduledWeek === weekStart) continue;
+    next[taskId] = { ...existing, scheduledWeek: weekStart };
+    changed = true;
+  }
+  if (!changed) return;
+  data.carryOvers = next;
+  await saveUserData(data);
+}
+
+// Set (or clear) the must-do flag on carried tasks, from the end-of-week review's
+// escalation options.
+export async function setCarryOverMustDo(taskIds: string[], mustDo: boolean): Promise<void> {
+  if (taskIds.length === 0) return;
+  const data = await getUserData();
+  const next = { ...(data.carryOvers || {}) };
+  let changed = false;
+  for (const taskId of taskIds) {
+    const existing = next[taskId];
+    if (!existing) continue;
+    next[taskId] = { ...existing, mustDo };
+    changed = true;
+  }
+  if (!changed) return;
   data.carryOvers = next;
   await saveUserData(data);
 }

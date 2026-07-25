@@ -163,16 +163,17 @@ describe('DailyReviewModal — step 1 outcomes and replacements', () => {
     ]);
   });
 
-  it('defaults the workspace picker from defaultWorkspaceIdForEvent', async () => {
-    await openModal([reviewBlock()], {
-      workspaceOptions: WORKSPACES,
-      defaultWorkspaceIdForEvent: () => 'ws-dbc',
-    });
+  it('defaults the workspace picker to the first option', async () => {
+    await openModal([reviewBlock()], { workspaceOptions: WORKSPACES });
 
     fireEvent.click(screen.getByRole('button', { name: /What were you doing instead\?/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Worked on something else' }));
 
-    expect(screen.getByLabelText('Workspace')).toHaveValue('ws-dbc');
+    expect(screen.getByLabelText('Workspace')).toHaveValue('ws-om');
+
+    // And the default is what gets sent if the picker is left alone.
+    const body = await saveAndReplan();
+    expect(body?.replacements[0]).toMatchObject({ mode: 'work', workspaceId: 'ws-om' });
   });
 
   it('hides the work option when no workspaces are supplied', async () => {

@@ -53,6 +53,10 @@ jest.mock('@/lib/user-data-storage', () => ({
   setTaskDeferrals: jest.fn(),
   setCarryOvers: jest.fn(),
   removeCarryOvers: jest.fn(),
+  upsertDelegationEntry: jest.fn(),
+  setWeeklyTaskOutcomes: jest.fn(),
+  setGoogleEventAttribution: jest.fn(),
+  addEventAttributionRule: jest.fn(),
   updateScheduledAsanaTasksByGoogleEvent: jest.fn(),
 }));
 
@@ -69,6 +73,7 @@ import {
   setCarryOvers,
   removeCarryOvers,
   removeBlockDoneOverride,
+  upsertDelegationEntry,
 } from '@/lib/user-data-storage';
 
 const INTEGRATION = { id: 'gi1', clientId: 'c', clientSecret: 's', credentials: { accessToken: 't' } };
@@ -237,5 +242,76 @@ describe('replan confirm — end-of-week carry-over', () => {
 
     expect(completeTask).toHaveBeenCalledWith('tok', 'g9', true);
     expect(removeCarryOvers).toHaveBeenCalledWith(['g9']);
+  });
+});
+
+describe('end-of-week escalation — must-do and delegate', () => {
+  it('carrying with mustDo flags the task for next week\'s wizard', async () => {
+    await confirm({
+      moves: [],
+      carry: [{ blockId: 'evt-1', taskIds: ['g-streaky'], mustDo: true }],
+    });
+
+    expect((setCarryOvers as jest.Mock).mock.calls[0][0]).toEqual([
+      expect.objectContaining({ taskId: 'g-streaky', mustDo: true }),
+    ]);
+    // Still a carry: the deferral is written as usual.
+    expect(setTaskDeferrals).toHaveBeenCalled();
+  });
+
+  it('a plain carry does not set the must-do flag', async () => {
+    await confirm({ moves: [], carry: [{ blockId: 'evt-1', taskIds: ['g1'] }] });
+    expect((setCarryOvers as jest.Mock).mock.calls[0][0][0]).not.toHaveProperty('mustDo');
+  });
+
+  it('delegating enqueues the task and writes NO carry-over', async () => {
+    const out = await confirm({
+      moves: [],
+      delegate: [
+        {
+          blockId: 'evt-1',
+          gid: 'g-ai',
+          integrationId: 'ai1',
+          title: 'Summarise the consultation responses',
+        },
+      ],
+    });
+
+    expect(upsertDelegationEntry).toHaveBeenCalledWith(
+      'g-ai',
+      'ai1',
+      expect.objectContaining({ mode: 'background', state: 'queued' })
+    );
+    // The agent is doing it, so next-week Dave should not be badged about it.
+    expect(setCarryOvers).not.toHaveBeenCalled();
+    expect(setTaskDeferrals).not.toHaveBeenCalled();
+    expect(removeCarryOvers).toHaveBeenCalledWith(['g-ai']);
+    expect(out.delegateResults).toEqual([{ gid: 'g-ai', success: true }]);
+  });
+
+  it('defaults the brief to the task title', async () => {
+    await confirm({
+      moves: [],
+      delegate: [{ gid: 'g-ai', integrationId: 'ai1', title: 'Draft the reply' }],
+    });
+    expect((upsertDelegationEntry as jest.Mock).mock.calls[0][2]).toMatchObject({
+      title: 'Draft the reply',
+      brief: 'Draft the reply',
+    });
+  });
+
+  it('reports a delegation failure without failing the rest of the apply', async () => {
+    (upsertDelegationEntry as jest.Mock).mockRejectedValueOnce(new Error('queue full'));
+
+    const out = await confirm({
+      moves: [],
+      delegate: [{ gid: 'g-ai', integrationId: 'ai1', title: 'X' }],
+      carry: [{ blockId: 'evt-1', taskIds: ['g1'] }],
+    });
+
+    expect(out.delegateResults[0]).toMatchObject({ gid: 'g-ai', success: false });
+    // The unrelated carry still went through.
+    expect(setCarryOvers).toHaveBeenCalled();
+    expect(out.carryResults[0].success).toBe(true);
   });
 });

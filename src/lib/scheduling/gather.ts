@@ -427,10 +427,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   // end-of-week review. Only markers from a week BEFORE the one being planned
   // count (carrying out of this very week is not "last week's leftover"); stale
   // ones are pruned on read, like deferrals.
-  const { carriedFromWeek, stale: staleCarryOvers } = partitionCarryOvers(
-    carryOversRaw,
-    weekStartStr
-  );
+  const { carried, stale: staleCarryOvers } = partitionCarryOvers(carryOversRaw, weekStartStr);
   if (staleCarryOvers.length > 0) await removeCarryOvers(staleCarryOvers);
 
   const weekEvents = fetched.events;
@@ -550,8 +547,16 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
   // Carry-over flags for a candidate, omitted entirely when the task was not
   // carried (so the candidate shape is unchanged for everything else).
   const carryFlags = (taskId: string) => {
-    const from = carriedFromWeek.get(taskId);
-    return from ? { carriedOver: true as const, carriedFromWeek: from } : {};
+    const info = carried.get(taskId);
+    if (!info) return {};
+    return {
+      carriedOver: true as const,
+      carriedFromWeek: info.fromWeek,
+      // Consecutive carries, so the wizard can escalate a task that keeps
+      // sliding rather than badging every carry the same.
+      carryStreak: info.carries,
+      ...(info.mustDo ? { mustDo: true as const } : {}),
+    };
   };
 
   const candidateTasks: CandidateTask[] = [];

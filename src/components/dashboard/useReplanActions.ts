@@ -18,7 +18,11 @@ export type UnplaceableMode = 'defer' | 'leave' | 'overflow' | 'prioritise';
 // carried into next week's plan (default), dropped back to the backlog with no
 // badge, or marked done. Keyed by block event id for single-task blocks, and by
 // `${eventId}::${taskId}` for each member of a grouped block.
-export type CarryMode = 'carry' | 'backlog' | 'done';
+//
+// A task that has already been carried two or more weeks running gets two extra
+// options: 'mustDo' (carry it AND flag it must-do next week) and, when it is
+// AI-runnable, 'delegate' (hand it to an agent instead of carrying it).
+export type CarryMode = 'carry' | 'backlog' | 'done' | 'mustDo' | 'delegate';
 
 // Per-task key for a grouped carry block's member row.
 export const carryTaskKey = (googleEventId: string, taskId: string) =>
@@ -105,7 +109,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     const dismissIds: string[] = [];
     const defer: Array<{ taskIds: string[]; googleEventId?: string }> = [];
     const leaveUnscheduled: string[] = [];
-    const carry: Array<{ blockId?: string; blockIds?: string[]; taskIds: string[]; quiet?: boolean }> = [];
+    const carry: Array<{ blockId?: string; blockIds?: string[]; taskIds: string[]; quiet?: boolean; mustDo?: boolean }> = [];
+    const delegate: Array<{ blockId?: string; gid: string; integrationId: string; title?: string }> = [];
     const completeAsana: Array<{ gid: string; integrationId: string }> = [];
     const displace: Array<{
       googleEventId: string;
@@ -193,13 +198,29 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
           (grouped ? carryMode[carryTaskKey(b.googleEventId, taskId)] : carryMode[b.googleEventId]) ??
           'carry';
         const carryIds = incomplete.filter(t => modeFor(t.id) === 'carry').map(t => t.id);
+        const mustDoIds = incomplete.filter(t => modeFor(t.id) === 'mustDo').map(t => t.id);
         const backlogIds = incomplete.filter(t => modeFor(t.id) === 'backlog').map(t => t.id);
         const doneTasks = incomplete.filter(t => modeFor(t.id) === 'done');
+        // Delegated tasks go to an agent, so they are deliberately absent from
+        // every carry entry — next-week Dave is not doing them.
+        const delegateTasks = incomplete.filter(
+          t => modeFor(t.id) === 'delegate' && t.gid && t.integrationId
+        );
         const blockIds = b.mergedEventIds ?? [b.googleEventId];
         if (carryIds.length > 0)
           carry.push({ blockId: b.googleEventId, blockIds, taskIds: carryIds });
+        if (mustDoIds.length > 0)
+          carry.push({ blockId: b.googleEventId, blockIds, taskIds: mustDoIds, mustDo: true });
         if (backlogIds.length > 0)
           carry.push({ blockId: b.googleEventId, blockIds, taskIds: backlogIds, quiet: true });
+        for (const t of delegateTasks) {
+          delegate.push({
+            blockId: b.googleEventId,
+            gid: t.gid!,
+            integrationId: t.integrationId!,
+            title: t.title,
+          });
+        }
         for (const t of doneTasks) {
           if (t.gid && t.integrationId) completeAsana.push({ gid: t.gid, integrationId: t.integrationId });
         }
@@ -214,7 +235,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     const deletionBlocks = deletions
       .filter(d => deletionIncluded.has(d.googleEventId))
       .map(d => ({ googleEventId: d.googleEventId, googleIntegrationId: d.googleIntegrationId }));
-    return { moves, doneIds, dismissIds, defer, leaveUnscheduled, carry, completeAsana, displace, additionBlocks, deletionBlocks };
+    return { moves, doneIds, dismissIds, defer, leaveUnscheduled, carry, delegate, completeAsana, displace, additionBlocks, deletionBlocks };
   }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, carryBlocks, carriedEventIds, carryMode, additions, additionIncluded, deletions, deletionIncluded]);
 
   const actionCount =
@@ -224,6 +245,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     payload.defer.length +
     payload.leaveUnscheduled.length +
     payload.carry.length +
+    payload.delegate.length +
     payload.completeAsana.length +
     payload.displace.length +
     payload.additionBlocks.length +
@@ -270,7 +292,10 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
         payload.leaveUnscheduled,
         undefined,
         payload.displace,
-        payload.carry.length > 0 ? payload.carry : undefined
+        payload.carry.length > 0 ? payload.carry : undefined,
+        undefined, // started — daily-review only
+        undefined, // replacements — daily-review only
+        payload.delegate.length > 0 ? payload.delegate : undefined
       );
       const map: Record<string, ReplanConfirmResult> = {};
       for (const r of [...res, ...doneResults]) map[r.googleEventId] = r;

@@ -166,6 +166,26 @@ describe('gatherWeekContext - week-scoped rollover', () => {
     expect(nextWeek.candidateTasks.map(t => t.gid)).toContain('rollover');
   });
 
+  it('carries the streak and must-do flag through to the candidate', async () => {
+    (getCarryOvers as jest.Mock).mockResolvedValue({
+      rollover: { fromWeek: '2026-07-06', at: 1, carries: 3, mustDo: true },
+    });
+
+    const ctx = await gatherWeekContext();
+    expect(ctx.candidateTasks.find(t => t.gid === 'rollover')).toEqual(
+      expect.objectContaining({ carriedOver: true, carryStreak: 3, mustDo: true })
+    );
+  });
+
+  it('reports a single carry for a marker with no stored streak', async () => {
+    (getCarryOvers as jest.Mock).mockResolvedValue({ rollover: { fromWeek: '2026-07-06', at: 1 } });
+
+    const ctx = await gatherWeekContext();
+    const task = ctx.candidateTasks.find(t => t.gid === 'rollover');
+    expect(task).toEqual(expect.objectContaining({ carryStreak: 1 }));
+    expect(task).not.toHaveProperty('mustDo');
+  });
+
   it('prunes a carry-over marker older than four weeks', async () => {
     (getCarryOvers as jest.Mock).mockResolvedValue({
       rollover: { fromWeek: '2026-06-08', at: 1 }, // 5 weeks before the planning week

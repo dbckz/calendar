@@ -17,6 +17,13 @@ import {
   PARKED_IDEAS_NOTE,
 } from './helpers';
 
+// 1 → "1st", 2 → "2nd", 3 → "3rd", 4+ → "4th" (11-13 are always "th").
+function ordinal(n: number): string {
+  const teens = n % 100;
+  if (teens >= 11 && teens <= 13) return `${n}th`;
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
+}
+
 interface TasksStepProps {
   taskCats: WeekCandidateCategory[] | null;
   selections: Record<string, Set<string>>;
@@ -112,20 +119,30 @@ export function TasksStep({
     ) : null;
 
   // Tiny pill marking a task the user carried out of an earlier week at that
-  // week's end-of-week review. Nothing rendered for everything else.
-  const renderCarriedBadge = (c: WeekCandidate) =>
-    c.carriedOver ? (
+  // week's end-of-week review. A task that has kept sliding (carried two or more
+  // weeks running) gets the louder amber treatment so it stands out from the
+  // ordinary once-carried row. Nothing rendered for everything else.
+  const renderCarriedBadge = (c: WeekCandidate) => {
+    if (!c.carriedOver) return null;
+    const streak = c.carryStreak ?? 1;
+    const escalated = streak >= 2;
+    return (
       <span
         title={
-          c.carriedFromWeek
-            ? `Carried over from the week of ${format(parseISO(c.carriedFromWeek), 'MMM d')}`
-            : 'Carried over from last week'
+          escalated
+            ? `Carried over ${streak} weeks running`
+            : c.carriedFromWeek
+              ? `Carried over from the week of ${format(parseISO(c.carriedFromWeek), 'MMM d')}`
+              : 'Carried over from last week'
         }
-        className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-100 text-orange-700 flex-shrink-0"
+        className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0 ${
+          escalated ? 'bg-amber-100 text-amber-800' : 'bg-orange-100 text-orange-700'
+        }`}
       >
-        ↩ last week
+        {escalated ? `↩ ${ordinal(streak)} week` : '↩ last week'}
       </span>
-    ) : null;
+    );
+  };
 
   // "Must do this week" toggle for a selectable row.
   const renderMustDo = (category: string, id: string) => {

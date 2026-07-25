@@ -610,7 +610,6 @@ function ReviewRow({
           value={replacement}
           onChange={onSetReplacement}
           workspaceOptions={workspaceOptions}
-          defaultWorkspaceIdForEvent={defaultWorkspaceIdForEvent}
         />
       )}
     </li>

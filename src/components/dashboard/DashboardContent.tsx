@@ -7,6 +7,7 @@ import { CalendarEvent, DelegationQueueEntry, TaskMetadata } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
 import { api, DashboardCapacityResponse, type WeekStateResponse, type AiClaim } from '@/lib/api';
 import { WEEK_ACTION_LABELS, targetWeekForAction, type WeekAction } from '@/lib/scheduling/week-state';
+import { usePlanningNudge } from '@/hooks/usePlanningNudge';
 import { TodayColumn } from './TodayColumn';
 import { TopTasks } from './TopTasks';
 import { CapacityWidget } from './CapacityWidget';
@@ -118,6 +119,10 @@ export function DashboardContent({
   // whenever a plan/review is applied so the button keeps up.
   const [weekState, setWeekState] = useState<WeekStateResponse | null>(null);
   const [showActionMenu, setShowActionMenu] = useState(false);
+
+  // Friday wrap-up / Sunday plan-next-week reminders, through the same
+  // notification toggle as the event alerts.
+  usePlanningNudge(weekState, rolloverHour);
 
   const loadWeekState = useCallback(() => {
     api.getWeekState()

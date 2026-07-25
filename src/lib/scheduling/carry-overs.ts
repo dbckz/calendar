@@ -11,10 +11,18 @@ import type { CarryOverEntry } from '@/lib/storage/core';
 // How many weeks a carry-over marker survives before it is pruned on read.
 export const CARRY_OVER_MAX_AGE_WEEKS = 4;
 
+export interface CarriedTaskInfo {
+  fromWeek: string;
+  // Consecutive end-of-week carries (1 = carried once).
+  carries: number;
+  mustDo: boolean;
+}
+
 export interface CarryOverPartition {
-  // taskId -> the week it was carried out of, for entries that predate the week
+  // taskId -> what we know about its carry, for entries that predate the week
   // being planned (these are the badge-worthy ones).
   carriedFromWeek: Map<string, string>;
+  carried: Map<string, CarriedTaskInfo>;
   stale: string[]; // taskIds whose entry is too old to keep
 }
 
@@ -25,6 +33,7 @@ export function partitionCarryOvers(
   maxAgeWeeks: number = CARRY_OVER_MAX_AGE_WEEKS
 ): CarryOverPartition {
   const carriedFromWeek = new Map<string, string>();
+  const carried = new Map<string, CarriedTaskInfo>();
   const stale: string[] = [];
   const cutoff = shiftWeeks(weekStartStr, -maxAgeWeeks);
   for (const [taskId, entry] of Object.entries(carryOvers)) {
@@ -36,9 +45,16 @@ export function partitionCarryOvers(
       stale.push(taskId);
       continue;
     }
-    if (entry.fromWeek < weekStartStr) carriedFromWeek.set(taskId, entry.fromWeek);
+    if (entry.fromWeek < weekStartStr) {
+      carriedFromWeek.set(taskId, entry.fromWeek);
+      carried.set(taskId, {
+        fromWeek: entry.fromWeek,
+        carries: entry.carries ?? 1,
+        mustDo: entry.mustDo === true,
+      });
+    }
   }
-  return { carriedFromWeek, stale };
+  return { carriedFromWeek, carried, stale };
 }
 
 // yyyy-MM-dd shifted by whole weeks, in UTC so no DST boundary can shift the date.

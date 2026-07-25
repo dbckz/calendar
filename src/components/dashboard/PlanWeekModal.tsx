@@ -468,6 +468,14 @@ export function PlanWeekModal({
         categoryOverrides: Object.keys(categoryOverrides).length ? categoryOverrides : undefined,
       });
       setTaskCats(data.categories);
+      // A task the end-of-week review flagged "must do next week" arrives
+      // pre-flagged, so a selection cap can never quietly drop it again.
+      const mustDoFromReview = data.categories.flatMap(c =>
+        c.candidates.filter(cand => cand.mustDo).map(cand => cand.id)
+      );
+      if (mustDoFromReview.length > 0) {
+        setMustDoIds(prev => new Set([...prev, ...mustDoFromReview]));
+      }
       // Pre-check priorities (capped at each category's remaining quota).
       const sel: Record<string, Set<string>> = {};
       for (const c of data.categories) {

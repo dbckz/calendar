@@ -141,6 +141,13 @@ export interface ReplanCarryTask {
   gid?: string;
   integrationId?: string;
   adhocId?: string;
+  // Consecutive end-of-week carries so far (absent = never carried). At 2+ the
+  // review escalates: this task keeps sliding, so offer stronger options than
+  // "carry it again".
+  carryStreak?: number;
+  // Mirrors metadata.aiDelegable — the same source as the dashboard's
+  // AI-runnable card. Only these tasks get the Delegate option.
+  aiDelegable?: boolean;
 }
 
 // A block surfaced by the END-OF-WEEK review: unfinished, task-backed work with

@@ -14,7 +14,7 @@ import {
   updateAdHocTask,
   setGoogleEventAttribution,
   addPrepBlock,
-  removeCarryOvers,
+  markCarryOversScheduled,
   recordWeeklyTasks,
   type WeeklyTaskInput,
 } from '@/lib/user-data-storage';
@@ -356,14 +356,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Scheduled work is no longer "carried over" — drop the markers so next
-    // week's wizard doesn't badge a task that now has a slot. Best-effort: a
-    // failure here must not fail an otherwise successful confirm.
+    // Scheduled work KEEPS its carry-over marker, stamped with the week it was
+    // scheduled into. Clearing it here would reset the streak on every
+    // schedule → not-done → carry cycle, which is exactly the cycle worth
+    // counting; completion is what removes the marker. The badge stays quiet
+    // because a task scheduled into the week being planned is not a candidate in
+    // that week's wizard. Best-effort: never fail an otherwise good confirm.
     if (scheduledTaskIds.length > 0) {
       try {
-        await removeCarryOvers(scheduledTaskIds);
+        await markCarryOversScheduled(scheduledTaskIds, format(liveWeekStart, 'yyyy-MM-dd'));
       } catch (err) {
-        console.error('[Scheduling Confirm] Failed to clear carry-over markers:', err);
+        console.error('[Scheduling Confirm] Failed to stamp carry-over markers:', err);
       }
     }
 

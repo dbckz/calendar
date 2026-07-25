@@ -28,6 +28,8 @@ jest.mock('@/lib/user-data-storage', () => ({
   getDailyReviewState: jest.fn(),
   getMeetingPrepDecisions: jest.fn(),
   setMeetingPrepDecision: jest.fn(),
+  getCarryOvers: jest.fn(),
+  getAllTaskMetadata: jest.fn(),
 }));
 
 import { POST } from '@/app/api/scheduling/replan/analyze/route';
@@ -42,6 +44,8 @@ import {
   getDailyReviewState,
   getMeetingPrepDecisions,
   setMeetingPrepDecision,
+  getCarryOvers,
+  getAllTaskMetadata,
 } from '@/lib/user-data-storage';
 import type { ReplanReviewBlock } from '@/lib/scheduling/replan';
 import type { ProposedBlock } from '@/lib/scheduling/types';
@@ -116,6 +120,8 @@ beforeEach(() => {
   mockOverrides.mockResolvedValue({});
   mockPrepDecisions.mockResolvedValue({});
   (setMeetingPrepDecision as jest.Mock).mockResolvedValue(undefined);
+  (getCarryOvers as jest.Mock).mockResolvedValue({});
+  (getAllTaskMetadata as jest.Mock).mockResolvedValue({});
   // A last-review well before the week's blocks, so the "since last review"
   // window includes them (these tests exercise title/interval logic, not the
   // window itself — see the dedicated window test below).

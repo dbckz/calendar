@@ -23,6 +23,8 @@ jest.mock('@/lib/user-data-storage', () => ({
   getDailyReviewState: jest.fn(),
   getMeetingPrepDecisions: jest.fn(),
   setMeetingPrepDecision: jest.fn(),
+  getCarryOvers: jest.fn(),
+  getAllTaskMetadata: jest.fn(),
 }));
 
 import { POST } from '@/app/api/scheduling/replan/analyze/route';
@@ -35,6 +37,8 @@ import {
   getRitualBlocks,
   getBlockDoneOverrides,
   getDailyReviewState,
+  getCarryOvers,
+  getAllTaskMetadata,
 } from '@/lib/user-data-storage';
 import type { ReplanCarryBlock } from '@/lib/scheduling/replan';
 
@@ -149,6 +153,8 @@ beforeEach(() => {
   (getPrepBlocks as jest.Mock).mockResolvedValue([]);
   (getRitualBlocks as jest.Mock).mockResolvedValue([]);
   (getBlockDoneOverrides as jest.Mock).mockResolvedValue({});
+  (getCarryOvers as jest.Mock).mockResolvedValue({});
+  (getAllTaskMetadata as jest.Mock).mockResolvedValue({});
   (getDailyReviewState as jest.Mock).mockResolvedValue({
     lastReviewedAt: '2026-07-01T00:00:00.000Z',
     dismissedTitles: [],
@@ -252,5 +258,41 @@ describe('replan analyze — end-of-week mode', () => {
       expect.objectContaining({ googleEventId: 'evt-group', reason: 'missed' })
     );
     expect(out.unplaceable).toEqual([]);
+  });
+});
+
+describe('replan analyze — carry escalation signals', () => {
+  it('surfaces the carry streak and AI-runnable flag on carry tasks', async () => {
+    (getCarryOvers as jest.Mock).mockResolvedValue({
+      'g-open': { fromWeek: '2026-07-06', at: 0, carries: 3 },
+    });
+    (getAllTaskMetadata as jest.Mock).mockResolvedValue({
+      'g-open': { asanaTaskGid: 'g-open', integrationId: 'ai1', aiDelegable: true, updatedAt: '' },
+    });
+    setContext(FRIDAY_EVENING);
+
+    const out = await analyze();
+    const task = out.carryBlocks![0].tasks.find(t => t.id === 'g-open')!;
+
+    expect(task.carryStreak).toBe(3);
+    expect(task.aiDelegable).toBe(true);
+  });
+
+  it('leaves a never-carried, non-delegable task unmarked', async () => {
+    setContext(FRIDAY_EVENING);
+
+    const out = await analyze();
+    const task = out.carryBlocks![0].tasks.find(t => t.id === 'g-open')!;
+
+    expect(task.carryStreak).toBeUndefined();
+    expect(task.aiDelegable).toBeUndefined();
+  });
+
+  it('treats a carry-over with no stored count as one carry', async () => {
+    (getCarryOvers as jest.Mock).mockResolvedValue({ 'g-open': { fromWeek: '2026-07-06', at: 0 } });
+    setContext(FRIDAY_EVENING);
+
+    const out = await analyze();
+    expect(out.carryBlocks![0].tasks.find(t => t.id === 'g-open')!.carryStreak).toBe(1);
   });
 });

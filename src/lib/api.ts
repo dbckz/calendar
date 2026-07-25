@@ -124,6 +124,11 @@ export interface WeekCandidate {
   // end-of-week review. The wizard badges it and floats it up its category.
   carriedOver?: boolean;
   carriedFromWeek?: string; // yyyy-MM-dd Monday of the week it was carried out of
+  // Consecutive end-of-week carries (1 = carried once).
+  carryStreak?: number;
+  // Flagged "must do next week" in the end-of-week review: the wizard pre-ticks
+  // it and a selection cap can never drop it.
+  mustDo?: boolean;
 }
 
 export interface WeekCandidateCategory {
@@ -1278,7 +1283,16 @@ export const api = {
     // Daily-review outcomes: blocks worked on but not finished, and the
     // "what were you doing instead" answers for blocks that didn't happen.
     started?: string[],
-    replacements?: ReviewReplacementInput[]
+    replacements?: ReviewReplacementInput[],
+    // End-of-week escalation: hand a carried, AI-runnable task to an agent
+    // instead of carrying it. Writes no carry-over marker.
+    delegate?: Array<{
+      blockId?: string;
+      gid: string;
+      integrationId: string;
+      title?: string;
+      brief?: string;
+    }>
   ): Promise<{
     results: ReplanConfirmResult[];
     doneResults: ReplanConfirmResult[];
@@ -1317,6 +1331,7 @@ export const api = {
           ...(carry && carry.length ? { carry } : {}),
           ...(started && started.length ? { started } : {}),
           ...(replacements && replacements.length ? { replacements } : {}),
+          ...(delegate && delegate.length ? { delegate } : {}),
           ...(dismiss && dismiss.length ? { dismiss } : {}),
           ...(additions && additions.length ? { additions } : {}),
           ...(deletions && deletions.length ? { deletions } : {}),

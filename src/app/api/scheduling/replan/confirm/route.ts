@@ -36,6 +36,7 @@ import {
   setWeeklyTaskOutcomes,
   setGoogleEventAttribution,
   addEventAttributionRule,
+  upsertDelegationEntry,
   updateScheduledAsanaTasksByGoogleEvent,
 } from '@/lib/user-data-storage';
 import type { ReviewAdoptInput } from '@/lib/scheduling/daily-review';
@@ -137,6 +138,26 @@ interface CarryInput {
   blockIds: string[]; // every block behind the card, primary included
   taskIds: string[];
   quiet: boolean;
+  // Escalation for a task that keeps sliding: carry it AND flag it "must do next
+  // week", so the wizard pre-ticks it and no selection cap can drop it.
+  mustDo?: boolean;
+}
+
+// One "delegate instead of carrying" decision: the task goes to the agent queue
+// rather than into next week's plan, so NO carry-over marker is written — next-week
+// Dave isn't doing it, the agent is.
+interface DelegateInput {
+  blockId?: string;
+  gid: string;
+  integrationId: string;
+  title?: string;
+  brief?: string;
+}
+
+interface DelegateResult {
+  gid: string;
+  success: boolean;
+  error?: string;
 }
 
 interface CarryResult {
@@ -260,9 +281,20 @@ export async function POST(request: NextRequest) {
                 ? c.taskIds.filter((t: unknown): t is string => typeof t === 'string')
                 : [],
               quiet: c.quiet === true,
+              mustDo: c.mustDo === true,
             };
           })
           .filter((c: CarryInput) => c.taskIds.length > 0 || c.blockIds.length > 0)
+      : [];
+    // Tasks the user chose to hand to an agent instead of carrying.
+    const delegateInputs: DelegateInput[] = Array.isArray(body?.delegate)
+      ? body.delegate.filter(
+          (d: unknown): d is DelegateInput =>
+            !!d &&
+            typeof d === 'object' &&
+            typeof (d as DelegateInput).gid === 'string' &&
+            typeof (d as DelegateInput).integrationId === 'string'
+        )
       : [];
     // "Prioritise tomorrow" victims: displace each so its tomorrow slot frees up
     // for the prioritised block (which comes through as a normal move).
@@ -368,6 +400,7 @@ export async function POST(request: NextRequest) {
       deferInputs.length === 0 &&
       leaveEventIds.length === 0 &&
       carryInputs.length === 0 &&
+      delegateInputs.length === 0 &&
       displaceInputs.length === 0 &&
       dismissEventIds.length === 0 &&
       additions.length === 0 &&
@@ -782,7 +815,11 @@ export async function POST(request: NextRequest) {
             if (c.quiet) {
               await removeCarryOvers(taskIds);
             } else {
-              await setCarryOvers(taskIds.map(taskId => ({ taskId, fromWeek })));
+              // setCarryOvers increments the streak, so a task carried three
+              // weeks running reports carries: 3 rather than starting over.
+              await setCarryOvers(
+                taskIds.map(taskId => ({ taskId, fromWeek, ...(c.mustDo ? { mustDo: true } : {}) }))
+              );
               await setTaskDeferrals(taskIds.map(taskId => ({ taskId, until })));
             }
           }
@@ -801,6 +838,33 @@ export async function POST(request: NextRequest) {
             error: err instanceof Error ? err.message : 'Failed to carry over',
           });
         }
+      }
+    }
+
+    // --- Delegations: hand a carried task to an agent instead ---------------
+    // Uses the same queue the dashboard's Delegate action writes to. No
+    // carry-over marker is written and no deferral is set: the task is not
+    // waiting for next-week Dave, so it should not badge or park.
+    const delegateResults: DelegateResult[] = [];
+    for (const d of delegateInputs) {
+      try {
+        await upsertDelegationEntry(d.gid, d.integrationId, {
+          title: d.title ?? 'Delegated task',
+          brief: d.brief?.trim() || d.title || 'Complete this task.',
+          mode: 'background',
+          state: 'queued',
+        });
+        // A delegated task is no longer carrying.
+        await removeCarryOvers([d.gid]);
+        if (d.blockId) await removeBlockDoneOverride(d.blockId);
+        delegateResults.push({ gid: d.gid, success: true });
+      } catch (err) {
+        console.error(`[Replan Confirm] Failed to delegate ${d.gid}:`, err);
+        delegateResults.push({
+          gid: d.gid,
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to delegate',
+        });
       }
     }
 
@@ -1059,7 +1123,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, carryResults, displaceResults, additionResults, replacementResults });
+    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, carryResults, displaceResults, additionResults, replacementResults, delegateResults });
   } catch (error) {
     console.error('Error confirming mid-week replan:', error);
     return NextResponse.json(

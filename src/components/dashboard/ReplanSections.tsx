@@ -1,8 +1,9 @@
 'use client';
 
-import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell, BookOpen, CornerUpRight } from 'lucide-react';
+import { Check, AlertTriangle, ArrowRight, ChevronRight, Trash2, Dumbbell, BookOpen, CornerUpRight, Bot } from 'lucide-react';
 
 import type { ReplanAnalyzeResponse } from '@/lib/api';
+import type { ReplanCarryTask } from '@/lib/scheduling/replan';
 import { categoryColor, formatDuration, slotLabel, titleLabel } from './replanFormat';
 import type { CarryMode, MoveMode, StaleMode, UnplaceableMode, ReplanActions } from './useReplanActions';
 import { carryTaskKey } from './useReplanActions';
@@ -363,6 +364,9 @@ export function ReplanSections({
               const result = results[b.googleEventId];
               const grouped = b.tasks.length > 1;
               const blockMode = carryMode[b.googleEventId] ?? 'carry';
+              // A single-task block's decision belongs to its one task, so its
+              // streak / delegability drive the block-level option set.
+              const only = grouped ? undefined : b.tasks[0];
               return (
                 <li
                   key={b.googleEventId}
@@ -379,6 +383,7 @@ export function ReplanSections({
                       <span className="text-sm font-medium text-gray-800 truncate">
                         {titleLabel(b.titles)}
                       </span>
+                      {only?.aiDelegable && <AiDelegableIcon />}
                     </div>
                     <div className="mt-1 text-xs text-gray-500">
                       <span className="line-through">{slotLabel(b.date, b.start)}</span>
@@ -386,9 +391,11 @@ export function ReplanSections({
                         {b.reason === 'missed' ? 'missed' : 'no slot left this week'}
                       </span>
                     </div>
+                    <CarryStreakNote task={only} />
                     {/* Single-task block: one choice for the whole block. */}
                     {!grouped && !hasResults && (
                       <CarryOptions
+                        task={only}
                         value={blockMode}
                         onChange={v => setCarryMode(prev => ({ ...prev, [b.googleEventId]: v }))}
                       />
@@ -409,16 +416,23 @@ export function ReplanSections({
                                 readOnly
                                 className="w-4 h-4 rounded border-gray-300 text-emerald-500 disabled:opacity-60"
                               />
-                              <span
-                                className={`text-sm truncate flex-1 min-w-0 ${
-                                  t.done ? 'text-gray-400 line-through' : 'text-gray-700'
-                                }`}
-                              >
-                                {t.title}
-                              </span>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span
+                                    className={`text-sm truncate ${
+                                      t.done ? 'text-gray-400 line-through' : 'text-gray-700'
+                                    }`}
+                                  >
+                                    {t.title}
+                                  </span>
+                                  {t.aiDelegable && <AiDelegableIcon />}
+                                </div>
+                                <CarryStreakNote task={t} className="mt-0.5" />
+                              </div>
                               {!t.done && !hasResults && (
                                 <CarryOptions
                                   className="mt-0"
+                                  task={t}
                                   value={mode}
                                   onChange={v => setCarryMode(prev => ({ ...prev, [key]: v }))}
                                 />
@@ -645,20 +659,56 @@ const CARRY_OPTIONS: Array<{ v: CarryMode; label: string }> = [
   { v: 'done', label: 'Mark done' },
 ];
 
+// A task carried two or more weeks running keeps sliding, so plain "carry it
+// again" is no longer the headline choice: lead with committing to it, and offer
+// handing it to an agent when it is AI-runnable.
+const ESCALATED_CARRY_OPTIONS: Array<{ v: CarryMode; label: string }> = [
+  { v: 'mustDo', label: 'Must do next week' },
+  { v: 'delegate', label: 'Delegate' },
+  { v: 'carry', label: 'Carry again' },
+  { v: 'backlog', label: 'Drop to backlog' },
+  { v: 'done', label: 'Mark done' },
+];
+
+const carryStreakOf = (task?: ReplanCarryTask) => task?.carryStreak ?? 0;
+// Delegating needs an Asana-backed task the AI assessment flagged as runnable.
+const canDelegate = (task?: ReplanCarryTask) =>
+  !!(task?.aiDelegable && task.gid && task.integrationId);
+
+// Small indigo robot marking an AI-runnable task, matching the dashboard's
+// AI-runnable card.
+function AiDelegableIcon() {
+  return (
+    <Bot className="w-3.5 h-3.5 text-indigo-600 flex-shrink-0" aria-label="AI-runnable" />
+  );
+}
+
+function CarryStreakNote({ task, className = 'mt-1' }: { task?: ReplanCarryTask; className?: string }) {
+  const streak = carryStreakOf(task);
+  if (streak < 2) return null;
+  return <p className={`${className} text-[11px] text-gray-400`}>carried {streak} weeks running</p>;
+}
+
 function CarryOptions({
   value,
   onChange,
+  task,
   className = 'mt-2',
 }: {
   value: CarryMode;
   onChange: (v: CarryMode) => void;
+  task?: ReplanCarryTask;
   className?: string;
 }) {
+  const options =
+    carryStreakOf(task) >= 2
+      ? ESCALATED_CARRY_OPTIONS.filter(opt => opt.v !== 'delegate' || canDelegate(task))
+      : CARRY_OPTIONS;
   return (
     <div
       className={`${className} inline-flex rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium flex-shrink-0`}
     >
-      {CARRY_OPTIONS.map(opt => (
+      {options.map(opt => (
         <button
           key={opt.v}
           onClick={() => onChange(opt.v)}
@@ -666,7 +716,9 @@ function CarryOptions({
             value === opt.v
               ? opt.v === 'done'
                 ? 'bg-emerald-500 text-white'
-                : 'bg-orange-500 text-white'
+                : opt.v === 'delegate'
+                  ? 'bg-indigo-500 text-white'
+                  : 'bg-orange-500 text-white'
               : 'bg-white text-gray-600 hover:bg-gray-50'
           }`}
         >

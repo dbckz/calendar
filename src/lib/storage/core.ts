@@ -79,9 +79,29 @@ export interface RitualBlock {
 // into the next week's plan. `fromWeek` is the yyyy-MM-dd Monday of the week the
 // task was planned in, so the plan-week wizard can badge it ("↩ last week") only
 // when the week being planned is a LATER week.
+// Lifecycle of a carry-over marker, and why it is NOT cleared on scheduling:
+//
+//   end-of-week review carries a task  → entry created, carries = 1
+//   plan-week schedules it next week   → scheduledWeek stamped; the entry SURVIVES
+//   that week ends and it is carried again → carries = 2, fromWeek moves on
+//   the task is completed (or the marker goes stale) → entry removed
+//
+// Clearing on scheduling (the original behaviour) destroyed the streak on every
+// schedule → not-done → carry cycle, which is exactly the cycle worth counting:
+// a task carried three weeks running is a signal, not noise. `scheduledWeek`
+// records that it did get a slot, so the badge only ever shows when the task is
+// genuinely carrying into a LATER week than it was carried out of.
 export interface CarryOverEntry {
   fromWeek: string; // yyyy-MM-dd (Monday of the week it was carried out of)
-  at: number; // ms timestamp the carry-over was recorded
+  at: number; // ms timestamp the carry-over was last recorded
+  // Consecutive end-of-week carries. Absent on entries written before streaks
+  // existed — treat as 1.
+  carries?: number;
+  // The last week this task was actually scheduled into, if any.
+  scheduledWeek?: string;
+  // Set from the end-of-week review's "Must do next week" option; the plan-week
+  // wizard pre-flags the task so it can't be dropped by a selection cap.
+  mustDo?: boolean;
 }
 
 export interface UserData {

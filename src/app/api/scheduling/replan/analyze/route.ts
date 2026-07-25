@@ -17,6 +17,8 @@ import {
   getRitualBlocks,
   getBlockDoneOverrides,
   getDailyReviewState,
+  getCarryOvers,
+  getAllTaskMetadata,
 } from '@/lib/user-data-storage';
 import { logicalTodayDate, normalizeRolloverHour } from '@/lib/date-utils';
 import { ritualKindForTitle, isBreakTitle, isRitualLikeTitle, existingRitualTitlesByDateFromEvents, RITUAL_TITLES } from '@/lib/scheduling/rituals';
@@ -36,7 +38,17 @@ export async function POST(request: NextRequest) {
     const weekStartParam = typeof body?.weekStart === 'string' ? body.weekStart : undefined;
 
     const ctx = await gatherWeekContext(weekStartParam);
-    const [scheduledAsana, adHocTasks, customTypes, prepBlocks, ritualBlocks, doneOverrides, reviewState] = await Promise.all([
+    const [
+      scheduledAsana,
+      adHocTasks,
+      customTypes,
+      prepBlocks,
+      ritualBlocks,
+      doneOverrides,
+      reviewState,
+      carryOvers,
+      taskMetadata,
+    ] = await Promise.all([
       getScheduledAsanaTasks(),
       getAdHocTasks(),
       getCustomTaskTypes(),
@@ -44,7 +56,17 @@ export async function POST(request: NextRequest) {
       getRitualBlocks(),
       getBlockDoneOverrides(),
       getDailyReviewState(),
+      getCarryOvers(),
+      getAllTaskMetadata(),
     ]);
+
+    // How many weeks running a task has been carried, and whether an agent could
+    // run it — both surfaced on the end-of-week carry cards so a task that keeps
+    // sliding can be escalated (must-do / delegate) instead of carried again.
+    const carryStreakFor = (taskId: string): number | undefined => {
+      const entry = carryOvers[taskId];
+      return entry ? entry.carries ?? 1 : undefined;
+    };
 
     const inWeek = (d?: string) => !!d && d >= ctx.weekStartStr && d <= ctx.weekEndStr;
 
@@ -160,13 +182,18 @@ export async function POST(request: NextRequest) {
       }
       carryTasksByEvent.set(
         eventId,
-        entries.map((e, i) => ({
-          id: e.asanaTaskId,
-          title: titles[i],
-          done: !incompleteByGid.has(e.asanaTaskId),
-          gid: e.asanaTaskId,
-          ...(e.integrationId ? { integrationId: e.integrationId } : {}),
-        }))
+        entries.map((e, i) => {
+          const streak = carryStreakFor(e.asanaTaskId);
+          return {
+            id: e.asanaTaskId,
+            title: titles[i],
+            done: !incompleteByGid.has(e.asanaTaskId),
+            gid: e.asanaTaskId,
+            ...(e.integrationId ? { integrationId: e.integrationId } : {}),
+            ...(streak ? { carryStreak: streak } : {}),
+            ...(taskMetadata[e.asanaTaskId]?.aiDelegable ? { aiDelegable: true } : {}),
+          };
+        })
       );
       const { startMs, endMs } = intervalFor(
         eventId,
@@ -220,7 +247,13 @@ export async function POST(request: NextRequest) {
       appEventIds.add(t.googleEventId);
       taskIdsByEvent.set(t.googleEventId, [t.id]);
       carryTasksByEvent.set(t.googleEventId, [
-        { id: t.id, title: t.title, done: !!t.completed, adhocId: t.id },
+        {
+          id: t.id,
+          title: t.title,
+          done: !!t.completed,
+          adhocId: t.id,
+          ...(carryStreakFor(t.id) ? { carryStreak: carryStreakFor(t.id) } : {}),
+        },
       ]);
       const category =
         classifyBlockCategory(adHocTypeSignals(t.taskType, customTypes), ctx.quotas) ?? 'Scheduled';

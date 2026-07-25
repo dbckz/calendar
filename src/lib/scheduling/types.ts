@@ -39,6 +39,11 @@ export interface CandidateTask {
   // above the rest of its category (behind pinned priorities).
   carriedOver?: boolean;
   carriedFromWeek?: string; // yyyy-MM-dd Monday of the week it was carried out of
+  // Consecutive end-of-week carries (1 = carried once). Drives the escalating
+  // badge in the wizard.
+  carryStreak?: number;
+  // Flagged "must do next week" from the end-of-week review's escalation.
+  mustDo?: boolean;
 }
 
 // A single proposed calendar block. `task` is omitted for a "reserved" block
