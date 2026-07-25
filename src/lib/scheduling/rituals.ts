@@ -107,6 +107,20 @@ function ritualBaseName(title: string): string {
 // derived from RITUAL_TITLES so a new ritual needs no second list.
 const RITUAL_BASE_NAMES: ReadonlySet<string> = new Set(RITUAL_TITLES.map(ritualBaseName));
 
+// Tolerant BREAK identity: lunch / exercise / break, however the title is
+// typed. Breaks are not work — used by time attribution to keep them out of
+// worked time, whether the app created the block or Dave typed it in himself.
+// The WORK rituals (emails, kindle notes, grooming, retrospective) are NOT
+// breaks and deliberately do count.
+const BREAK_BASE_NAMES: ReadonlySet<string> = new Set(
+  [LUNCH_TITLE, EXERCISE_TITLE, BREAK_TITLE].map(ritualBaseName)
+);
+
+export function isBreakLikeTitle(title: string): boolean {
+  if (!title) return false;
+  return BREAK_BASE_NAMES.has(ritualBaseName(title));
+}
+
 // Tolerant ritual identity, for EXCLUSION decisions only: is this title one of
 // the rituals, however the user typed it? A manually-created "Emails" event (no
 // emoji) is still the emails ritual and must never be adopted as a task or

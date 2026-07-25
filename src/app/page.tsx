@@ -9,6 +9,12 @@ import { DelegateModal } from '@/components/DelegateModal';
 import { AddTaskModal } from '@/components/AddTaskModal';
 import { RitualsContent } from '@/components/RitualsContent';
 import { Reminders } from '@/components/Reminders';
+import {
+  attributeEventToWorkspace,
+  attributeMinutes,
+  buildWorkspaceCalendarMap,
+  isCountableWorkEvent,
+} from '@/lib/time-attribution';
 import { AnalysisView } from '@/components/analysis/AnalysisView';
 import { DashboardContent } from '@/components/dashboard/DashboardContent';
 import { CalendarTab } from '@/components/home/CalendarTab';
@@ -222,6 +228,8 @@ export default function Home() {
       });
   }, [toast]);
 
+  const [calendarWorkspaceMap, setCalendarWorkspaceMap] = useState<Record<string, string>>({});
+
   // Load the configured day-rollover hour. If it differs from the default we
   // assumed at init and the user hasn't navigated away from the auto-selected
   // "today", re-sync the selected date to the configured logical today.
@@ -230,6 +238,8 @@ export default function Home() {
       .then(config => {
         const hour = config.scheduling.dayRolloverHour ?? DEFAULT_ROLLOVER_HOUR;
         setRolloverHour(hour);
+        // Kept for time attribution's optional per-sub-calendar workspace map.
+        setCalendarWorkspaceMap(config.scheduling.calendarWorkspaceMap ?? {});
         setSelectedDate(prev => {
           const stillOnDefaultToday =
             formatLocalDate(prev) === logicalToday(new Date(), DEFAULT_ROLLOVER_HOUR);
@@ -354,18 +364,31 @@ export default function Home() {
     [buildEventsForDate, rolloverHour]
   );
 
-  // Resolve the Asana integration ID for an event, checking linked tasks,
-  // Asana source events, and manual Google event attributions
-  const getAsanaIntegrationIdForEvent = useCallback((event: CalendarEvent): string | null => {
-    const directId = event.linkedAsanaIntegrationId ||
-      (event.source === 'asana' ? event.integrationId : null);
-    if (directId) return directId;
+  // Which Asana workspace each Google calendar belongs to. Built from the
+  // routing Dave already maintains (an Asana integration's
+  // eventGoogleIntegrationId), plus any per-sub-calendar overrides in config.
+  const workspaceCalendarMap = useMemo(
+    () =>
+      buildWorkspaceCalendarMap(
+        settings?.asanaIntegrations ?? [],
+        calendarWorkspaceMap
+      ),
+    [settings, calendarWorkspaceMap]
+  );
 
-    if (event.source === 'google') {
-      return googleEventAttributions[event.id]?.asanaIntegrationId ?? null;
-    }
-    return null;
-  }, [googleEventAttributions]);
+  const attributionContext = useMemo(
+    () => ({ map: workspaceCalendarMap, attributionByEventId: googleEventAttributions }),
+    [workspaceCalendarMap, googleEventAttributions]
+  );
+
+  // Resolve the Asana workspace an event's time counts toward. The calendar is
+  // the source of truth: an event on a workspace's calendar counts toward that
+  // workspace however it got there, with an explicit task link or a manual
+  // attribution taking precedence. See lib/time-attribution.ts.
+  const getAsanaIntegrationIdForEvent = useCallback(
+    (event: CalendarEvent): string | null => attributeEventToWorkspace(event, attributionContext),
+    [attributionContext]
+  );
 
   // A minute-resolution clock for the "worked so far" split below. Held in state
   // (not read during render) so the figures stay pure and tick on their own.
@@ -382,35 +405,13 @@ export default function Home() {
     };
   }, []);
 
-  // Time per Asana integration for the selected day, from timed events.
-  // Counts: Asana-linked events, standalone Asana events, AND attributed Google
-  // events. Two figures per integration:
-  //   * scheduled — the full length of every attributed block that day,
-  //   * worked    — the part that has actually elapsed (clamped to now), so the
-  //                 dashboard bar fills through the day instead of jumping to
-  //                 100% the moment the day is planned.
-  // A past day is fully elapsed, so the two are equal.
+  // Minutes per workspace for the selected day: the full length of every
+  // countable attributed block, and the part that has actually elapsed. Both
+  // come from one filter + attribution, so they can never disagree.
   const { timeWorkedByIntegration, timeScheduledByIntegration } = useMemo(() => {
-    const scheduled: Record<string, number> = {};
-    const worked: Record<string, number> = {};
-
-    for (const event of timedEvents) {
-      const asanaIntegrationId = getAsanaIntegrationIdForEvent(event);
-      if (!asanaIntegrationId) continue;
-
-      const startMs = event.startTime.getTime();
-      const endMs = event.endTime.getTime();
-      const minutes = (endMs - startMs) / 60000;
-      scheduled[asanaIntegrationId] = (scheduled[asanaIntegrationId] || 0) + minutes;
-
-      const elapsedMs = Math.min(endMs, nowMs) - startMs;
-      if (elapsedMs > 0) {
-        worked[asanaIntegrationId] = (worked[asanaIntegrationId] || 0) + elapsedMs / 60000;
-      }
-    }
-
+    const { scheduled, worked } = attributeMinutes(timedEvents, attributionContext, nowMs);
     return { timeWorkedByIntegration: worked, timeScheduledByIntegration: scheduled };
-  }, [timedEvents, getAsanaIntegrationIdForEvent, nowMs]);
+  }, [timedEvents, attributionContext, nowMs]);
 
   // Record time tracking data for longitudinal analysis
   // Only records for today or past dates, debounced to avoid excessive writes
@@ -438,9 +439,13 @@ export default function Home() {
         };
       }
 
-      // Build event records for detailed analysis
+      // Build event records for detailed analysis. Same countability filter as
+      // the totals above, so the per-event log and the per-workspace minutes
+      // can never tell different stories (no declined meeting or lunch block
+      // logged against time that was never counted).
       const eventRecords = timedEvents
         .map(event => {
+          if (!isCountableWorkEvent(event)) return null;
           const asanaIntegrationId = getAsanaIntegrationIdForEvent(event);
           if (!asanaIntegrationId) return null;
           const integration = asanaIntegrations.find(i => i.id === asanaIntegrationId);

@@ -130,7 +130,7 @@ function formatDateOnly(date: Date): string {
 }
 
 function toCalendarEvent(
-  event: { id?: string | null; summary?: string | null; description?: string | null; start?: { date?: string | null; dateTime?: string | null } | null; end?: { date?: string | null; dateTime?: string | null } | null; colorId?: string | null; location?: string | null; recurringEventId?: string | null; attendees?: Array<{ self?: boolean | null; responseStatus?: string | null }> | null },
+  event: { id?: string | null; summary?: string | null; description?: string | null; start?: { date?: string | null; dateTime?: string | null } | null; end?: { date?: string | null; dateTime?: string | null } | null; colorId?: string | null; location?: string | null; recurringEventId?: string | null; attendees?: Array<{ self?: boolean | null; responseStatus?: string | null }> | null; eventType?: string | null },
   fallbackColor: string,
   calendarId?: string
 ): CalendarEvent {
@@ -160,6 +160,7 @@ function toCalendarEvent(
     recurringEventId: event.recurringEventId || undefined,
     attendeeCount: event.attendees?.length,
     selfResponseStatus: selfAttendee?.responseStatus || undefined,
+    eventType: event.eventType || undefined,
   };
 }
 

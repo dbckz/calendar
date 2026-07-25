@@ -21,6 +21,10 @@ export interface CalendarEvent {
   calendarName?: string;     // Display name of the sub-calendar
   recurringEventId?: string; // Set when this event is an instance of a recurring series
   attendeeCount?: number;    // Number of attendees on the event (separates meetings from solo blocks)
+  // Google's own classification: 'default' | 'focusTime' | 'outOfOffice' |
+  // 'workingLocation' | 'birthday' | 'fromGmail'. Used by time attribution to
+  // keep calendar furniture and Gmail-derived reminders out of worked time.
+  eventType?: string;
   // The current user's own RSVP response for this event ('accepted', 'declined',
   // 'tentative', 'needsAction'), taken from the attendee whose self flag is true.
   // Undefined when the user isn't in the attendee list (e.g. an event they own

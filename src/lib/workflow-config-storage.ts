@@ -104,6 +104,13 @@ export interface SchedulingConfig {
   // grooming / retro) → the emails calendar setting, then the legacy id. Break
   // events follow the exercise calendar.
   ritualCalendars?: RitualCalendars;
+  // Optional Google SUB-CALENDAR → Asana integration mapping for time
+  // attribution, for when one Google account holds calendars belonging to
+  // different workspaces (e.g. a consulting calendar inside the personal
+  // account). Keyed by Google calendar id. Integration-level routing
+  // (`eventGoogleIntegrationId` on the Asana integration) covers the common
+  // case; this is the finer-grained override and takes precedence.
+  calendarWorkspaceMap?: Record<string, string>;
   // Optional evening-overflow window for tasks that don't fit inside working hours.
   overflow?: OverflowConfig;
   // The "day rollover hour" (0–23, local). Local times before this hour count as
@@ -296,6 +303,12 @@ export async function getWorkflowConfig(): Promise<WorkflowConfig> {
           // Tolerant load: keep per-kind ritual calendars, dropping any entry
           // that isn't a non-empty string. Omit the field entirely when nothing valid.
           ritualCalendars: parseRitualCalendars(parsed.scheduling.ritualCalendars),
+          // Tolerant load: keep only string→string calendar/workspace pairs.
+          calendarWorkspaceMap: Object.fromEntries(
+            Object.entries(
+              (parsed.scheduling.calendarWorkspaceMap as Record<string, unknown> | undefined) ?? {}
+            ).filter(([k, v]) => typeof k === 'string' && typeof v === 'string' && !!v)
+          ) as Record<string, string>,
           // Tolerant load: keep the overflow window only when both ends parse.
           overflow: parseOverflow(parsed.scheduling.overflow),
           // Always populate: coerce to a valid 0–23 hour, default 04:00.

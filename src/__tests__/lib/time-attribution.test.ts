@@ -1,0 +1,218 @@
+/**
+ * Time attribution: the calendar is the source of truth. An event counts toward
+ * the workspace whose calendar it sits on, however it got there — with explicit
+ * task links and manual attributions taking precedence, and non-work entries
+ * (all-day, declined, breaks, calendar furniture) excluded.
+ */
+import {
+  attributeEventToWorkspace,
+  attributeMinutes,
+  buildWorkspaceCalendarMap,
+  isCountableWorkEvent,
+} from '@/lib/time-attribution';
+import type { CalendarEvent } from '@/types';
+
+// The live topology: the OM Asana workspace routes its events to the OM Google
+// integration; DBC declares no routing, so no calendar is claimed for it.
+const OM_ASANA = 'asana-om';
+const DBC_ASANA = 'asana-dbc';
+const OM_GOOGLE = 'google-om';
+const PERSONAL_GOOGLE = 'google-personal';
+const DBC_CALENDAR = 'davebuckleyconsulting@gmail.com';
+
+const MAP = buildWorkspaceCalendarMap([
+  { id: DBC_ASANA },
+  { id: OM_ASANA, eventGoogleIntegrationId: OM_GOOGLE },
+]);
+
+const ctx = (over: Partial<Parameters<typeof attributeEventToWorkspace>[1]> = {}) => ({
+  map: MAP,
+  ...over,
+});
+
+const event = (over: Partial<CalendarEvent> & { id: string }): CalendarEvent => ({
+  title: 'Some work',
+  startTime: new Date(2026, 6, 24, 9, 0),
+  endTime: new Date(2026, 6, 24, 10, 0),
+  source: 'google',
+  allDay: false,
+  ...over,
+});
+
+describe('buildWorkspaceCalendarMap', () => {
+  it('claims a calendar only where a workspace explicitly routes its events', () => {
+    expect(MAP.byGoogleIntegration).toEqual({ [OM_GOOGLE]: OM_ASANA });
+    // DBC has no routing, so the personal account is NOT claimed for it —
+    // otherwise birthdays and family events would count as client work.
+    expect(MAP.byGoogleIntegration[PERSONAL_GOOGLE]).toBeUndefined();
+  });
+
+  it('takes per-sub-calendar overrides for an account holding several workspaces', () => {
+    const map = buildWorkspaceCalendarMap([{ id: OM_ASANA, eventGoogleIntegrationId: OM_GOOGLE }], {
+      [DBC_CALENDAR]: DBC_ASANA,
+    });
+    expect(map.byCalendar[DBC_CALENDAR]).toBe(DBC_ASANA);
+  });
+});
+
+describe('attributeEventToWorkspace', () => {
+  it('counts a MANUAL event on the OM calendar toward OM', () => {
+    const manual = event({ id: 'e-manual', title: 'Write the policy note', integrationId: OM_GOOGLE });
+    expect(attributeEventToWorkspace(manual, ctx())).toBe(OM_ASANA);
+  });
+
+  it('counts a genuine OM meeting toward OM', () => {
+    const meeting = event({
+      id: 'e-meeting',
+      title: 'Weekly sync with the team',
+      integrationId: OM_GOOGLE,
+      attendeeCount: 5,
+      selfResponseStatus: 'accepted',
+    });
+    expect(isCountableWorkEvent(meeting)).toBe(true);
+    expect(attributeEventToWorkspace(meeting, ctx())).toBe(OM_ASANA);
+  });
+
+  it('counts an OM-routed Emails ritual toward OM — app-created and hand-typed alike', () => {
+    for (const title of ['📧 Emails', 'Emails', 'emails']) {
+      const ritual = event({ id: `e-${title}`, title, integrationId: OM_GOOGLE });
+      expect(isCountableWorkEvent(ritual)).toBe(true);
+      expect(attributeEventToWorkspace(ritual, ctx())).toBe(OM_ASANA);
+    }
+  });
+
+  it('counts an event on a mapped sub-calendar toward that workspace', () => {
+    const map = buildWorkspaceCalendarMap([{ id: OM_ASANA, eventGoogleIntegrationId: OM_GOOGLE }], {
+      [DBC_CALENDAR]: DBC_ASANA,
+    });
+    const consulting = event({
+      id: 'e-dbc',
+      title: 'Client call',
+      integrationId: PERSONAL_GOOGLE,
+      calendarId: DBC_CALENDAR,
+    });
+    expect(attributeEventToWorkspace(consulting, { map })).toBe(DBC_ASANA);
+  });
+
+  it('counts a personal-calendar event toward neither', () => {
+    const personal = event({ id: 'e-life', title: 'Dentist', integrationId: PERSONAL_GOOGLE });
+    expect(attributeEventToWorkspace(personal, ctx())).toBeNull();
+  });
+
+  describe('precedence', () => {
+    it('an explicit task link wins over the calendar it sits on', () => {
+      const linked = event({
+        id: 'e-linked',
+        title: 'DBC task parked on the OM calendar',
+        integrationId: OM_GOOGLE,
+        linkedAsanaTaskId: 'g1',
+        linkedAsanaIntegrationId: DBC_ASANA,
+      });
+      expect(attributeEventToWorkspace(linked, ctx())).toBe(DBC_ASANA);
+    });
+
+    it('a manual attribution wins over the calendar but not over a task link', () => {
+      const onOmCalendar = event({ id: 'e-attr', integrationId: OM_GOOGLE });
+      const attributionByEventId = { 'e-attr': { asanaIntegrationId: DBC_ASANA } };
+      expect(attributeEventToWorkspace(onOmCalendar, ctx({ attributionByEventId }))).toBe(DBC_ASANA);
+
+      const linked = event({
+        id: 'e-attr',
+        integrationId: OM_GOOGLE,
+        linkedAsanaIntegrationId: OM_ASANA,
+      });
+      expect(attributeEventToWorkspace(linked, ctx({ attributionByEventId }))).toBe(OM_ASANA);
+    });
+
+    it('an Asana-sourced event uses its own workspace', () => {
+      const asanaEvent = event({ id: 'e-asana', source: 'asana', integrationId: DBC_ASANA });
+      expect(attributeEventToWorkspace(asanaEvent, ctx())).toBe(DBC_ASANA);
+    });
+  });
+});
+
+describe('isCountableWorkEvent', () => {
+  it('excludes all-day entries (which is also how reminders surface)', () => {
+    expect(isCountableWorkEvent(event({ id: 'e', allDay: true }))).toBe(false);
+  });
+
+  it('excludes declined meetings, matching the planner treating them as free', () => {
+    expect(isCountableWorkEvent(event({ id: 'e', selfResponseStatus: 'declined' }))).toBe(false);
+    expect(isCountableWorkEvent(event({ id: 'e', selfResponseStatus: 'accepted' }))).toBe(true);
+  });
+
+  it('excludes breaks — lunch, exercise and break — however they are typed', () => {
+    for (const title of ['🍽️ Lunch', 'Lunch', 'lunch', '🏋️ Exercise', 'Exercise', '☕ Break', 'Break']) {
+      expect(isCountableWorkEvent(event({ id: 'e', title }))).toBe(false);
+    }
+  });
+
+  it('keeps the WORK rituals — they are time spent working', () => {
+    for (const title of ['📧 Emails', '📚 Kindle notes', '🧹 Backlog grooming', '🔄 Retrospective']) {
+      expect(isCountableWorkEvent(event({ id: 'e', title }))).toBe(true);
+    }
+    // A real task whose title merely starts with a break word still counts.
+    expect(isCountableWorkEvent(event({ id: 'e', title: 'Lunch with a funder' }))).toBe(true);
+  });
+
+  it('excludes calendar furniture and Gmail-derived reminders', () => {
+    for (const eventType of ['birthday', 'workingLocation', 'fromGmail', 'outOfOffice']) {
+      expect(isCountableWorkEvent(event({ id: 'e', eventType }))).toBe(false);
+    }
+    for (const eventType of ['default', 'focusTime']) {
+      expect(isCountableWorkEvent(event({ id: 'e', eventType }))).toBe(true);
+    }
+  });
+
+  it('excludes zero-length and malformed intervals', () => {
+    const zero = event({ id: 'e', endTime: new Date(2026, 6, 24, 9, 0) });
+    expect(isCountableWorkEvent(zero)).toBe(false);
+  });
+});
+
+describe('attributeMinutes', () => {
+  const NOON = new Date(2026, 6, 24, 12, 0).getTime();
+
+  it('splits scheduled and worked minutes per workspace from one filter', () => {
+    const events = [
+      // OM meeting 09:00–10:00, fully elapsed by noon.
+      event({ id: 'm1', title: 'OM sync', integrationId: OM_GOOGLE, attendeeCount: 3 }),
+      // OM emails ritual 11:30–12:30: half elapsed at noon.
+      event({
+        id: 'm2',
+        title: '📧 Emails',
+        integrationId: OM_GOOGLE,
+        startTime: new Date(2026, 6, 24, 11, 30),
+        endTime: new Date(2026, 6, 24, 12, 30),
+      }),
+      // Lunch on the OM calendar: a break, so neither figure moves.
+      event({
+        id: 'm3',
+        title: '🍽️ Lunch',
+        integrationId: OM_GOOGLE,
+        startTime: new Date(2026, 6, 24, 13, 0),
+        endTime: new Date(2026, 6, 24, 13, 30),
+      }),
+      // Personal errand: counts toward neither.
+      event({
+        id: 'm4',
+        title: 'School run',
+        integrationId: PERSONAL_GOOGLE,
+        startTime: new Date(2026, 6, 24, 8, 0),
+        endTime: new Date(2026, 6, 24, 8, 30),
+      }),
+    ];
+
+    const { scheduled, worked } = attributeMinutes(events, ctx(), NOON);
+    expect(scheduled).toEqual({ [OM_ASANA]: 120 }); // 60 + 60
+    expect(worked).toEqual({ [OM_ASANA]: 90 }); // 60 + 30 elapsed
+    expect(scheduled[DBC_ASANA]).toBeUndefined();
+  });
+
+  it('reports a fully-elapsed past day as worked === scheduled', () => {
+    const events = [event({ id: 'm1', title: 'OM work', integrationId: OM_GOOGLE })];
+    const laterMs = new Date(2026, 6, 25, 9, 0).getTime();
+    const { scheduled, worked } = attributeMinutes(events, ctx(), laterMs);
+    expect(worked).toEqual(scheduled);
+  });
+});
