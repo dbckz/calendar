@@ -14,11 +14,6 @@ interface ColorScheme {
   mainBg: string;
 }
 
-interface Integration {
-  id: string;
-  name: string;
-}
-
 interface Tab {
   id: string;
   label: string;
@@ -31,25 +26,11 @@ interface HeaderProps {
   onRefresh: () => void;
   isLoading?: boolean;
   colorScheme?: ColorScheme;
-  timeWorkedByIntegration?: Record<string, number>;
-  integrations?: Integration[];
   activeTab?: string;
   tabs?: Tab[];
   onTabChange?: (tabId: string) => void;
   notificationEvents?: CalendarEvent[];
   showDateNav?: boolean;
-}
-
-function formatDuration(minutes: number): string {
-  if (minutes < 60) {
-    return `${Math.round(minutes)}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const mins = Math.round(minutes % 60);
-  if (mins === 0) {
-    return `${hours}h`;
-  }
-  return `${hours}h ${mins}m`;
 }
 
 function getDayLabel(date: Date): string {
@@ -60,7 +41,7 @@ function getDayLabel(date: Date): string {
   return format(date, 'EEE, MMM d');
 }
 
-export function Header({ selectedDate, onDateChange, onRefresh, isLoading, colorScheme, timeWorkedByIntegration, integrations, activeTab, tabs, onTabChange, notificationEvents, showDateNav = true }: HeaderProps) {
+export function Header({ selectedDate, onDateChange, onRefresh, isLoading, colorScheme, activeTab, tabs, onTabChange, notificationEvents, showDateNav = true }: HeaderProps) {
   const prevDay = subDays(selectedDate, 1);
   const nextDay = addDays(selectedDate, 1);
 
@@ -147,26 +128,6 @@ export function Header({ selectedDate, onDateChange, onRefresh, isLoading, color
               </button>
             )}
           </div>
-          )}
-
-          {/* Time worked stats */}
-          {integrations && integrations.length > 0 && (
-            <div className="flex items-center gap-2">
-              {integrations.map(integration => {
-                const minutes = timeWorkedByIntegration?.[integration.id] || 0;
-                if (minutes === 0) return null;
-                return (
-                  <div
-                    key={integration.id}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium ${
-                      colorScheme ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-700'
-                    }`}
-                  >
-                    {integration.name}: {formatDuration(minutes)}
-                  </div>
-                );
-              })}
-            </div>
           )}
 
           <div className="flex items-center gap-2">

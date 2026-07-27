@@ -1133,8 +1133,6 @@ export default function Home() {
         onRefresh={handleRefresh}
         isLoading={isLoading}
         colorScheme={colorScheme}
-        timeWorkedByIntegration={timeWorkedByIntegration}
-        integrations={asanaIntegrations}
         activeTab={activeTab}
         tabs={tabs}
         onTabChange={handleTabChange}
