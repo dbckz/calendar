@@ -12,9 +12,19 @@
 // I/O-free, so both callers apply identical rules and the rules stay testable.
 
 import type { CalendarEvent } from '@/types';
-import { isBreakLikeTitle, isRitualLikeTitle, ritualKindForTitle } from '@/lib/scheduling/rituals';
-import { categoryForTitleEmoji, isPrepTitle } from '@/lib/scheduling/event-titles';
-import { resolveAttributionRule } from '@/lib/attribution-rules';
+import {
+  isBreakLikeTitle,
+  isPersonalLikeTitle,
+  isRitualLikeTitle,
+  ritualKindForTitle,
+} from '@/lib/scheduling/rituals';
+import {
+  categoryForTitleEmoji,
+  isPrepTitle,
+  prepMeetingTitleFromEvent,
+} from '@/lib/scheduling/event-titles';
+import { DBC_ASANA_INTEGRATION_ID, resolveAttributionRule } from '@/lib/attribution-rules';
+import { normalize } from '@/lib/capacity';
 import type { EventAttributionRule } from '@/types';
 
 // Google event types that are never work time. 'default' and 'focusTime' are.
@@ -105,6 +115,11 @@ export function isCountableWorkEvent(event: CalendarEvent): boolean {
   // created them (emoji title) or Dave typed them in himself. The WORK rituals
   // (emails, kindle notes, grooming, retrospective) deliberately DO count.
   if (isBreakLikeTitle(event.title)) return false;
+  // Personal / visibility events never count, whatever calendar they sit on: a
+  // cycle to football, the match, a flight parked on the OM calendar for
+  // availability visibility. A stored attribution rule cannot rescue these
+  // because this filter runs before attribution — intended, they are not work.
+  if (isPersonalLikeTitle(event.title)) return false;
   // Zero-length or malformed intervals contribute nothing.
   const ms = event.endTime.getTime() - event.startTime.getTime();
   if (!Number.isFinite(ms) || ms <= 0) return false;
@@ -124,6 +139,22 @@ export interface AttributionContext {
   // Durable series/title attribution overrides (see lib/attribution-rules.ts).
   // Built-in rules always apply; these are the user's stored additions.
   attributionRules?: readonly EventAttributionRule[];
+  // Meeting-prep blocks ("📖 Prep: <meeting>") sit on the personal calendar but
+  // should count toward the workspace of the MEETING they prep for. The meeting's
+  // own calendar/integration is not durably stored on the prep block, so each
+  // caller resolves the meeting's workspace from that week's fetched events and
+  // passes it here keyed by the meeting's normalized title (meetingTitleKey). The
+  // prep title carries the meeting title after the "📖 Prep: " prefix.
+  meetingWorkspaceByNormalizedTitle?: Record<string, string>;
+}
+
+// The map key for matching a prep block to its meeting: the meeting title reduced
+// with the shared whitespace/case-insensitive normalize, so the two callers build
+// the map with the SAME key the prep-block attribution looks up. Prep titles are
+// stripped of their "📖 Prep: " prefix (via prepMeetingTitleFromEvent) before
+// keying, so a prep resolves to the same key its meeting was recorded under.
+export function meetingTitleKey(title: string): string {
+  return normalize(title);
 }
 
 // The Asana workspace an event's time belongs to, or null for "counts toward
@@ -151,6 +182,24 @@ export function attributeEventToWorkspace(
   const ruled = resolveAttributionRule(event, ctx.attributionRules);
   if (ruled) return ruled === 'none' ? null : ruled;
 
+  const title = event.title ?? '';
+
+  // Dave's standing decision: backlog grooming always counts toward DBC. The
+  // grooming ritual ("🧹 Backlog grooming") sits on an unmapped personal
+  // calendar, so without this it counts toward nothing. Placed AFTER the rule
+  // check so a stored rule can still override it (including to 'none').
+  if (ritualKindForTitle(title) === 'grooming') return DBC_ASANA_INTEGRATION_ID;
+
+  // Dave's standing decision: a meeting-prep block counts toward the workspace of
+  // the meeting it preps for. Prep blocks stay on the personal calendar, so they
+  // otherwise count toward nothing. Resolve the prepped meeting's workspace from
+  // the caller-supplied title map; prep tied to an OM meeting counts as OM, and
+  // prep whose meeting is unknown (or is itself DBC) falls back to DBC.
+  if (isPrepTitle(title)) {
+    const key = meetingTitleKey(prepMeetingTitleFromEvent(title));
+    return ctx.meetingWorkspaceByNormalizedTitle?.[key] ?? DBC_ASANA_INTEGRATION_ID;
+  }
+
   if (event.calendarId && ctx.map.byCalendar[event.calendarId]) {
     return ctx.map.byCalendar[event.calendarId];
   }
@@ -158,6 +207,28 @@ export function attributeEventToWorkspace(
     return ctx.map.byGoogleIntegration[event.integrationId];
   }
   return null;
+}
+
+// Build the meeting-title → workspace map that prep-block attribution reads, from
+// a window of fetched events. Each caller passes THAT WEEK's events (the client
+// its loaded window, the reconcile the whole fetched span) and the BASE context
+// (no meeting map — a prep never preps for a prep). A prep block is then
+// attributed to the workspace of the meeting whose normalized title matches.
+// Prep titles are skipped, as are events that resolve to no workspace; a title
+// clash lets the later entry win.
+export function buildMeetingWorkspaceByTitle(
+  events: CalendarEvent[],
+  ctx: AttributionContext
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const event of events) {
+    const title = event.title ?? '';
+    if (!title || isPrepTitle(title)) continue;
+    if (!isCountableWorkEvent(event)) continue;
+    const workspaceId = attributeEventToWorkspace(event, ctx);
+    if (workspaceId) out[meetingTitleKey(title)] = workspaceId;
+  }
+  return out;
 }
 
 // Which work category an event's time falls under.

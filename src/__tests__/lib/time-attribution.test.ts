@@ -7,6 +7,7 @@
 import {
   attributeEventToWorkspace,
   attributeMinutes,
+  buildMeetingWorkspaceByTitle,
   buildWorkspaceCalendarMap,
   categoriseEvent,
   isCountableWorkEvent,
@@ -441,5 +442,118 @@ describe('durable series / title attribution rules', () => {
     expect(isCountableWorkEvent(allDay)).toBe(false);
     const { scheduled } = attributeMinutes([allDay], ctx(), FUTURE);
     expect(scheduled).toEqual({});
+  });
+});
+
+describe("Dave's standing decisions: grooming, prep and personal events", () => {
+  const LIFE_GOOGLE = 'google-life';
+  const DBC_BUILT_IN = '29e78568-0681-4acc-b6b0-a7ffa9d31230';
+
+  describe('backlog grooming always counts toward DBC', () => {
+    it('attributes the grooming ritual to DBC even on an unmapped calendar', () => {
+      const grooming = event({
+        id: 'grooming-1',
+        title: '🧹 Backlog grooming',
+        integrationId: LIFE_GOOGLE,
+      });
+      expect(isCountableWorkEvent(grooming)).toBe(true);
+      expect(attributeEventToWorkspace(grooming, ctx())).toBe(DBC_BUILT_IN);
+    });
+
+    it('lets a stored rule override grooming (the rule is checked first)', () => {
+      const rules = [
+        { id: 'r-groom', title: '🧹 Backlog grooming', asanaIntegrationId: OM_ASANA, createdAt: '' },
+      ];
+      const grooming = event({
+        id: 'grooming-2',
+        title: '🧹 Backlog grooming',
+        integrationId: LIFE_GOOGLE,
+      });
+      expect(attributeEventToWorkspace(grooming, ctx({ attributionRules: rules }))).toBe(OM_ASANA);
+
+      // And a rule can pin it to nothing.
+      const pinned = [
+        { id: 'r-groom-none', title: '🧹 Backlog grooming', asanaIntegrationId: 'none' as const, createdAt: '' },
+      ];
+      expect(attributeEventToWorkspace(grooming, ctx({ attributionRules: pinned }))).toBeNull();
+    });
+  });
+
+  describe('meeting-prep blocks count toward the meeting they prep for', () => {
+    const meeting = event({
+      id: 'meeting-board',
+      title: 'Board sync',
+      integrationId: OM_GOOGLE,
+      attendeeCount: 4,
+    });
+
+    it('attributes a prep block to OM when the prepped meeting resolves to OM', () => {
+      const meetingMap = buildMeetingWorkspaceByTitle([meeting], ctx());
+      const prep = event({
+        id: 'prep-board',
+        title: '📖 Prep: Board sync',
+        integrationId: LIFE_GOOGLE,
+      });
+      expect(
+        attributeEventToWorkspace(prep, ctx({ meetingWorkspaceByNormalizedTitle: meetingMap }))
+      ).toBe(OM_ASANA);
+      // Legacy prep titles ("Prep: X") resolve the same way.
+      const legacyPrep = event({ id: 'prep-legacy', title: 'Prep: Board sync', integrationId: LIFE_GOOGLE });
+      expect(
+        attributeEventToWorkspace(legacyPrep, ctx({ meetingWorkspaceByNormalizedTitle: meetingMap }))
+      ).toBe(OM_ASANA);
+    });
+
+    it('falls back to DBC when the prepped meeting is unknown', () => {
+      const prep = event({
+        id: 'prep-unknown',
+        title: '📖 Prep: Some meeting not in the window',
+        integrationId: LIFE_GOOGLE,
+      });
+      expect(attributeEventToWorkspace(prep, ctx())).toBe(DBC_BUILT_IN);
+      expect(
+        attributeEventToWorkspace(prep, ctx({ meetingWorkspaceByNormalizedTitle: {} }))
+      ).toBe(DBC_BUILT_IN);
+    });
+
+    it('excludes prep titles when building the meeting map (a prep never preps a prep)', () => {
+      const prepOnly = event({ id: 'p', title: '📖 Prep: Board sync', integrationId: OM_GOOGLE });
+      expect(buildMeetingWorkspaceByTitle([prepOnly], ctx())).toEqual({});
+    });
+  });
+
+  describe('personal / visibility events never count', () => {
+    it('excludes personal-emoji and personal-term titles even on a mapped calendar', () => {
+      const titles = [
+        '🚲 Cycle to footy',
+        '⚽ Footy',
+        '🏃 Parkrun',
+        '✈️ Flight to Berlin',
+        '🌴 Holiday',
+        'Flight: LHR → JFK',
+        'Travel to the venue',
+        'Wind down',
+      ];
+      for (const title of titles) {
+        // On the OM calendar, so without the exclusion they would count as OM.
+        const personal = event({ id: `p-${title}`, title, integrationId: OM_GOOGLE });
+        expect(isCountableWorkEvent(personal)).toBe(false);
+      }
+    });
+
+    it('does not exclude a genuine work title that merely mentions travel', () => {
+      // "Travel policy review" contains no personal marker term as a substring.
+      const work = event({ id: 'w', title: 'Quarterly policy review', integrationId: OM_GOOGLE });
+      expect(isCountableWorkEvent(work)).toBe(true);
+    });
+
+    it('keeps personal events out of the attributed totals', () => {
+      const events = [
+        event({ id: 'footy', title: '⚽ Footy', integrationId: OM_GOOGLE }),
+        event({ id: 'work', title: 'OM sync', integrationId: OM_GOOGLE, attendeeCount: 2 }),
+      ];
+      const { scheduled } = attributeMinutes(events, ctx(), new Date(2026, 6, 25).getTime());
+      expect(scheduled).toEqual({ [OM_ASANA]: 60 });
+    });
   });
 });

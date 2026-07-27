@@ -124,6 +124,33 @@ export function isBreakLikeTitle(title: string): boolean {
   return BREAK_BASE_NAMES.has(ritualBaseName(title));
 }
 
+// Dave's standing decision: personal / visibility events never count as work,
+// whatever calendar they sit on. Dave parks personal things on the OM calendar
+// purely so others see him as busy (a cycle to football, the match itself, a
+// flight, holiday, a wind-down). These are excluded by isCountableWorkEvent, so
+// a stored attribution rule CANNOT rescue them (that filter runs before
+// attribution) — and that is intended: they are not time spent working.
+//
+// Kept as named, exported lists so the set is easy to extend. Emoji markers
+// match at the START of the title; terms match anywhere, case-insensitively.
+export const PERSONAL_LIKE_TITLE_EMOJIS: readonly string[] = ['🚲', '⚽', '🏃', '✈️', '🌴'];
+export const PERSONAL_LIKE_TITLE_TERMS: readonly string[] = [
+  'footy',
+  'parkrun',
+  'flight:',
+  'cycle to',
+  'travel to',
+  'wind down',
+];
+
+export function isPersonalLikeTitle(title: string): boolean {
+  if (!title) return false;
+  const trimmed = title.trim();
+  if (PERSONAL_LIKE_TITLE_EMOJIS.some(emoji => trimmed.startsWith(emoji))) return true;
+  const lower = trimmed.toLowerCase();
+  return PERSONAL_LIKE_TITLE_TERMS.some(term => lower.includes(term));
+}
+
 // Tolerant ritual identity, for EXCLUSION decisions only: is this title one of
 // the rituals, however the user typed it? A manually-created "Emails" event (no
 // emoji) is still the emails ritual and must never be adopted as a task or

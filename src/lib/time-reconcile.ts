@@ -24,6 +24,7 @@ import { recordDailyTime, getTimeTrackingData } from '@/lib/time-tracking-storag
 import type { EventTimeRecord, IntegrationTimeRecord } from '@/lib/time-tracking-storage';
 import {
   attributeMinutes,
+  buildMeetingWorkspaceByTitle,
   buildWorkspaceCalendarMap,
   type AttributionContext,
 } from '@/lib/time-attribution';
@@ -129,7 +130,7 @@ export async function reconcilePastDays(days = DEFAULT_RECONCILE_DAYS): Promise<
   for (const a of attributions) {
     attributionByEventId[a.googleEventId] = { asanaIntegrationId: a.asanaIntegrationId };
   }
-  const ctx: AttributionContext = { map, attributionByEventId, attributionRules };
+  const baseCtx: AttributionContext = { map, attributionByEventId, attributionRules };
 
   const scheduledByEventId = new Map<string, { taskId: string; integrationId?: string }>();
   for (const s of scheduledAsana) {
@@ -140,6 +141,20 @@ export async function reconcilePastDays(days = DEFAULT_RECONCILE_DAYS): Promise<
   for (const t of adHocTasks) {
     if (t.googleEventId) scheduledByEventId.set(t.googleEventId, { taskId: t.id });
   }
+
+  // Prep blocks count toward the workspace of the meeting they prep for. Resolve
+  // that from the WHOLE reconcile window in one fetch (a prep block's meeting may
+  // sit on a different day than the prep itself), keyed by the meeting's title.
+  // Built from the base context so a prep never resolves against another prep.
+  const windowFetch = await fetchEventsForDays(
+    googleIntegrations,
+    candidateDates.map(d => new Date(`${d}T00:00:00`))
+  );
+  const meetingWorkspaceByNormalizedTitle = buildMeetingWorkspaceByTitle(
+    enrichWithLocalRecords(windowFetch.events, scheduledByEventId),
+    baseCtx
+  );
+  const ctx: AttributionContext = { ...baseCtx, meetingWorkspaceByNormalizedTitle };
 
   const nameById = new Map<string, string>(
     asanaIntegrations.map((i: AsanaIntegration) => [i.id, i.name])

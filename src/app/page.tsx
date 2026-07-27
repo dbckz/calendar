@@ -9,7 +9,11 @@ import { DelegateModal } from '@/components/DelegateModal';
 import { AddTaskModal } from '@/components/AddTaskModal';
 import { RitualsContent } from '@/components/RitualsContent';
 import { Reminders } from '@/components/Reminders';
-import { attributeMinutes, buildWorkspaceCalendarMap } from '@/lib/time-attribution';
+import {
+  attributeMinutes,
+  buildMeetingWorkspaceByTitle,
+  buildWorkspaceCalendarMap,
+} from '@/lib/time-attribution';
 import { AnalysisView } from '@/components/analysis/AnalysisView';
 import { DashboardContent } from '@/components/dashboard/DashboardContent';
 import { CalendarTab } from '@/components/home/CalendarTab';
@@ -421,14 +425,20 @@ export default function Home() {
     return [...fromSettings, ...asanaIntegrations.filter(i => !seen.has(i.id))];
   }, [settings, asanaIntegrations]);
 
-  const attributionContext = useMemo(
-    () => ({
+  const attributionContext = useMemo(() => {
+    const base = {
       map: workspaceCalendarMap,
       attributionByEventId: googleEventAttributions,
       attributionRules,
-    }),
-    [workspaceCalendarMap, googleEventAttributions, attributionRules]
-  );
+    };
+    // Prep blocks count toward the workspace of the meeting they prep for. Build
+    // the meeting-title → workspace map from the whole loaded calendar window (a
+    // prep block's meeting may be on a different day than the prep itself).
+    return {
+      ...base,
+      meetingWorkspaceByNormalizedTitle: buildMeetingWorkspaceByTitle(googleEvents, base),
+    };
+  }, [workspaceCalendarMap, googleEventAttributions, attributionRules, googleEvents]);
 
   // A minute-resolution clock for the "worked so far" split below. Held in state
   // (not read during render) so the figures stay pure and tick on their own.
