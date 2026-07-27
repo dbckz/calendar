@@ -30,7 +30,7 @@ The agent CAN: search and read the web, fetch and summarise URLs and Google Docs
 The agent CANNOT: run code or a shell, access X/Twitter, Notion or Google Forms, take account/physical/financial actions (signing up, paying, deleting account data, booking), watch videos, or make decisions that depend on the person's private judgement or personal voice/opinion when no brief is given.
 
 Guidance for judging:
-- A task phrased as "look at X", "read X", "review X", "check X", "have a look at X", "consider X" is USUALLY AI-suitable. The person is instructing THEMSELVES (a human) to go and look — an agent can do that looking, reading and summarising for them and report back. Mark aiSuitable=true unless it needs a connector the agent lacks (e.g. X/Twitter, Notion) or is a video to watch.
+- A task phrased as "look at X", "read X", "review X", "check X", "have a look at X", "consider X" is NOT AI-suitable. The person is telling THEMSELVES to go and look — their own attention, judgement and absorption of the material is the point of the task, and an agent reading it instead does not complete it. Mark aiSuitable=false.
 - "Figure out how to join / apply to / get onto X" (understanding a process) is AI-suitable, even if the final application must be done by the human.
 - Drafting a first version of a blog post or written piece from a clear source, brief or Google Doc is AI-suitable.
 - Research, collation, comparison and summarisation tasks are AI-suitable.
