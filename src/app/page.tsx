@@ -410,6 +410,17 @@ export default function Home() {
     [settings, calendarWorkspaceMap]
   );
 
+  // Every configured workspace, whether or not any of its tasks loaded — the
+  // dashboard widgets must always show a row per workspace, so a fetch failure
+  // or empty task list can't silently drop OM or DBC.
+  const dashboardIntegrations = useMemo(() => {
+    const fromSettings = (settings?.asanaIntegrations ?? [])
+      .filter(i => i.enabled)
+      .map(i => ({ id: i.id, name: i.name }));
+    const seen = new Set(fromSettings.map(i => i.id));
+    return [...fromSettings, ...asanaIntegrations.filter(i => !seen.has(i.id))];
+  }, [settings, asanaIntegrations]);
+
   const attributionContext = useMemo(
     () => ({
       map: workspaceCalendarMap,
@@ -1144,7 +1155,7 @@ export default function Home() {
             onRefetchCapacity={refetchCapacity}
             timeWorkedByIntegration={timeWorkedByIntegration}
             timeScheduledByIntegration={timeScheduledByIntegration}
-            asanaIntegrations={asanaIntegrations}
+            asanaIntegrations={dashboardIntegrations}
             typeFieldInfoByIntegration={asanaTypeFieldInfoByIntegration}
             onOpenTask={handleOpenTaskInPlace}
             onDelegateTask={setDelegateTask}
