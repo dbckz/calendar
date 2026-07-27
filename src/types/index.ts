@@ -457,6 +457,11 @@ export interface TaskMetadata {
   bestTime?: BestTime;
   effortMinutes?: number;
   dependsOn?: string[]; // GIDs of tasks this depends on
+  // Backlog grooming: a groomed task has been reviewed (worth doing, concrete
+  // next action, realistic due date, Type set). Ungroomed tasks form the backlog.
+  // This state lives only here, never in Asana.
+  groomed?: boolean;
+  groomedAt?: string; // ISO timestamp of when it was last marked groomed
   updatedAt: string;
 }
 

@@ -247,6 +247,14 @@ export async function PUT(
     // Build update params
     const asanaUpdateParams: UpdateTaskParams = {};
 
+    if (updateParams.name !== undefined) {
+      asanaUpdateParams.name = updateParams.name;
+    }
+
+    if (updateParams.notes !== undefined) {
+      asanaUpdateParams.notes = updateParams.notes;
+    }
+
     if (updateParams.dueOn !== undefined) {
       asanaUpdateParams.dueOn = updateParams.dueOn;
     }

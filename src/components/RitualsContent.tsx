@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import WorkflowConfig from './WorkflowConfig';
+import { BacklogGrooming } from './grooming/BacklogGrooming';
 
 const SECTIONS = [
   {
@@ -55,11 +56,7 @@ export function RitualsContent() {
           {expandedSection === section.id && (
             <div className="border-t border-gray-200 bg-gray-50">
               {section.id === 'sprint-planning' && <WorkflowConfig />}
-              {section.id === 'backlog-grooming' && (
-                <div className="p-6">
-                  <p className="text-gray-600">Backlog grooming functionality coming soon...</p>
-                </div>
-              )}
+              {section.id === 'backlog-grooming' && <BacklogGrooming />}
               {section.id === 'retrospective' && (
                 <div className="p-6">
                   <p className="text-gray-600">Retrospective functionality coming soon...</p>

@@ -551,6 +551,8 @@ export const api = {
     taskId: string,
     integrationId: string,
     updates: {
+      name?: string;
+      notes?: string;
       dueOn?: string | null;
       startOn?: string | null;
       customFields?: Record<string, string | null>;
@@ -1097,6 +1099,11 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ asanaTaskGid, integrationId, ...updates }),
     });
+  },
+
+  // Backlog grooming: one-off bootstrap that marks already-in-flight tasks groomed.
+  async bootstrapGrooming(): Promise<{ total: number; groomed: number; backlog: number; marked: number }> {
+    return fetchWithRetry('/api/grooming/bootstrap', { method: 'POST' }, { maxRetries: 0 });
   },
 
   // Dashboard capacity + client-time for the current ISO week

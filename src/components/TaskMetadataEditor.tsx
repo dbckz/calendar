@@ -15,8 +15,32 @@ const selectClass =
   'w-full px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none bg-white';
 
 export function TaskMetadataEditor({ metadata, onChange }: TaskMetadataEditorProps) {
+  const groomed = metadata?.groomed ?? false;
+
   return (
     <div className="grid grid-cols-2 gap-3">
+      <div className="col-span-2">
+        <button
+          type="button"
+          onClick={() =>
+            onChange(
+              groomed
+                ? { groomed: false, groomedAt: undefined }
+                : { groomed: true, groomedAt: new Date().toISOString() }
+            )
+          }
+          title={groomed ? 'Groomed — click to move to backlog' : 'In backlog — click to mark groomed'}
+          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${
+            groomed
+              ? 'bg-green-50 text-green-700 border-green-200'
+              : 'bg-gray-100 text-gray-600 border-gray-200'
+          }`}
+        >
+          <span className={`inline-block w-1.5 h-1.5 rounded-full ${groomed ? 'bg-green-500' : 'bg-gray-400'}`} />
+          {groomed ? 'Groomed' : 'Backlog'}
+        </button>
+      </div>
+
       <div>
         <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Energy</label>
         <select
