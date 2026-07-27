@@ -1,7 +1,7 @@
 'use client';
 
-import { Dispatch, SetStateAction } from 'react';
-import { Loader2, CheckCircle2, Star, Flag, ExternalLink } from 'lucide-react';
+import { Dispatch, SetStateAction, useEffect, useRef, useState } from 'react';
+import { Loader2, CheckCircle2, Star, Flag, ExternalLink, Trash2 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 
 import type {
@@ -38,6 +38,9 @@ interface TasksStepProps {
   toggleSelection: (category: string, id: string, remainingQuota: number | null) => void;
   toggleMustDo: (category: string, id: string) => void;
   completeAsana: (id: string, gid: string, integrationId: string) => void;
+  deletingIds: Set<string>;
+  deleteTask: (category: string, candidate: WeekCandidate) => void;
+  onOpenTask: (candidate: WeekCandidate) => void;
 }
 
 export function TasksStep({
@@ -54,7 +57,27 @@ export function TasksStep({
   toggleSelection,
   toggleMustDo,
   completeAsana,
+  deletingIds,
+  deleteTask,
+  onOpenTask,
 }: TasksStepProps) {
+  // Inline delete confirm: the first click arms a row (icon → "Delete?"), the
+  // second within a few seconds executes. Auto-disarms so a stray click never
+  // leaves a destructive control primed.
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armDelete = (id: string) => {
+    setConfirmDeleteId(id);
+    if (confirmTimer.current) clearTimeout(confirmTimer.current);
+    confirmTimer.current = setTimeout(() => setConfirmDeleteId(null), 3000);
+  };
+  useEffect(
+    () => () => {
+      if (confirmTimer.current) clearTimeout(confirmTimer.current);
+    },
+    []
+  );
+
   if (!taskCats) {
     return (
       <p className="text-sm text-gray-400 italic py-8 text-center">No candidates available.</p>
@@ -108,6 +131,67 @@ export function TasksStep({
       </>
     );
   };
+
+  // Per-task delete with a two-step inline confirm. Deleting an Asana-backed
+  // candidate deletes the real Asana task; an ad-hoc candidate is removed from
+  // its local store. stopPropagation so it never toggles the row's checkbox.
+  const renderDelete = (category: string, c: WeekCandidate) => {
+    const deleting = deletingIds.has(c.id);
+    if (deleting) {
+      return (
+        <span className="p-1 flex-shrink-0" aria-label={`Deleting "${c.title}"`}>
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />
+        </span>
+      );
+    }
+    if (confirmDeleteId === c.id) {
+      return (
+        <button
+          type="button"
+          onClick={e => {
+            e.stopPropagation();
+            setConfirmDeleteId(null);
+            deleteTask(category, c);
+          }}
+          title="Confirm delete"
+          aria-label={`Confirm delete "${c.title}"`}
+          className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700 border border-red-300 flex-shrink-0"
+        >
+          Delete?
+        </button>
+      );
+    }
+    return (
+      <button
+        type="button"
+        onClick={e => {
+          e.stopPropagation();
+          armDelete(c.id);
+        }}
+        title="Delete task"
+        aria-label={`Delete "${c.title}"`}
+        className="p-1 text-gray-400 hover:text-red-600 flex-shrink-0"
+      >
+        <Trash2 className="w-3.5 h-3.5" />
+      </button>
+    );
+  };
+
+  // Task name that opens a read-only detail modal on double-click. The guard
+  // stops the dblclick from bubbling into any row/selection handling.
+  const renderTaskName = (c: WeekCandidate, className: string) => (
+    <span
+      className={`${className} cursor-pointer`}
+      onDoubleClick={e => {
+        e.stopPropagation();
+        e.preventDefault();
+        onOpenTask(c);
+      }}
+      title="Double-click to view details"
+    >
+      {c.title}
+    </span>
+  );
 
   // Tiny muted pill showing which Asana integration/workspace a task comes
   // from (e.g. "DBC" / "OM"). Nothing rendered for ad-hoc tasks.
@@ -264,10 +348,11 @@ export function TasksStep({
               <ul className="space-y-1.5">
                 {cat.candidates.slice(0, autoN).map(c => (
                   <li key={c.id} className="flex items-center gap-2">
-                    <span className="text-sm text-gray-500 truncate flex-1">{c.title}</span>
+                    {renderTaskName(c, 'text-sm text-gray-500 truncate flex-1')}
                     {renderCarriedBadge(c)}
                     {renderIntegrationBadge(c.integrationName)}
                     {renderAsanaControls(c)}
+                    {renderDelete(cat.category, c)}
                     {!cat.grouped && renderTaskDurationSelect(c.id, defaultDuration)}
                   </li>
                 ))}
@@ -292,7 +377,7 @@ export function TasksStep({
                         {c.isPriority && (
                           <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400 flex-shrink-0" />
                         )}
-                        <span className="text-sm text-gray-700 truncate flex-1">{c.title}</span>
+                        {renderTaskName(c, 'text-sm text-gray-700 truncate flex-1')}
                         {renderCarriedBadge(c)}
                         {renderIntegrationBadge(c.integrationName)}
                         {c.dueDate && (
@@ -302,6 +387,7 @@ export function TasksStep({
                         )}
                         {renderMustDo(cat.category, c.id)}
                         {renderAsanaControls(c)}
+                        {renderDelete(cat.category, c)}
                         {!cat.grouped && renderTaskDurationSelect(c.id, defaultDuration)}
                       </li>
                     );

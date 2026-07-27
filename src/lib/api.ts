@@ -30,6 +30,15 @@ export interface SpareCapacity {
   byDate: SpareCapacityRow[];
 }
 
+// A real task the engine could place nowhere this week (not even evening
+// overflow) — i.e. no free gap long enough remains in working hours. The review
+// step lists these so an unscheduled must-do comes with an explanation.
+export interface UnplaceableTaskRow {
+  id: string; // gid or adhocId
+  title: string;
+  category: string;
+}
+
 export interface ProposeWeekResponse {
   weekStart: string;
   weekEnd: string;
@@ -41,6 +50,14 @@ export interface ProposeWeekResponse {
   // Working days (yyyy-MM-dd) with no exercise placement in the final proposals
   // or an existing calendar exercise event. The review step warns per day.
   exerciseMissingDays?: string[];
+  // Real tasks that couldn't be scheduled anywhere. Absent on older responses —
+  // treat as []. The review step uses it to explain WHY an unplaced (e.g.
+  // must-do) task couldn't be placed.
+  unplaceable?: UnplaceableTaskRow[];
+  // Remaining working days of the plan window (yyyy-MM-dd, out-of-office days
+  // already excluded). The review step's evening-overflow rows use these as the
+  // per-row day-picker options. Absent on older responses.
+  workingDays?: string[];
 }
 
 export interface ConfirmWeekResult {
@@ -737,7 +754,7 @@ export const api = {
       projects: Array<{ gid: string; name: string }>;
       types: string[];
     }>
-  ): Promise<{ suggestions: Array<{ id: string; integrationId: string; projectGid: string; taskType: string }> }> {
+  ): Promise<{ suggestions: Array<{ id: string; action: 'keep' | 'convert'; integrationId: string; projectGid: string; taskType: string }> }> {
     return fetchWithRetry(
       '/api/reminders/triage/suggest',
       {

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { classifyBlockCategoryWithCatchAll } from '@/lib/capacity';
 import { gatherWeekContext } from '@/lib/scheduling/gather';
-import { proposeBlocks, localDateStr, computeSpareCapacity, resolveWorkingWindow } from '@/lib/scheduling/engine';
+import { proposeBlocks, localDateStr, computeSpareCapacity, resolveWorkingWindow, effectiveWeeklyCount, type UnplaceableTask } from '@/lib/scheduling/engine';
 import {
   placeWeekRituals,
   proposedBlockToBusyInterval,
@@ -61,6 +61,7 @@ export async function POST(request: NextRequest) {
       busyIntervals: [...ctx.busyIntervals, ...prepIntervals],
       weekStart: ctx.weekStart,
       now: ctx.now,
+      outOfOfficeDates: ctx.outOfOfficeDates,
     });
 
     // Accepted prep + placed ritual blocks occupy time before task placement
@@ -111,6 +112,9 @@ export async function POST(request: NextRequest) {
       candidateTasks.push(withFlags);
     }
 
+    // Real tasks the engine could place nowhere (not even evening overflow), so
+    // the review step can explain why a must-do went unscheduled.
+    const unplaceable: UnplaceableTask[] = [];
     const taskBlocks = proposeBlocks({
       config: ctx.config,
       busyIntervals,
@@ -122,9 +126,11 @@ export async function POST(request: NextRequest) {
       selectedCountsByCategory: selectionSets ? selectedCountsByCategory : undefined,
       weekStart: ctx.weekStart,
       now: ctx.now,
-    });
+      outOfOfficeDates: ctx.outOfOfficeDates,
+    }, unplaceable);
 
-    const { workRun, workingDays } = resolveWorkingWindow(ctx.config.scheduling, ctx.weekStart, ctx.now);
+    const { workRun, workingDays, configuredWorkingDaysPerWeek, availableWorkingDaysPerWeek } =
+      resolveWorkingWindow(ctx.config.scheduling, ctx.weekStart, ctx.now, ctx.outOfOfficeDates);
 
     // --- Break gaps (post-placement) ---
     // After ALL proposals are placed (rituals + prep + tasks), turn the buffer the
@@ -169,10 +175,27 @@ export async function POST(request: NextRequest) {
       if (p.overflow) continue;
       proposedByCategory[p.category] = (proposedByCategory[p.category] ?? 0) + 1;
     }
+    // Per-category count of candidate tasks the engine received, so the summary's
+    // effective target for a scaleToTasks category matches the block count the
+    // engine derived from the selection.
+    const candidateCountByCategory: Record<string, number> = {};
+    for (const t of candidateTasks) {
+      const cat = classifyBlockCategoryWithCatchAll(t.typeSignals, ctx.quotas);
+      if (cat) candidateCountByCategory[cat] = (candidateCountByCategory[cat] ?? 0) + 1;
+    }
+    // Effective weekly target honours the daily / scaleToTasks overrides so the
+    // summary agrees with how many blocks the engine actually schedules.
     const quotaSummary = ctx.quotas
-      .filter(q => (q.weeklyCount ?? 0) > 0)
       .map(q => {
-        const weeklyCount = q.weeklyCount ?? 0;
+        const cfg = ctx.config.taskQuotas[q.category];
+        const weeklyCount = cfg
+          ? effectiveWeeklyCount(cfg, {
+              remainingWorkingDays: workingDays.length,
+              configuredWorkingDaysPerWeek,
+              availableWorkingDaysPerWeek,
+              selectedTaskCount: candidateCountByCategory[q.category] ?? 0,
+            })
+          : q.weeklyCount ?? 0;
         const existing = ctx.existingScheduledCounts[q.category] ?? 0;
         const proposed = proposedByCategory[q.category] ?? 0;
         return {
@@ -182,7 +205,8 @@ export async function POST(request: NextRequest) {
           proposed,
           unmet: Math.max(0, weeklyCount - existing - proposed),
         };
-      });
+      })
+      .filter(row => row.weeklyCount > 0);
 
     // --- Exercise coverage (priority-one ritual) ---
     // Working days with no exercise placement in the final proposals OR an
@@ -204,6 +228,10 @@ export async function POST(request: NextRequest) {
       quotaSummary,
       spareCapacity,
       exerciseMissingDays,
+      unplaceable,
+      // Remaining working days (OOO excluded) — the review step's evening-overflow
+      // rows use these as the day-picker options.
+      workingDays: workingDays.map(d => d.dateStr),
     });
   } catch (error) {
     console.error('Error proposing weekly plan:', error);

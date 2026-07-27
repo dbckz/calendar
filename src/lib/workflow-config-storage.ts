@@ -6,6 +6,10 @@ import path from 'path';
 
 import { DATA_DIR, WORKFLOW_CONFIG_FILE } from './data-paths';
 import { normalizeRolloverHour, DEFAULT_ROLLOVER_HOUR } from './date-utils';
+import {
+  DEFAULT_TRIAGE_PROJECT_FILTER,
+  type TriageProjectFilterConfig,
+} from './triage-project-filter';
 
 // Types for workflow config data
 export interface TaskQuota {
@@ -25,6 +29,16 @@ export interface TaskQuota {
   // categories (which otherwise lift the cap) and is not lifted by "Add more
   // tasks". Used e.g. to keep grouped Deep Work at "up to 3" agenda items.
   maxSelection?: number;
+  // When true, this category is scheduled ONCE PER WORKING DAY in the plan window
+  // rather than by a fixed weeklyCount: the engine sets the effective weekly count
+  // to the number of working days (e.g. Writing/Deep Work, so deep work leads
+  // every day). existingScheduledCounts still subtract. Overrides weeklyCount.
+  daily?: boolean;
+  // When set (grouped categories only), the number of blocks scales with how many
+  // tasks were selected: blockCount = min(maxBlocks, ceil(selectedTasks /
+  // tasksPerBlock)), and ZERO selected tasks means ZERO blocks. Overrides
+  // weeklyCount. Used e.g. for Batch (7 tasks per block, up to 3 blocks).
+  scaleToTasks?: { tasksPerBlock: number; maxBlocks: number };
 }
 
 // Continuous-work-run rule. The calendar should form busy runs of at most
@@ -148,7 +162,29 @@ export interface WorkflowConfig {
   // custom field value and against an ad-hoc task's taskType. A block also
   // matches a category when its type equals the category name directly.
   typeMapping: Record<string, string[]>;
+  // Which Asana projects the reminders-triage classifier is shown. Always
+  // populated on load (defaults to a 90-day activity window, no overrides).
+  triageProjectFilter?: TriageProjectFilterConfig;
   lastUpdated: string;
+}
+
+// Parse+validate the triage project filter from untrusted JSON. Coerces gid
+// lists to string arrays and activeDays to a positive integer, falling back to
+// defaults for anything malformed so a bad config can't hide every project.
+function parseTriageProjectFilter(raw: unknown): TriageProjectFilterConfig {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_TRIAGE_PROJECT_FILTER };
+  const src = raw as Record<string, unknown>;
+  const gids = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((g): g is string => typeof g === 'string' && !!g.trim()) : [];
+  const days = Number(src.activeDays);
+  return {
+    includeGids: gids(src.includeGids),
+    excludeGids: gids(src.excludeGids),
+    activeDays:
+      Number.isFinite(days) && days > 0
+        ? Math.floor(days)
+        : DEFAULT_TRIAGE_PROJECT_FILTER.activeDays,
+  };
 }
 
 const DEFAULT_CONFIG: WorkflowConfig = {
@@ -207,6 +243,7 @@ const DEFAULT_CONFIG: WorkflowConfig = {
     'Engagement/Outreach': [],
     'General Todos': [],
   },
+  triageProjectFilter: { ...DEFAULT_TRIAGE_PROJECT_FILTER },
   lastUpdated: new Date().toISOString(),
 };
 
@@ -282,6 +319,20 @@ export async function getWorkflowConfig(): Promise<WorkflowConfig> {
         if (Number.isFinite(n) && n > 0) quota.maxSelection = Math.floor(n);
         else delete quota.maxSelection;
       }
+      // Tolerant load: `daily` only survives as a real boolean true.
+      if (quota.daily !== undefined && quota.daily !== true) delete quota.daily;
+      // Tolerant load: keep scaleToTasks only when both bounds are positive
+      // integers, otherwise drop it so a malformed value can't zero out a category.
+      if (quota.scaleToTasks !== undefined) {
+        const raw = quota.scaleToTasks as { tasksPerBlock?: unknown; maxBlocks?: unknown };
+        const per = Number(raw?.tasksPerBlock);
+        const max = Number(raw?.maxBlocks);
+        if (Number.isFinite(per) && per > 0 && Number.isFinite(max) && max > 0) {
+          quota.scaleToTasks = { tasksPerBlock: Math.floor(per), maxBlocks: Math.floor(max) };
+        } else {
+          delete quota.scaleToTasks;
+        }
+      }
     }
 
     // Normalize scheduling: fill the work-run rule with defaults when a legacy
@@ -321,6 +372,7 @@ export async function getWorkflowConfig(): Promise<WorkflowConfig> {
       scheduling,
       agentPacing: parsed.agentPacing || DEFAULT_CONFIG.agentPacing,
       typeMapping,
+      triageProjectFilter: parseTriageProjectFilter(parsed.triageProjectFilter),
       lastUpdated: parsed.lastUpdated || new Date().toISOString(),
     };
   } catch (error) {
@@ -338,6 +390,7 @@ export async function saveWorkflowConfig(
     ...config,
     typeMapping: config.typeMapping ?? {},
     agentPacing: config.agentPacing ?? DEFAULT_CONFIG.agentPacing,
+    triageProjectFilter: parseTriageProjectFilter(config.triageProjectFilter),
     lastUpdated: new Date().toISOString(),
   };
 

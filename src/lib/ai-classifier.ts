@@ -56,10 +56,10 @@ function claudeBin(): string {
   return process.env.CLAUDE_BIN || path.join(homedir(), '.local', 'bin', 'claude');
 }
 
-// Pin the classifier to Opus for the strongest reasoning on these triage calls;
-// override via CLAUDE_MODEL if a cheaper/faster model is ever preferred.
+// Pin the classifier to Opus 4.8 — strong reasoning without Opus 5's extra
+// latency/token spend. Override via CLAUDE_MODEL if another model is preferred.
 function claudeModel(): string {
-  return process.env.CLAUDE_MODEL || 'opus';
+  return process.env.CLAUDE_MODEL || 'claude-opus-4-8';
 }
 
 function buildPrompt(tasks: ClassifierTask[]): string {

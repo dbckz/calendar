@@ -14,3 +14,6 @@
 - Add cross-tab sync using BroadcastChannel API so changes in one browser tab are reflected in other tabs in near real-time (broadcast mutations, other tabs refetch)
 - Schedule a "new bookies" slot each week
 - Get time tracking working: "Time Worked Today" currently sums the full scheduled durations of today's Asana-attributed events regardless of the clock, so it shows a day's workload at 5am. Clamp to elapsed time (count only the already-past portion of each event) so the widget and the time-tracking.json longitudinal record reflect time actually worked.
+- As part of weekly plan, set aside 30 mins a day to review the delegated tasks list
+- Calibrated quota suggestions in the plan wizard: show per-category historical completion rates (from weeklyStats) next to quotas and suggest evidence-based quotas — parked until a few weeks of accurate data exist (2026-07-25)
+- Estimate-vs-actual per task: record blocked duration vs actual outcome (finished/started/untouched from reviews) per task type so the planner can size blocks from evidence — parked until more data (2026-07-25)

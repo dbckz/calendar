@@ -17,6 +17,16 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { GoogleSubCalendar } from '@/types';
+import {
+  DEFAULT_TRIAGE_PROJECT_FILTER,
+  type TriageProjectFilterConfig,
+} from '@/lib/triage-project-filter';
+
+interface TriageProjectOption {
+  gid: string;
+  name: string;
+  integrationName: string;
+}
 
 interface IntegrationInfo {
   id: string;
@@ -58,8 +68,14 @@ function SettingsContent() {
   const [asanaClientSecret, setAsanaClientSecret] = useState('');
   const [isAsanaLoading, setIsAsanaLoading] = useState(false);
 
+  // Reminder-triage project filter
+  const [triageFilter, setTriageFilter] = useState<TriageProjectFilterConfig | null>(null);
+  const [allProjects, setAllProjects] = useState<TriageProjectOption[]>([]);
+  const [projectSearch, setProjectSearch] = useState('');
+
   useEffect(() => {
     fetchSettings();
+    fetchTriageConfig();
 
     // Check for callback messages
     const success = searchParams.get('success');
@@ -99,6 +115,39 @@ function SettingsContent() {
       console.error('Error fetching settings:', error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const fetchTriageConfig = async () => {
+    try {
+      const [cfgRes, projRes] = await Promise.all([
+        fetch('/api/workflow-config'),
+        fetch('/api/asana-projects'),
+      ]);
+      const cfg = await cfgRes.json();
+      const proj = await projRes.json();
+      setTriageFilter(cfg.config?.triageProjectFilter ?? { ...DEFAULT_TRIAGE_PROJECT_FILTER });
+      setAllProjects(proj.projects ?? []);
+    } catch (error) {
+      console.error('Error loading reminder triage config:', error);
+      setTriageFilter({ ...DEFAULT_TRIAGE_PROJECT_FILTER });
+    }
+  };
+
+  // Persist the triage filter (server deep-merges the patch onto workflow config).
+  const persistTriageFilter = async (next: TriageProjectFilterConfig) => {
+    setTriageFilter(next);
+    try {
+      const res = await fetch('/api/workflow-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ triageProjectFilter: next }),
+      });
+      if (!res.ok) throw new Error('save failed');
+      const data = await res.json();
+      if (data.config?.triageProjectFilter) setTriageFilter(data.config.triageProjectFilter);
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to save reminder triage settings.' });
     }
   };
 
@@ -694,6 +743,153 @@ function SettingsContent() {
             )}
           </div>
         </section>
+
+        {/* Reminder triage projects */}
+        {triageFilter && (
+          <section className="bg-white rounded-lg border shadow-sm p-4 space-y-4">
+            <div>
+              <h2 className="font-semibold text-gray-900">Reminder triage projects</h2>
+              <p className="text-sm text-gray-600 mt-1">
+                When &ldquo;Plan my week&rdquo; suggests where to file each reminder, it only shows
+                the AI projects modified within the activity window (plus any you always include).
+                This keeps suggestions focused; you can still file a reminder into any project by hand.
+              </p>
+            </div>
+
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              Activity window
+              <input
+                type="number"
+                min={1}
+                value={triageFilter.activeDays}
+                onChange={e =>
+                  setTriageFilter({ ...triageFilter, activeDays: Number(e.target.value) })
+                }
+                onBlur={() =>
+                  persistTriageFilter({
+                    ...triageFilter,
+                    activeDays:
+                      Number.isFinite(triageFilter.activeDays) && triageFilter.activeDays > 0
+                        ? Math.floor(triageFilter.activeDays)
+                        : DEFAULT_TRIAGE_PROJECT_FILTER.activeDays,
+                  })
+                }
+                className="w-20 px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+              />
+              days
+            </label>
+
+            {/* Always-include / always-exclude chips */}
+            {(['includeGids', 'excludeGids'] as const).map(key => {
+              const isInclude = key === 'includeGids';
+              const gids = triageFilter[key];
+              return (
+                <div key={key}>
+                  <p className="text-xs font-medium text-gray-500 mb-1">
+                    {isInclude ? 'Always include' : 'Always exclude'}
+                  </p>
+                  {gids.length === 0 ? (
+                    <p className="text-xs text-gray-400">None.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {gids.map(gid => {
+                        const proj = allProjects.find(p => p.gid === gid);
+                        return (
+                          <span
+                            key={gid}
+                            className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full ${
+                              isInclude
+                                ? 'bg-green-50 text-green-700 border border-green-200'
+                                : 'bg-red-50 text-red-700 border border-red-200'
+                            }`}
+                          >
+                            {proj ? proj.name : gid}
+                            <button
+                              type="button"
+                              aria-label={`Remove ${proj ? proj.name : gid}`}
+                              onClick={() =>
+                                persistTriageFilter({
+                                  ...triageFilter,
+                                  [key]: gids.filter(g => g !== gid),
+                                })
+                              }
+                              className="hover:text-gray-900"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Search + add */}
+            <div>
+              <input
+                type="text"
+                value={projectSearch}
+                onChange={e => setProjectSearch(e.target.value)}
+                placeholder="Search projects to include or exclude…"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none text-sm"
+              />
+              {projectSearch.trim() && (
+                <div className="mt-2 border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-64 overflow-y-auto">
+                  {allProjects
+                    .filter(p =>
+                      p.name.toLowerCase().includes(projectSearch.trim().toLowerCase())
+                    )
+                    .slice(0, 30)
+                    .map(p => (
+                      <div
+                        key={p.gid}
+                        className="flex items-center justify-between gap-2 px-3 py-2 text-sm"
+                      >
+                        <span className="min-w-0 truncate">
+                          {p.name}
+                          <span className="text-xs text-gray-400 ml-1.5">{p.integrationName}</span>
+                        </span>
+                        <span className="flex items-center gap-1.5 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              persistTriageFilter({
+                                ...triageFilter,
+                                includeGids: Array.from(
+                                  new Set([...triageFilter.includeGids, p.gid])
+                                ),
+                                excludeGids: triageFilter.excludeGids.filter(g => g !== p.gid),
+                              })
+                            }
+                            className="px-2 py-1 text-xs text-green-700 hover:bg-green-50 rounded transition-colors"
+                          >
+                            Include
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              persistTriageFilter({
+                                ...triageFilter,
+                                excludeGids: Array.from(
+                                  new Set([...triageFilter.excludeGids, p.gid])
+                                ),
+                                includeGids: triageFilter.includeGids.filter(g => g !== p.gid),
+                              })
+                            }
+                            className="px-2 py-1 text-xs text-red-700 hover:bg-red-50 rounded transition-colors"
+                          >
+                            Exclude
+                          </button>
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
         {/* About */}
         <section className="bg-white rounded-lg border shadow-sm p-4">

@@ -4,6 +4,7 @@ import { Dispatch, SetStateAction } from 'react';
 import { Check, AlertTriangle } from 'lucide-react';
 
 import { categoryColor } from './helpers';
+import { ProjectCombobox } from './ProjectCombobox';
 import type { MatchMeta, MatchRow } from './types';
 
 interface PrioritiesStepProps {
@@ -156,26 +157,25 @@ export function PrioritiesStep({
                       return (
                         <label className="flex items-center gap-1 text-[11px] text-gray-500">
                           Project
-                          <select
-                            value={row.createProjectGid}
-                            onChange={e =>
-                              setMatchRows(prev =>
-                                prev!.map((r, j) =>
-                                  j === i ? { ...r, createProjectGid: e.target.value } : r
+                          <div className="w-48">
+                            <ProjectCombobox
+                              value={row.createProjectGid}
+                              onChange={gid =>
+                                setMatchRows(prev =>
+                                  prev!.map((r, j) =>
+                                    j === i ? { ...r, createProjectGid: gid } : r
+                                  )
                                 )
-                              )
-                            }
-                            className={`text-xs border rounded px-1.5 py-1 outline-none focus:ring-2 focus:ring-orange-500 ${
-                              needsProject ? 'border-red-400' : 'border-gray-300'
-                            }`}
-                          >
-                            <option value="">Select project…</option>
-                            {rowProjects.map(p => (
-                              <option key={p.gid} value={p.gid}>
-                                {p.name}
-                              </option>
-                            ))}
-                          </select>
+                              }
+                              projects={rowProjects}
+                              placeholder="Select project…"
+                              ariaLabel="Project"
+                              invalid={needsProject}
+                              className={`text-xs border rounded px-1.5 py-1 ${
+                                needsProject ? '' : 'border-gray-300'
+                              }`}
+                            />
+                          </div>
                         </label>
                       );
                     })()}

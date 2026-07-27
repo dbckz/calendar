@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X,
   CalendarClock,
@@ -19,11 +19,18 @@ import {
   type ConfirmWeekResult,
   type PrepCandidatesResponse,
   type WeekCandidateCategory,
+  type WeekCandidate,
   type SpareCapacity,
+  type UnplaceableTaskRow,
 } from '@/lib/api';
 import type { ProposedBlock } from '@/lib/scheduling/types';
+import { TaskPeekModal } from './plan-week/TaskPeekModal';
 import type { AsanaProject, CalendarEvent, Reminder } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
+import {
+  isProjectInTriageCatalogue,
+  DEFAULT_TRIAGE_PROJECT_FILTER,
+} from '@/lib/triage-project-filter';
 
 import {
   type Step,
@@ -41,6 +48,11 @@ import { RemindersStep } from './plan-week/RemindersStep';
 import { PrepStep } from './plan-week/PrepStep';
 import { TasksStep } from './plan-week/TasksStep';
 import { ReviewStep } from './plan-week/ReviewStep';
+
+// One classifier suggestion for a reminder, as returned by the triage endpoint.
+type ReminderSuggestion = Awaited<
+  ReturnType<typeof api.suggestReminderTriage>
+>['suggestions'][number];
 
 interface PlanWeekModalProps {
   isOpen: boolean;
@@ -150,7 +162,12 @@ export function PlanWeekModal({
   const [reminderRows, setReminderRows] = useState<ReminderTriageRow[] | null>(null);
   const [remindersLoading, setRemindersLoading] = useState(false);
   const [remindersError, setRemindersError] = useState<string | null>(null);
+  const [remindersProgress, setRemindersProgress] = useState<{ done: number; total: number } | null>(null);
   const [reminderProjects, setReminderProjects] = useState<AsanaProject[]>([]);
+  // Bumped every time the modal opens/resets. A reminder-classification run
+  // captures the value at its start and drops any state writes once it changes,
+  // so a prefetch still in flight can't clobber a fresh open's reset.
+  const remindersRunRef = useRef(0);
   const [isConvertingReminders, setIsConvertingReminders] = useState(false);
 
   // Step 2 — prep
@@ -186,6 +203,10 @@ export function PlanWeekModal({
   const [mustDoIds, setMustDoIds] = useState<Set<string>>(new Set());
   // Ids of Asana tasks currently being marked done from the wizard (spinner).
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
+  // Ids of candidate tasks currently being deleted (spinner).
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  // Candidate whose read-only detail modal is open (double-click to view).
+  const [peekCandidate, setPeekCandidate] = useState<WeekCandidate | null>(null);
 
   // Step 3 — "Add more tasks": set when the user returns to the tasks step from
   // review to spend spare capacity. Lifts the per-category selection cap so
@@ -196,6 +217,9 @@ export function PlanWeekModal({
   const [proposals, setProposals] = useState<EditableProposal[]>([]);
   const [quotaSummary, setQuotaSummary] = useState<QuotaSummaryRow[]>([]);
   const [spareCapacity, setSpareCapacity] = useState<SpareCapacity | null>(null);
+  const [unplaceable, setUnplaceable] = useState<UnplaceableTaskRow[]>([]);
+  // Remaining working days (OOO excluded) — the evening-overflow rows' day picker.
+  const [overflowDayOptions, setOverflowDayOptions] = useState<string[]>([]);
   // Working days (yyyy-MM-dd) with no exercise placement — the review step warns
   // per day since exercise is the number-one priority ritual.
   const [exerciseMissingDays, setExerciseMissingDays] = useState<string[]>([]);
@@ -206,6 +230,8 @@ export function PlanWeekModal({
   // Reset everything whenever the modal opens fresh.
   useEffect(() => {
     if (!isOpen) return;
+    // Invalidate any reminder-classification run started for a previous open.
+    remindersRunRef.current += 1;
     setStep(hasTypeStep ? 'type' : 'priorities');
     setTypeRows(null);
     setTypeLoading(false);
@@ -223,6 +249,7 @@ export function PlanWeekModal({
     setReminderRows(null);
     setRemindersLoading(false);
     setRemindersError(null);
+    setRemindersProgress(null);
     setReminderProjects([]);
     setIsConvertingReminders(false);
     // Fetch reminders once to decide whether to show the triage step. A failure
@@ -248,10 +275,14 @@ export function PlanWeekModal({
     setTaskDurationOverrides({});
     setMustDoIds(new Set());
     setCompletingIds(new Set());
+    setDeletingIds(new Set());
+    setPeekCandidate(null);
     setAddMoreMode(false);
     setProposals([]);
     setQuotaSummary([]);
     setSpareCapacity(null);
+    setUnplaceable([]);
+    setOverflowDayOptions([]);
     setExerciseMissingDays([]);
     setWeekLabel('');
     setIsConfirming(false);
@@ -352,48 +383,96 @@ export function PlanWeekModal({
   // classifier failure still yields usable rows (first workspace, blank details).
   const runReminderSuggest = useCallback(async () => {
     if (!reminderList || !asanaIntegrations || asanaIntegrations.length === 0) return;
+    // Capture the current open-instance so writes from a run whose modal has
+    // since been reset/reopened are dropped rather than clobbering fresh state.
+    const runId = remindersRunRef.current;
+    const isStale = () => remindersRunRef.current !== runId;
     setRemindersLoading(true);
     setRemindersError(null);
+    setRemindersProgress(null);
     const defaultIntegrationId = asanaIntegrations[0].id;
     try {
-      const { projects } = await api
-        .getAsanaProjects()
-        .catch(() => ({ projects: [] as AsanaProject[] }));
+      const [{ projects }, triageFilter] = await Promise.all([
+        api.getAsanaProjects().catch(() => ({ projects: [] as AsanaProject[] })),
+        // The classifier catalogue is trimmed to recently-active projects (plus
+        // manual overrides). A missing config just falls back to the defaults.
+        api
+          .getWorkflowConfig()
+          .then(c => c.triageProjectFilter ?? DEFAULT_TRIAGE_PROJECT_FILTER)
+          .catch(() => DEFAULT_TRIAGE_PROJECT_FILTER),
+      ]);
+      if (isStale()) return;
+      // Dropdowns keep the FULL project list; only the catalogue below is filtered.
       setReminderProjects(projects);
 
       const workspaces = asanaIntegrations.map(intg => ({
         integrationId: intg.id,
         name: intg.name,
         projects: projects
-          .filter(p => p.integrationId === intg.id)
+          .filter(p => p.integrationId === intg.id && isProjectInTriageCatalogue(p, triageFilter))
           .map(p => ({ gid: p.gid, name: p.name })),
         types: Array.from(typeFieldInfoByIntegration?.get(intg.id)?.enumOptions.keys() ?? []).sort(),
       }));
 
-      const { suggestions } = await api.suggestReminderTriage(
-        reminderList.map(r => ({ id: r.id, title: r.text, notes: r.notes })),
-        workspaces
+      // Classify in chunks so a long list (~37 reminders) shows real progress
+      // instead of one silent 3-minute call. Run a small concurrency pool; a
+      // failed chunk leaves its reminders with no suggestion (they fall through
+      // to the defaults below), and only an all-chunks failure surfaces an error.
+      const CHUNK_SIZE = 8;
+      const MAX_IN_FLIGHT = 3;
+      const chunks: Array<Array<{ id: string; title: string; notes?: string }>> = [];
+      for (let i = 0; i < reminderList.length; i += CHUNK_SIZE) {
+        chunks.push(
+          reminderList.slice(i, i + CHUNK_SIZE).map(r => ({ id: r.id, title: r.text, notes: r.notes }))
+        );
+      }
+      setRemindersProgress({ done: 0, total: chunks.length });
+
+      const byId = new Map<string, ReminderSuggestion>();
+      let failedChunks = 0;
+      let nextChunk = 0;
+      const runWorker = async () => {
+        while (nextChunk < chunks.length) {
+          const chunk = chunks[nextChunk++];
+          try {
+            const { suggestions } = await api.suggestReminderTriage(chunk, workspaces);
+            for (const s of suggestions) byId.set(s.id, s);
+          } catch {
+            failedChunks++;
+          } finally {
+            if (!isStale()) {
+              setRemindersProgress(prev => (prev ? { ...prev, done: prev.done + 1 } : prev));
+            }
+          }
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(MAX_IN_FLIGHT, chunks.length) }, runWorker)
       );
-      const byId = new Map(suggestions.map(s => [s.id, s]));
+      if (chunks.length > 0 && failedChunks === chunks.length) {
+        throw new Error('Failed to suggest destinations');
+      }
+      if (isStale()) return;
 
       setReminderRows(
         reminderList.map(r => {
           const s = byId.get(r.id);
-          const integrationId =
-            s && asanaIntegrations.some(i => i.id === s.integrationId)
-              ? s.integrationId
-              : defaultIntegrationId;
+          const validWorkspace = !!s && asanaIntegrations.some(i => i.id === s.integrationId);
+          const integrationId = validWorkspace ? s!.integrationId : defaultIntegrationId;
           const validProject =
             !!s && projects.some(p => p.gid === s.projectGid && p.integrationId === integrationId);
           const validType =
             !!s &&
             !!s.taskType &&
             (typeFieldInfoByIntegration?.get(integrationId)?.enumOptions.has(s.taskType) ?? false);
+          // Default to the AI's action, but only trust "convert" when it resolved
+          // to a real workspace; otherwise keep it as a reminder.
+          const action = validWorkspace && s!.action === 'convert' ? ('convert' as const) : ('keep' as const);
           return {
             id: r.id,
             name: r.text,
             notes: r.notes ?? '',
-            action: 'keep' as const,
+            action,
             integrationId,
             projectGid: validProject ? s!.projectGid : '',
             taskType: validType ? s!.taskType : '',
@@ -402,6 +481,7 @@ export function PlanWeekModal({
         })
       );
     } catch (err) {
+      if (isStale()) return;
       // Degrade gracefully: no suggestions, but every reminder is still editable.
       setReminderRows(
         reminderList.map(r => ({
@@ -417,7 +497,10 @@ export function PlanWeekModal({
       );
       setRemindersError(err instanceof Error ? err.message : 'Failed to suggest destinations');
     } finally {
-      setRemindersLoading(false);
+      if (!isStale()) {
+        setRemindersLoading(false);
+        setRemindersProgress(null);
+      }
     }
   }, [reminderList, asanaIntegrations, typeFieldInfoByIntegration]);
 
@@ -529,6 +612,8 @@ export function PlanWeekModal({
       setProposals(data.proposals.map(p => ({ ...p, accepted: !p.overflow })));
       setQuotaSummary(data.quotaSummary);
       setSpareCapacity(data.spareCapacity ?? null);
+      setUnplaceable(data.unplaceable ?? []);
+      setOverflowDayOptions(data.workingDays ?? []);
       setExerciseMissingDays(data.exerciseMissingDays ?? []);
       setWeekLabel(
         `${format(parseISO(data.weekStart), 'MMM d')} – ${format(parseISO(data.weekEnd), 'MMM d')}`
@@ -551,6 +636,17 @@ export function PlanWeekModal({
     else if (step === 'review') fetchReview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, isOpen]);
+
+  // Prefetch reminder classification as soon as its inputs are ready, so the
+  // (slow) headless calls run in the background while the user is on the earlier
+  // type/priorities steps. The on-step-entry trigger above still covers the case
+  // where the user reaches the step before this finishes; both guard on
+  // `reminderRows === null && !remindersLoading`, so they never double-run.
+  useEffect(() => {
+    if (!isOpen || !hasRemindersStep) return;
+    if (reminderRows === null && !remindersLoading) runReminderSuggest();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, hasRemindersStep, reminderRows, remindersLoading]);
 
   // --- Step 1 actions ---
 
@@ -748,6 +844,60 @@ export function PlanWeekModal({
     }
   }, []);
 
+  // Delete a candidate task. Asana-backed tasks are deleted in Asana; ad-hoc
+  // tasks are removed from their local store. On success the row is pulled from
+  // the candidate list and from any selection/must-do sets it belonged to
+  // (mirrors completeAsana's cleanup).
+  const deleteTask = useCallback(async (category: string, candidate: WeekCandidate) => {
+    const { id, gid, integrationId } = candidate;
+    setDeletingIds(prev => new Set(prev).add(id));
+    setError(null);
+    try {
+      if (gid && integrationId) {
+        await api.deleteAsanaTask(gid, integrationId);
+      } else {
+        await api.deleteAdHocTask(id);
+      }
+      setTaskCats(prev =>
+        prev
+          ? prev.map(c =>
+              c.category === category
+                ? { ...c, candidates: c.candidates.filter(cd => cd.id !== id) }
+                : c
+            )
+          : prev
+      );
+      setSelections(prev => {
+        const next: Record<string, Set<string>> = {};
+        for (const [cat, set] of Object.entries(prev)) {
+          const s = new Set(set);
+          s.delete(id);
+          next[cat] = s;
+        }
+        return next;
+      });
+      setMustDoIds(prev => {
+        const n = new Set(prev);
+        n.delete(id);
+        return n;
+      });
+      setTaskDurationOverrides(prev => {
+        if (!(id in prev)) return prev;
+        const rest = { ...prev };
+        delete rest[id];
+        return rest;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete task');
+    } finally {
+      setDeletingIds(prev => {
+        const n = new Set(prev);
+        n.delete(id);
+        return n;
+      });
+    }
+  }, []);
+
   // Return to the tasks step from review to spend spare capacity. Selections are
   // preserved (kept in state); addMoreMode lifts the per-category selection cap so
   // the user can pick beyond a quota, and those extra picks get scheduled.
@@ -794,17 +944,29 @@ export function PlanWeekModal({
   const editStart = (id: string, start: string) =>
     setProposals(prev => prev.map(p => (p.id === id ? { ...p, start } : p)));
 
-  // Apply the reminders-triage decisions: for each "convert" row, create the
-  // Asana task (with notes/due/project/type), then delete the source Google Tasks
-  // reminder (mirrors the Reminders tab's convert-then-delete). Returns the number
-  // of conversions that failed so the caller can surface a partial-failure note.
-  const applyReminderConversions = useCallback(async (): Promise<{ succeeded: number; failed: number }> => {
-    const conversions = (reminderRows ?? []).filter(r => r.action === 'convert' && r.name.trim());
-    if (conversions.length === 0) return { succeeded: 0, failed: 0 };
+  // Move a block to a different day (used by the evening-overflow day picker). The
+  // confirm path reads p.date, so this is all that's needed to reschedule the day.
+  const editDate = (id: string, date: string) => {
+    if (!date) return;
+    setProposals(prev => prev.map(p => (p.id === id ? { ...p, date } : p)));
+  };
+
+  // Apply the reminders-triage decisions: each "convert" row creates an Asana
+  // task (with notes/due/project/type) then deletes the source Google Tasks
+  // reminder (mirrors the Reminders tab's convert-then-delete); "done" marks the
+  // reminder completed; "delete" removes it. Returns the number of actions that
+  // failed so the caller can surface a partial-failure note.
+  const applyReminderActions = useCallback(async (): Promise<{ succeeded: number; failed: number }> => {
+    const rows = reminderRows ?? [];
+    const conversions = rows.filter(r => r.action === 'convert' && r.name.trim());
+    const dones = rows.filter(r => r.action === 'done');
+    const deletes = rows.filter(r => r.action === 'delete');
+    const total = conversions.length + dones.length + deletes.length;
+    if (total === 0) return { succeeded: 0, failed: 0 };
     setIsConvertingReminders(true);
     try {
-      const outcomes = await Promise.allSettled(
-        conversions.map(async row => {
+      const outcomes = await Promise.allSettled([
+        ...conversions.map(async row => {
           const info = typeFieldInfoByIntegration?.get(row.integrationId);
           const optionGid = row.taskType ? info?.enumOptions.get(row.taskType) : undefined;
           await api.createAsanaTask(row.integrationId, row.name.trim(), {
@@ -815,10 +977,12 @@ export function PlanWeekModal({
           });
           // Only remove the reminder once its task exists.
           await api.deleteReminder(row.id);
-        })
-      );
+        }),
+        ...dones.map(row => api.updateReminder(row.id, { completed: true })),
+        ...deletes.map(row => api.deleteReminder(row.id)),
+      ]);
       const failed = outcomes.filter(o => o.status === 'rejected').length;
-      return { succeeded: conversions.length - failed, failed };
+      return { succeeded: total - failed, failed };
     } finally {
       setIsConvertingReminders(false);
     }
@@ -847,13 +1011,13 @@ export function PlanWeekModal({
       const map: Record<string, ConfirmWeekResult> = {};
       for (const r of res) map[r.id] = r;
       setResults(map);
-      // Apply reminder conversions alongside the plan. A partial failure surfaces
-      // a note but doesn't block completing the plan.
-      const { succeeded, failed } = await applyReminderConversions();
+      // Apply reminder actions (convert / done / delete) alongside the plan. A
+      // partial failure surfaces a note but doesn't block completing the plan.
+      const { succeeded, failed } = await applyReminderActions();
       if (res.some(r => r.success) || succeeded > 0) onApplied?.();
       if (failed > 0) {
         setError(
-          `${failed} reminder conversion${failed === 1 ? '' : 's'} failed — those reminders were left untouched.`
+          `${failed} reminder action${failed === 1 ? '' : 's'} failed — those reminders were left untouched.`
         );
       }
       setStep('done');
@@ -862,7 +1026,7 @@ export function PlanWeekModal({
     } finally {
       setIsConfirming(false);
     }
-  }, [proposals, onApplied, applyReminderConversions, weekStart]);
+  }, [proposals, onApplied, applyReminderActions, weekStart]);
 
   // --- Navigation ---
 
@@ -1048,6 +1212,7 @@ export function PlanWeekModal({
                   setRows={setReminderRows}
                   loading={remindersLoading}
                   error={remindersError}
+                  progress={remindersProgress}
                   integrations={asanaIntegrations ?? []}
                   projects={reminderProjects}
                   typeFieldInfoByIntegration={typeFieldInfoByIntegration}
@@ -1082,11 +1247,15 @@ export function PlanWeekModal({
                   toggleSelection={toggleSelection}
                   toggleMustDo={toggleMustDo}
                   completeAsana={completeAsana}
+                  deletingIds={deletingIds}
+                  deleteTask={deleteTask}
+                  onOpenTask={setPeekCandidate}
                 />
               )}
               {(step === 'review' || step === 'done') && (
                 <ReviewStep
                   proposals={proposals}
+                  unplaceable={unplaceable}
                   grouped={grouped}
                   overflowProposals={overflowProposals}
                   mustDoIds={mustDoIds}
@@ -1096,8 +1265,10 @@ export function PlanWeekModal({
                   results={results}
                   hasResults={hasResults}
                   spareCapacity={spareCapacity}
+                  overflowDayOptions={overflowDayOptions}
                   toggleAccept={toggleAccept}
                   editStart={editStart}
+                  editDate={editDate}
                   addMoreTasks={addMoreTasks}
                 />
               )}
@@ -1171,6 +1342,9 @@ export function PlanWeekModal({
           </div>
         </div>
       </div>
+      {peekCandidate && (
+        <TaskPeekModal candidate={peekCandidate} onClose={() => setPeekCandidate(null)} />
+      )}
     </div>
   );
 }

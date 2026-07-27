@@ -58,6 +58,8 @@ export interface ProposePrepInput {
   busyIntervals: BusyInterval[];
   weekStart: Date;
   now: Date;
+  // Out-of-office dates (yyyy-MM-dd) to drop from working days — no prep there.
+  outOfOfficeDates?: Set<string>;
 }
 
 export function proposePrepBlocks(
@@ -65,7 +67,7 @@ export function proposePrepBlocks(
 ): { placed: ProposedBlock[]; unplaced: PrepMeeting[] } {
   const { config, weekStart, now } = input;
 
-  const { workRun, workingDays } = resolveWorkingWindow(config.scheduling, weekStart, now);
+  const { workRun, workingDays } = resolveWorkingWindow(config.scheduling, weekStart, now, input.outOfOfficeDates);
   const dayByDateStr = new Map(workingDays.map(d => [d.dateStr, d]));
 
   // Mutable run state shared across all preps so they never collide.
@@ -92,26 +94,32 @@ export function proposePrepBlocks(
 
     let slot: ReturnType<typeof tryDay> = null;
 
-    // (0) User-preferred day, if given: try ONLY that day first.
     if (meeting.preferredDate) {
-      slot = tryDay(dayByDateStr.get(meeting.preferredDate), prepDuration, endCapFor(meeting.preferredDate));
-    }
-
-    if (meeting.preferLatest) {
+      // (0) User-preferred day: try the CHOSEN day first, then walk BACKWARDS
+      // through each preceding working day to today. Prep may sit on the meeting
+      // day or earlier, never after it — so cap the walk at the meeting date and
+      // apply the before-meeting end-cap on the meeting day itself. If nothing
+      // fits on the chosen day or any earlier day, the meeting goes unplaced
+      // (we never slide prep to a day LATER than the user's pick).
+      const latestStr = meeting.preferredDate < meeting.date ? meeting.preferredDate : meeting.date;
+      const daysBackToToday = workingDays
+        .filter(d => d.dateStr <= latestStr)
+        .sort((a, b) => (a.dateStr < b.dateStr ? 1 : -1)); // chosen/latest first, back to today
+      for (const day of daysBackToToday) {
+        slot = tryDay(day, prepDuration, endCapFor(day.dateStr));
+        if (slot) break;
+      }
+    } else if (meeting.preferLatest) {
       // Early-next-week meeting: its day-before / day-of aren't this week, so
       // place prep on THIS week's LATEST working day that has room (freshest prep
       // sits closest to the meeting), walking backwards to earlier days.
-      if (!slot) {
-        for (let i = workingDays.length - 1; i >= 0 && !slot; i--) {
-          slot = tryDay(workingDays[i], prepDuration, endCapFor(workingDays[i].dateStr));
-        }
+      for (let i = workingDays.length - 1; i >= 0 && !slot; i--) {
+        slot = tryDay(workingDays[i], prepDuration, endCapFor(workingDays[i].dateStr));
       }
     } else {
       // (a) Day before, anywhere in working hours.
-      if (!slot) {
-        const dayBeforeStr = localDateStr(new Date(meeting.startMs - MS_PER_DAY));
-        slot = tryDay(dayByDateStr.get(dayBeforeStr), prepDuration);
-      }
+      const dayBeforeStr = localDateStr(new Date(meeting.startMs - MS_PER_DAY));
+      slot = tryDay(dayByDateStr.get(dayBeforeStr), prepDuration);
 
       // (b) Day of, before the meeting starts. The work-run rule handles run
       // lengths; prep just has to end by the meeting start.

@@ -731,6 +731,9 @@ function mapAsanaTaskResponse(task: Record<string, unknown>): AsanaTask {
 export interface AsanaProject {
   gid: string;
   name: string;
+  // ISO timestamp of the project's last modification. Asana bumps this on task
+  // activity, so it doubles as a recency signal for the triage catalogue.
+  modifiedAt?: string;
 }
 
 export async function getProjects(
@@ -738,7 +741,7 @@ export async function getProjects(
   workspaceId: string
 ): Promise<AsanaProject[]> {
   const response = await fetch(
-    `${ASANA_API_BASE}/projects?workspace=${workspaceId}&opt_fields=name`,
+    `${ASANA_API_BASE}/projects?workspace=${workspaceId}&archived=false&opt_fields=name,modified_at`,
     {
       headers: {
         'Authorization': `Bearer ${accessToken}`,
@@ -752,8 +755,9 @@ export async function getProjects(
     throw new Error(`Failed to fetch projects: ${response.status}`);
   }
 
-  const data: AsanaApiResponse<AsanaProject[]> = await response.json();
-  return data.data;
+  const data: AsanaApiResponse<Array<{ gid: string; name: string; modified_at?: string }>> =
+    await response.json();
+  return data.data.map(p => ({ gid: p.gid, name: p.name, modifiedAt: p.modified_at }));
 }
 
 export async function getWorkspaceTags(

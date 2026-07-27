@@ -130,7 +130,7 @@ function formatDateOnly(date: Date): string {
 }
 
 function toCalendarEvent(
-  event: { id?: string | null; summary?: string | null; description?: string | null; start?: { date?: string | null; dateTime?: string | null } | null; end?: { date?: string | null; dateTime?: string | null } | null; colorId?: string | null; location?: string | null; recurringEventId?: string | null; attendees?: Array<{ self?: boolean | null; responseStatus?: string | null }> | null; eventType?: string | null },
+  event: { id?: string | null; summary?: string | null; description?: string | null; start?: { date?: string | null; dateTime?: string | null } | null; end?: { date?: string | null; dateTime?: string | null } | null; colorId?: string | null; location?: string | null; recurringEventId?: string | null; attendees?: Array<{ self?: boolean | null; responseStatus?: string | null }> | null; eventType?: string | null; transparency?: string | null },
   fallbackColor: string,
   calendarId?: string
 ): CalendarEvent {
@@ -161,6 +161,9 @@ function toCalendarEvent(
     attendeeCount: event.attendees?.length,
     selfResponseStatus: selfAttendee?.responseStatus || undefined,
     eventType: event.eventType || undefined,
+    // Google only sends `transparency` when it's 'transparent' (opaque is the
+    // default and omitted). Normalise to the two-value union; absent → busy.
+    transparency: event.transparency === 'transparent' ? 'transparent' : 'opaque',
   };
 }
 

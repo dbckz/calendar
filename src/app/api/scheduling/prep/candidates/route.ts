@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
 
     // Working days of the (remaining) week — used to validate day overrides and
     // returned so the UI can offer a per-meeting day dropdown.
-    const { workingDays } = resolveWorkingWindow(ctx.config.scheduling, ctx.weekStart, ctx.now);
+    const { workingDays } = resolveWorkingWindow(ctx.config.scheduling, ctx.weekStart, ctx.now, ctx.outOfOfficeDates);
     const workingDayStrs = workingDays.map(d => d.dateStr);
     const workingDaySet = new Set(workingDayStrs);
 
@@ -88,6 +88,7 @@ export async function POST(request: NextRequest) {
       busyIntervals: ctx.busyIntervals,
       weekStart: ctx.weekStart,
       now: ctx.now,
+      outOfOfficeDates: ctx.outOfOfficeDates,
     });
     const prepBusyIntervals = [
       ...ctx.busyIntervals,
@@ -100,6 +101,7 @@ export async function POST(request: NextRequest) {
       busyIntervals: prepBusyIntervals,
       weekStart: ctx.weekStart,
       now: ctx.now,
+      outOfOfficeDates: ctx.outOfOfficeDates,
     });
     const blockByEventId = new Map(placed.map(b => [b.meeting!.eventId, b]));
     const unplacedIds = new Set(unplaced.map(m => m.eventId));

@@ -122,4 +122,68 @@ describe('proposeBreakBlocks', () => {
     });
     expect(breaks).toHaveLength(0);
   });
+
+  it('does NOT propose a break after a short run (< 75% of the work-run cap)', () => {
+    // Two 30-min runs (well under the 90-min threshold) then a final run. Neither
+    // short run earns a break — a 30-min stretch needs no mid-flow break.
+    const breaks = proposeBreakBlocks({
+      workingDays: [workingDay()],
+      busyIntervals: [busy(9, 0, 9, 30), busy(9, 45, 10, 15), busy(10, 30, 11, 0)],
+      workRun: WORK_RUN,
+      now: NOW,
+    });
+    expect(breaks).toHaveLength(0);
+  });
+
+  it('proposes a break after a run at exactly the 75% threshold (90 min) but not a shorter one', () => {
+    // First run 09:00–10:30 = 90 min (== threshold) → break. Second run
+    // 10:45–11:60? use 10:45–12:00 = 75 min (< 90) → no break; final run follows.
+    const breaks = proposeBreakBlocks({
+      workingDays: [workingDay()],
+      busyIntervals: [
+        busy(9, 0, 10, 30), // 90-min run → break at 10:30
+        busy(10, 45, 12, 0), // 75-min run → no break
+        busy(12, 15, 13, 0), // final run
+      ],
+      workRun: WORK_RUN,
+      now: NOW,
+    });
+    expect(breaks.map(b => b.start)).toEqual(['10:30']);
+  });
+
+  it('still breaks a >2h fused run (soft rule can now exceed the cap) when a gap follows', () => {
+    // With the softened run rule, placements can fuse into a run longer than the
+    // 2h cap. A 2.5h continuous run (09:00–11:30) is well over the 90-min threshold,
+    // so it must still get its trailing break before the next run.
+    const breaks = proposeBreakBlocks({
+      workingDays: [workingDay()],
+      busyIntervals: [
+        busy(9, 0, 11, 30), // 150-min fused run (over the 2h cap)
+        busy(11, 45, 13, 0), // next run, leaving a 15-min gap for the break
+      ],
+      workRun: WORK_RUN,
+      now: NOW,
+    });
+    expect(breaks.map(b => b.start)).toEqual(['11:30']);
+  });
+
+  it('derives the threshold from workRun.maxMinutes (60 → 45-min threshold)', () => {
+    // With a 60-min cap the threshold is 45 min. A 40-min run gets no break; a
+    // 50-min run does.
+    const wr: WorkRun = { maxMinutes: 60, bufferMinutes: 15 };
+    const shortOnly = proposeBreakBlocks({
+      workingDays: [workingDay()],
+      busyIntervals: [busy(9, 0, 9, 40), busy(9, 55, 10, 35), busy(10, 50, 11, 20)],
+      workRun: wr,
+      now: NOW,
+    });
+    expect(shortOnly).toHaveLength(0);
+    const longEnough = proposeBreakBlocks({
+      workingDays: [workingDay()],
+      busyIntervals: [busy(9, 0, 9, 50), busy(10, 5, 10, 45), busy(11, 0, 11, 30)],
+      workRun: wr,
+      now: NOW,
+    });
+    expect(longEnough.map(b => b.start)).toEqual(['09:50']);
+  });
 });

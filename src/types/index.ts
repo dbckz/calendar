@@ -31,6 +31,11 @@ export interface CalendarEvent {
   // with no other attendees) — treated as attending. A 'declined' event is shown
   // in the UI but ignored by scheduling (it doesn't block free time).
   selfResponseStatus?: string;
+  // Google's "show me as" free/busy flag. 'transparent' = shown as FREE (does not
+  // block the user's time); 'opaque' (or absent) = shown as BUSY. Scheduling
+  // treats a 'transparent' external event as free time — EXCEPT app-created blocks,
+  // which the planner deliberately writes transparent yet must still count as busy.
+  transparency?: 'opaque' | 'transparent';
   // Asana-specific fields
   projects?: Array<{ gid: string; name: string }>;
   customFields?: AsanaCustomField[];
@@ -87,6 +92,9 @@ export interface AsanaProject {
   name: string;
   integrationId: string;
   integrationName: string;
+  // ISO timestamp of the project's last modification (bumped by task activity).
+  // Used to build the activity-filtered reminder-triage classifier catalogue.
+  modifiedAt?: string;
 }
 
 export interface AsanaStory {

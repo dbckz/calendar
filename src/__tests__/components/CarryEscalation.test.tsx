@@ -55,6 +55,9 @@ function tasksStep(candidates: WeekCandidate[], mustDoIds = new Set<string>()) {
       toggleSelection={jest.fn()}
       toggleMustDo={jest.fn()}
       completeAsana={jest.fn()}
+      deletingIds={new Set()}
+      deleteTask={jest.fn()}
+      onOpenTask={jest.fn()}
     />
   );
 }

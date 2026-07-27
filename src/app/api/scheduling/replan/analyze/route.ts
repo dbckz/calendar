@@ -394,6 +394,7 @@ export async function POST(request: NextRequest) {
       // Live ritual titles per date (includes manually-added ritual events) so a
       // remaining working day missing a ritual gets an addition proposed.
       existingRitualTitlesByDate: existingRitualTitlesByDateFromEvents(ctx.weekEvents),
+      outOfOfficeDates: ctx.outOfOfficeDates,
     });
 
     // --- Prep additions for early-next-week meetings ------------------------

@@ -31,7 +31,7 @@
 // one block per SELECTED candidate task, placed after all quota'd categories.
 
 import { classifyBlockCategoryWithCatchAll, normalize, parseTargetLength, type CapacityQuota } from '@/lib/capacity';
-import type { WorkflowConfig } from '@/lib/workflow-config-storage';
+import type { TaskQuota, WorkflowConfig } from '@/lib/workflow-config-storage';
 import type { BestTime } from '@/types';
 import type {
   CandidateTask,
@@ -212,7 +212,8 @@ export function buildWorkingDays(
   weekStart: Date,
   now: Date,
   workingHours: { start: TimeOfDay; end: TimeOfDay },
-  workingDayNames: Set<string>
+  workingDayNames: Set<string>,
+  excludeDates?: Set<string>
 ): WorkingDay[] {
   const days: WorkingDay[] = [];
   const todayStr = localDateStr(now);
@@ -225,6 +226,7 @@ export function buildWorkingDays(
     const dateStr = localDateStr(day);
     if (dateStr < todayStr) continue; // past days in the week
     if (!workingDayNames.has(WEEKDAY_NAMES[day.getDay()])) continue;
+    if (excludeDates?.has(dateStr)) continue; // out-of-office day — not a working day
     days.push({
       date: day,
       dateStr,
@@ -335,6 +337,58 @@ export function findSlot(
   return null;
 }
 
+// A found slot plus the duration actually placed (may be trimmed below the
+// requested duration to fit) and whether it was trimmed.
+export type FlexSlot = {
+  slot: { startMs: number; endMs: number; dateStr: string; preferred: boolean };
+  duration: number;
+  trimmedMinutes: number;
+};
+
+// The single, shared "soft work-run rule" search. The 2h run cap is a PREFERENCE,
+// not a hard wall: rather than refusing a block (and leaving a visible morning
+// gap empty while the task falls to evening overflow), we try four tiers in order
+// and take the first that lands, so well-spaced schedules still come out first:
+//   (a) full duration, run rule satisfied;
+//   (b) duration shortened by ONE 15-min step (never below 15 min), run rule
+//       satisfied;
+//   (c) full duration, run-length cap IGNORED (overlap prohibition always holds);
+//   (d) shortened duration, cap ignored.
+// `search(duration, workRun)` runs the actual slot search (plain findSlot, or the
+// leveled/spread variant) for a given duration + run rule, so this composes with
+// every placement pass. `canShrink` is false for rituals / prep (fixed sizes).
+const FLEX_STEP_MINUTES = 15;
+const MIN_FLEX_DURATION = 15;
+export function findFlexibleSlot(
+  search: (duration: number, workRun: WorkRun) => ReturnType<typeof findSlot>,
+  duration: number,
+  workRun: WorkRun,
+  canShrink: boolean
+): FlexSlot | null {
+  const relaxed: WorkRun = { maxMinutes: Infinity, bufferMinutes: workRun.bufferMinutes };
+  const shrunk = Math.max(MIN_FLEX_DURATION, duration - FLEX_STEP_MINUTES);
+  const shrinkable = canShrink && shrunk < duration;
+  const trim = duration - shrunk;
+
+  // (a) full duration, strict run rule.
+  let slot = search(duration, workRun);
+  if (slot) return { slot, duration, trimmedMinutes: 0 };
+  // (b) shrunk duration, strict run rule.
+  if (shrinkable) {
+    slot = search(shrunk, workRun);
+    if (slot) return { slot, duration: shrunk, trimmedMinutes: trim };
+  }
+  // (c) full duration, cap ignored (overlap still prohibited).
+  slot = search(duration, relaxed);
+  if (slot) return { slot, duration, trimmedMinutes: 0 };
+  // (d) shrunk duration, cap ignored.
+  if (shrinkable) {
+    slot = search(shrunk, relaxed);
+    if (slot) return { slot, duration: shrunk, trimmedMinutes: trim };
+  }
+  return null;
+}
+
 // Whether a category is the deep-work category, compared with the
 // whitespace-robust normalize so "Writing / Deep Work" and "Writing/Deep Work"
 // are treated the same. Deep work owns the mornings.
@@ -349,6 +403,51 @@ export function isDeepWork(category: string): boolean {
 // preferredTimes gets none (falls through to the working-hours tier, which
 // starts in the morning). buildWindowsForTask drops any day whose window end <=
 // start, so a day ending at/before 12:00 simply contributes no afternoon window.
+// Day accounting + selection needed to resolve a category's effective block count.
+export interface WeeklyCountContext {
+  // Remaining working days in the plan window (past + out-of-office already
+  // excluded). Drives the `daily` cadence.
+  remainingWorkingDays: number;
+  // Configured working days per week (denominator for OOO scaling).
+  configuredWorkingDaysPerWeek: number;
+  // Working days this week not lost to out-of-office (numerator for OOO scaling).
+  availableWorkingDaysPerWeek: number;
+  // Candidate tasks the engine received for the category (drives scaleToTasks).
+  selectedTaskCount: number;
+}
+
+// The effective number of blocks to schedule for a category this plan, honouring
+// the capabilities that OVERRIDE a fixed weeklyCount:
+//   * `daily`        — one block per remaining working day (deep work leads every
+//                      day); out-of-office days are already gone from the count.
+//   * `scaleToTasks` — grouped categories whose block count scales with how many
+//                      tasks were selected: min(maxBlocks, ceil(selected /
+//                      tasksPerBlock)); ZERO selected tasks means ZERO blocks.
+// A plain fixed weeklyCount is scaled DOWN proportionally when out-of-office days
+// shrink the week: round(weeklyCount × available / configured), min 0 (e.g. a
+// weekly-3 category on a 4-of-5-day week → round(3 × 4/5) = 2).
+export function effectiveWeeklyCount(
+  quota: Pick<TaskQuota, 'weeklyCount' | 'daily' | 'scaleToTasks'>,
+  ctx: WeeklyCountContext
+): number {
+  if (quota.scaleToTasks) {
+    if (ctx.selectedTaskCount <= 0) return 0;
+    const { tasksPerBlock, maxBlocks } = quota.scaleToTasks;
+    return Math.min(maxBlocks, Math.ceil(ctx.selectedTaskCount / tasksPerBlock));
+  }
+  if (quota.daily) return ctx.remainingWorkingDays;
+  const base = quota.weeklyCount ?? 0;
+  if (base <= 0) return 0;
+  // No OOO (or misconfigured counts) → the quota is unchanged.
+  if (ctx.availableWorkingDaysPerWeek >= ctx.configuredWorkingDaysPerWeek || ctx.configuredWorkingDaysPerWeek <= 0) {
+    return base;
+  }
+  return Math.max(
+    0,
+    Math.round((base * ctx.availableWorkingDaysPerWeek) / ctx.configuredWorkingDaysPerWeek)
+  );
+}
+
 export function preferredWindowsForCategory(
   config: WorkflowConfig,
   category: string,
@@ -373,12 +472,20 @@ export interface WorkingWindow {
   workingDayNames: Set<string>;
   workRun: WorkRun;
   workingDays: WorkingDay[];
+  // Configured working days in a full week (size of workingDayNames), e.g. 5 for
+  // Mon–Fri. The denominator when scaling weekly quotas for lost days.
+  configuredWorkingDaysPerWeek: number;
+  // Working days in THIS week that are not out-of-office (full week, independent
+  // of the now-cutoff), e.g. 4 when one of five days is OOO. The numerator when
+  // scaling weekly quotas.
+  availableWorkingDaysPerWeek: number;
 }
 
 export function resolveWorkingWindow(
   scheduling: WorkflowConfig['scheduling'],
   weekStart: Date,
-  now: Date
+  now: Date,
+  outOfOfficeDates: Set<string> = new Set()
 ): WorkingWindow {
   const workingHoursStart = parseTimeOfDay(scheduling.workingHours.start) ?? { h: 9, m: 0 };
   const workingHoursEnd = parseTimeOfDay(scheduling.workingHours.end) ?? { h: 17, m: 0 };
@@ -390,13 +497,33 @@ export function resolveWorkingWindow(
     maxMinutes: scheduling.workRun?.maxMinutes ?? 120,
     bufferMinutes: scheduling.workRun?.bufferMinutes ?? 15,
   };
+  // Out-of-office days are dropped from the working days entirely.
   const workingDays = buildWorkingDays(
     weekStart,
     now,
     { start: workingHoursStart, end: workingHoursEnd },
-    workingDayNames
+    workingDayNames,
+    outOfOfficeDates
   );
-  return { workingHoursStart, workingHoursEnd, workingDayNames, workRun, workingDays };
+  // Full-week day accounting for weekly-quota scaling (independent of `now`, so a
+  // mid-week replan doesn't double-count against existing-scheduled subtraction).
+  const configuredWorkingDaysPerWeek = workingDayNames.size;
+  let availableWorkingDaysPerWeek = 0;
+  for (let i = 0; i < 7; i++) {
+    const day = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + i);
+    if (!workingDayNames.has(WEEKDAY_NAMES[day.getDay()])) continue;
+    if (outOfOfficeDates.has(localDateStr(day))) continue;
+    availableWorkingDaysPerWeek += 1;
+  }
+  return {
+    workingHoursStart,
+    workingHoursEnd,
+    workingDayNames,
+    workRun,
+    workingDays,
+    configuredWorkingDaysPerWeek,
+    availableWorkingDaysPerWeek,
+  };
 }
 
 // A working day must never START with meeting prep: deep work / todos / meetings
@@ -467,14 +594,14 @@ function mergeIntervals(
 // Compute the usable spare capacity across the given working days, given the busy
 // timeline (calendar busy + all accepted/proposed blocks) and the work-run rule.
 // Pure and deterministic — every input is passed in.
-// Usable minutes in a single free gap [gapStart, gapEnd], measured by the SAME
-// predicate placement uses (slotIsValid). We probe whether a real block of
-// MIN_USABLE_GAP_MINUTES could be placed: the usable span runs from the earliest
-// valid block start to the latest valid block end. If no such block fits under
-// the work-run rule, the gap yields 0 — so the review line can never advertise a
-// gap that placement would reject (e.g. a 45-min gap wedged between two ~100-min
-// runs, where any offset bridges a run past its max). `busy` is the full,
-// unclipped timeline so run lengths are computed exactly as in placement.
+// Usable minutes in a single free gap [gapStart, gapEnd], measured with the SAME
+// RELAXED semantics placement can fall back to (run-length cap IGNORED, only the
+// overlap prohibition applies). Since placement will, as a last resort, drop the
+// ~2h run cap to fill a visible gap (see findFlexibleSlot), spare capacity must
+// count that gap too — otherwise the review line would under-report free time the
+// planner would actually use. We still probe with a real MIN_USABLE_GAP_MINUTES
+// block so a sub-30-min sliver counts as zero. `busy` is the full, unclipped
+// timeline so overlaps are computed exactly as in placement.
 function usableGapMinutes(
   gapStart: number,
   gapEnd: number,
@@ -483,13 +610,15 @@ function usableGapMinutes(
 ): number {
   const blockMs = MIN_USABLE_GAP_MINUTES * MS_PER_MINUTE;
   const bufferMs = workRun.bufferMinutes * MS_PER_MINUTE;
+  // Run-cap ignored: only overlap matters, matching placement's relaxed fallback.
+  const relaxed: WorkRun = { maxMinutes: Infinity, bufferMinutes: workRun.bufferMinutes };
   const lo = gapStart;
   const hi = gapEnd - blockMs; // latest start that still fits the gap
   if (hi < lo) return 0;
   let firstValidStart: number | null = null;
   let lastValidEnd = 0;
   for (const start of candidateStarts(lo, hi, blockMs, bufferMs, busy)) {
-    if (slotIsValid(start, start + blockMs, busy, workRun)) {
+    if (slotIsValid(start, start + blockMs, busy, relaxed)) {
       if (firstValidStart === null) firstValidStart = start;
       lastValidEnd = start + blockMs;
     }
@@ -548,14 +677,34 @@ export function computeSpareCapacity(
   return { totalMinutes, gapCount, largestGapMinutes, byDate };
 }
 
-export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
+// A real task the engine could place nowhere. There is only ONE way this can
+// happen: no free gap long enough exists in working hours. The work-run cap can
+// never be the cause, because the soft rule (findFlexibleSlot) already retries
+// every placement with the cap dropped before a task is treated as leftover.
+export interface UnplaceableTask {
+  id: string; // gid or adhocId
+  title: string;
+  category: string;
+}
+
+// Clause explaining an unplaceable/overflow task, in the engine's reason style,
+// so the review UI can say WHY a task wasn't scheduled.
+const NO_FREE_GAP_CLAUSE = 'no free gap long enough in working hours';
+
+export function proposeBlocks(
+  input: ProposeBlocksInput,
+  unplaceableOut?: UnplaceableTask[]
+): ProposedBlock[] {
   const { config, candidateTasks } = input;
 
-  const { workingHoursEnd, workRun, workingDays } = resolveWorkingWindow(
-    config.scheduling,
-    input.weekStart,
-    input.now
-  );
+  const outOfOfficeDates = input.outOfOfficeDates ?? new Set<string>();
+  const {
+    workingHoursEnd,
+    workRun,
+    workingDays,
+    configuredWorkingDaysPerWeek,
+    availableWorkingDaysPerWeek,
+  } = resolveWorkingWindow(config.scheduling, input.weekStart, input.now, outOfOfficeDates);
 
   // Quotas in the capacity lib's shape, for classification reuse.
   const quotas: CapacityQuota[] = Object.entries(config.taskQuotas).map(([category, quota]) => ({
@@ -589,11 +738,27 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
   const remainingByCategory = new Map<string, number>();
   const noQuotaCategories = new Set<string>();
   for (const quota of quotas) {
-    const weeklyCount = quota.weeklyCount ?? 0;
+    // Effective target honours the `daily` / `scaleToTasks` overrides (see
+    // effectiveWeeklyCount) before falling back to the fixed weeklyCount.
+    const cfg = config.taskQuotas[quota.category];
+    const candidateCountForCat = (tasksByCategory.get(quota.category) ?? []).length;
+    const weeklyCount = cfg
+      ? effectiveWeeklyCount(cfg, {
+          remainingWorkingDays: workingDays.length,
+          configuredWorkingDaysPerWeek,
+          availableWorkingDaysPerWeek,
+          selectedTaskCount: candidateCountForCat,
+        })
+      : quota.weeklyCount ?? 0;
     if (weeklyCount <= 0) {
-      const candidateCount = (tasksByCategory.get(quota.category) ?? []).length;
-      if (candidateCount > 0) {
-        remainingByCategory.set(quota.category, candidateCount);
+      // A genuine no-quota catch-all (no weeklyCount, not daily/scaleToTasks)
+      // schedules one block per selected task. A scaleToTasks category that
+      // computed 0 (no tasks selected) is NOT a catch-all — it simply gets no
+      // blocks, so only route to the catch-all path when the config truly lacks a
+      // target mechanism.
+      const isCatchAll = !cfg?.daily && !cfg?.scaleToTasks && (cfg?.weeklyCount ?? 0) <= 0;
+      if (isCatchAll && candidateCountForCat > 0) {
+        remainingByCategory.set(quota.category, candidateCountForCat);
         noQuotaCategories.add(quota.category);
       }
       continue;
@@ -661,14 +826,15 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
   const findLeveledSlot = (
     catCount: Record<string, number>,
     windows: Window[],
-    duration: number
+    duration: number,
+    wr: WorkRun = workRun
   ) => {
     let slot: ReturnType<typeof findSlot> = null;
     for (let level = 0; level <= 7 && !slot; level++) {
       const allowed = new Set(
         workingDays.filter(wd => catCount[wd.dateStr] <= level).map(wd => wd.dateStr)
       );
-      slot = findSlot(windows, duration, workRun, busy, nowMs, allowed);
+      slot = findSlot(windows, duration, wr, busy, nowMs, allowed);
     }
     return slot;
   };
@@ -700,49 +866,68 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
   }
   mustDos.sort((a, b) => compareKeys(taskSortKey(a.task), taskSortKey(b.task)));
 
-  for (const { task, category } of mustDos) {
-    const remaining = remainingByCategory.get(category);
-    if (remaining === undefined || remaining <= 0) continue; // category quota already full
-    const taskId = task.gid ?? task.adhocId;
-    if (taskId && usedTaskIds.has(taskId)) continue;
-    const duration = (taskId && input.durationOverridesByTask?.[taskId]) || categoryDurationFor(category);
-    // Earliness beats spread for must-dos: the leveled search prefers the
-    // EMPTIEST day of the category (which is often Friday), so a must-do could
-    // land later than ordinary tasks. Reorder the windows so the earliest DAY
-    // strictly wins (preferred windows still tried before fallback within each
-    // day) and search without spread levels.
-    const windows = buildWindowsForTask(task.bestTime, preferredWindowsFor(category), workingDays)
-      .slice()
-      .sort((a, b) =>
-        a.dateStr !== b.dateStr
-          ? a.dateStr < b.dateStr ? -1 : 1
-          : a.preferred !== b.preferred
+  // Placed as a closure so the orchestration below can run it at the right moment:
+  // AFTER deep work has claimed the mornings, so must-dos slot in immediately
+  // after deep work rather than ahead of it.
+  const runMustDoPass = () => {
+    for (const { task, category } of mustDos) {
+      const remaining = remainingByCategory.get(category);
+      if (remaining === undefined || remaining <= 0) continue; // category quota already full
+      const taskId = task.gid ?? task.adhocId;
+      if (taskId && usedTaskIds.has(taskId)) continue;
+      const duration = (taskId && input.durationOverridesByTask?.[taskId]) || categoryDurationFor(category);
+      // Earliness beats spread for must-dos: the leveled search prefers the
+      // EMPTIEST day of the category (which is often Friday), so a must-do could
+      // land later than ordinary tasks. Reorder the windows TIER-FIRST: try every
+      // PREFERRED window (earliest day first, then start time) across the whole
+      // week before ANY fallback (whole-working-day) window. This keeps a must-do
+      // inside its category's preferred times — e.g. an afternoon category lands
+      // the next day's afternoon rather than invading a morning fallback slot that
+      // deep work / writing (whose category loop runs later) needs. Only once every
+      // preferred window is full does it drop to fallback, again earliest day first.
+      const windows = buildWindowsForTask(task.bestTime, preferredWindowsFor(category), workingDays)
+        .slice()
+        .sort((a, b) =>
+          a.preferred !== b.preferred
             ? a.preferred ? -1 : 1
-            : a.startMs - b.startMs
+            : a.dateStr !== b.dateStr
+              ? a.dateStr < b.dateStr ? -1 : 1
+              : a.startMs - b.startMs
+        );
+      const catCount = catCountByCategory.get(category)!;
+      // Soft run rule: full-strict, then cap-ignored (see findFlexibleSlot), so a
+      // must-do lands in its preferred window rather than overflowing when the only
+      // room slightly breaks the run rule. A must-do is a SINGLE task, so it is
+      // never trimmed (canShrink=false) — only its full length is tried.
+      const placement = findFlexibleSlot(
+        (dur, wr) => findSlot(windows, dur, wr, busy, nowMs),
+        duration,
+        workRun,
+        false
       );
-    const catCount = catCountByCategory.get(category)!;
-    const slot = findSlot(windows, duration, workRun, busy, nowMs);
-    if (!slot) continue; // leave unplaced; the main pass / overflow logic will see it
-    const start = timeStr(slot.startMs);
-    proposals.push({
-      id: `${slot.dateStr}-${start}-${category}`,
-      category,
-      task: {
-        gid: task.gid,
-        adhocId: task.adhocId,
-        title: task.title,
-        integrationId: task.integrationId,
-      },
-      date: slot.dateStr,
-      start,
-      durationMinutes: duration,
-      reason: buildReason(category, slot.preferred, task),
-    });
-    busy.push({ start: slot.startMs, end: slot.endMs });
-    catCount[slot.dateStr] = (catCount[slot.dateStr] ?? 0) + 1;
-    if (taskId) usedTaskIds.add(taskId);
-    remainingByCategory.set(category, remaining - 1);
-  }
+      if (!placement) continue; // leave unplaced; the main pass / overflow logic will see it
+      const { slot, duration: placedDuration } = placement;
+      const start = timeStr(slot.startMs);
+      proposals.push({
+        id: `${slot.dateStr}-${start}-${category}`,
+        category,
+        task: {
+          gid: task.gid,
+          adhocId: task.adhocId,
+          title: task.title,
+          integrationId: task.integrationId,
+        },
+        date: slot.dateStr,
+        start,
+        durationMinutes: placedDuration,
+        reason: buildReason(category, slot.preferred, task),
+      });
+      busy.push({ start: slot.startMs, end: slot.endMs });
+      catCount[slot.dateStr] = (catCount[slot.dateStr] ?? 0) + 1;
+      if (taskId) usedTaskIds.add(taskId);
+      remainingByCategory.set(category, remaining - 1);
+    }
+  };
 
   // Category processing order: a grouped category that holds a must-do task comes
   // FIRST so its shared containers land early in the week (its must-do can't move
@@ -777,7 +962,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
     return a < b ? -1 : a > b ? 1 : 0;
   });
 
-  for (const category of orderedCategories) {
+  const placeCategory = (category: string): void => {
     // Category-level block length: a per-category override, else the parsed
     // targetLength (default 30). Grouped/reserved blocks use this; a single-task
     // block may further override it per task (see below).
@@ -802,13 +987,27 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
     // block emits a ProposedBlock with `tasks` (the whole shared list) and no
     // single `task`, so every block shares the identical outreach agenda.
     if (grouped) {
-      const placed: Array<{ blockId: string; dateStr: string; start: string }> = [];
+      const placed: Array<{ blockId: string; dateStr: string; start: string; durationMinutes: number; trimmedMinutes: number }> = [];
       while (remaining > 0) {
         const windows = buildWindowsForTask(undefined, preferredWindows, workingDays);
-        const slot = findLeveledSlot(catCount, windows, categoryDuration);
-        if (!slot) break; // no more room this week for this category
+        // Soft run rule for each container (a grouped block is task time and may
+        // trim by 15 min to fit before the cap is dropped).
+        const placement = findFlexibleSlot(
+          (dur, wr) => findLeveledSlot(catCount, windows, dur, wr),
+          categoryDuration,
+          workRun,
+          true
+        );
+        if (!placement) break; // no more room this week for this category
+        const { slot, duration: placedDuration, trimmedMinutes } = placement;
         const start = timeStr(slot.startMs);
-        placed.push({ blockId: `${slot.dateStr}-${start}-${category}`, dateStr: slot.dateStr, start });
+        placed.push({
+          blockId: `${slot.dateStr}-${start}-${category}`,
+          dateStr: slot.dateStr,
+          start,
+          durationMinutes: placedDuration,
+          trimmedMinutes,
+        });
         busy.push({ start: slot.startMs, end: slot.endMs });
         catCount[slot.dateStr] = (catCount[slot.dateStr] ?? 0) + 1;
         remaining -= 1;
@@ -821,20 +1020,23 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
         integrationId: t.integrationId,
       }));
       for (const slot of placed) {
+        const trimmed = slot.trimmedMinutes > 0;
+        const trimNote = trimmed ? ` Trimmed ${slot.trimmedMinutes} min to fit.` : '';
         proposals.push({
           id: slot.blockId,
           category,
           tasks: agenda,
           date: slot.dateStr,
           start: slot.start,
-          durationMinutes: categoryDuration,
+          durationMinutes: slot.durationMinutes,
           reason:
-            agenda.length > 0
+            (agenda.length > 0
               ? `${category} block — ${agenda.length} task${agenda.length === 1 ? '' : 's'} on the agenda.`
-              : `Reserved ${category} time — no task assigned to this block.`,
+              : `Reserved ${category} time — no task assigned to this block.`) + trimNote,
+          ...(trimmed ? { trimmedFromMinutes: slot.durationMinutes + slot.trimmedMinutes } : {}),
         });
       }
-      continue;
+      return;
     }
 
     while (remaining > 0) {
@@ -855,8 +1057,19 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
         (taskId && input.durationOverridesByTask?.[taskId]) || categoryDuration;
 
       const windows = buildWindowsForTask(task?.bestTime, preferredWindows, workingDays);
-      const slot = findLeveledSlot(catCount, windows, duration);
-      if (!slot) {
+      // Soft run rule. This loop only ever runs for NON-grouped categories (grouped
+      // ones return early above), so NOTHING here is trimmable: a single-task block
+      // (Blogs, General Todos, ad-hoc) keeps its exact stated length, and so does a
+      // non-grouped reserved filler block. Only grouped/container blocks trim (see
+      // the grouped branch). canShrink=false → tiers a + c only (full strict, then
+      // full cap-ignored), never the 15-min shrink.
+      const placement = findFlexibleSlot(
+        (dur, wr) => findLeveledSlot(catCount, windows, dur, wr),
+        duration,
+        workRun,
+        false
+      );
+      if (!placement) {
         // No room left this week for this category inside working hours. A real
         // selected task becomes an evening-overflow candidate; the rest of this
         // category's remaining budget is collected too (they won't fit either).
@@ -879,6 +1092,9 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
         break;
       }
 
+      // Nothing in this (non-grouped) loop is trimmed, so placedDuration is always
+      // the full requested length.
+      const { slot, duration: placedDuration } = placement;
       const start = timeStr(slot.startMs);
       const blockId = `${slot.dateStr}-${start}-${category}`;
 
@@ -895,7 +1111,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
           },
           date: slot.dateStr,
           start,
-          durationMinutes: duration,
+          durationMinutes: placedDuration,
           reason: buildReason(category, slot.preferred, task),
         });
       } else {
@@ -904,7 +1120,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
           category,
           date: slot.dateStr,
           start,
-          durationMinutes: duration,
+          durationMinutes: placedDuration,
           reason: `Reserved ${category} time — quota not yet met and no matching task available.`,
         });
       }
@@ -914,7 +1130,19 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
       catCount[slot.dateStr] = (catCount[slot.dateStr] ?? 0) + 1;
       remaining -= 1;
     }
-  }
+  };
+
+  // --- Placement order ------------------------------------------------------
+  // 1. Deep work FIRST: it must lead every working day, so it claims the earliest
+  //    morning (preferred-window) slots before anything else competes for them.
+  // 2. Must-dos NEXT: they slot in immediately after deep work (non-deep must-dos
+  //    keep their tier-first preferred-window behaviour).
+  // 3. Everything else, in the computed category order.
+  const deepCategories = orderedCategories.filter(c => isDeepWork(c));
+  const otherCategories = orderedCategories.filter(c => !isDeepWork(c));
+  for (const category of deepCategories) placeCategory(category);
+  runMustDoPass();
+  for (const category of otherCategories) placeCategory(category);
 
   // --- Leftover retry in working hours -------------------------------------
   // Before falling to evening overflow, give every leftover a final, unrestricted
@@ -936,11 +1164,19 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
     .sort((a, b) => a.startMs - b.startMs);
   const stillLeftover: Array<{ task: CandidateTask; category: string; duration: number }> = [];
   for (const lo of leftovers) {
-    const slot = findSlot(workingHoursWindows, lo.duration, workRun, busy, nowMs);
-    if (!slot) {
+    // Leftovers are real SINGLE tasks — full length only (strict then cap-ignored),
+    // never trimmed. A leftover overflows only when no free gap fits its full length.
+    const placement = findFlexibleSlot(
+      (dur, wr) => findSlot(workingHoursWindows, dur, wr, busy, nowMs),
+      lo.duration,
+      workRun,
+      false
+    );
+    if (!placement) {
       stillLeftover.push(lo);
       continue;
     }
+    const { slot, duration: placedDuration } = placement;
     const start = timeStr(slot.startMs);
     proposals.push({
       id: `${slot.dateStr}-${start}-${lo.category}`,
@@ -953,7 +1189,7 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
       },
       date: slot.dateStr,
       start,
-      durationMinutes: lo.duration,
+      durationMinutes: placedDuration,
       reason: buildReason(lo.category, false, lo.task),
     });
     busy.push({ start: slot.startMs, end: slot.endMs });
@@ -973,22 +1209,29 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
   const overflowEnd = config.scheduling.overflow
     ? parseTimeOfDay(config.scheduling.overflow.end)
     : null;
-  if (overflowStart && overflowEnd && stillLeftover.length > 0) {
-    const overflowWindows: Window[] = workingDays
-      .map(day => ({
-        date: day.date,
-        dateStr: day.dateStr,
-        startMs: msAt(day.date, overflowStart),
-        endMs: msAt(day.date, overflowEnd),
-        preferred: false,
-        bestTimeMatch: false,
-      }))
-      .filter(w => w.endMs > w.startMs)
-      .sort((a, b) => a.startMs - b.startMs);
+  const overflowWindows: Window[] =
+    overflowStart && overflowEnd
+      ? workingDays
+          .map(day => ({
+            date: day.date,
+            dateStr: day.dateStr,
+            startMs: msAt(day.date, overflowStart),
+            endMs: msAt(day.date, overflowEnd),
+            preferred: false,
+            bestTimeMatch: false,
+          }))
+          .filter(w => w.endMs > w.startMs)
+          .sort((a, b) => a.startMs - b.startMs)
+      : [];
 
-    for (const lo of stillLeftover) {
-      const slot = findSlot(overflowWindows, lo.duration, workRun, busy, nowMs);
-      if (!slot) continue; // no room in the overflow window this week
+  for (const lo of stillLeftover) {
+    // Each leftover already failed the working-hours search with the run cap
+    // dropped, so it is simply out of free time. Either place an optional evening
+    // overflow block or report the task as fully unplaceable.
+    const slot = overflowWindows.length
+      ? findSlot(overflowWindows, lo.duration, workRun, busy, nowMs)
+      : null;
+    if (slot) {
       const start = timeStr(slot.startMs);
       proposals.push({
         id: `${slot.dateStr}-${start}-overflow-${lo.category}`,
@@ -1003,10 +1246,14 @@ export function proposeBlocks(input: ProposeBlocksInput): ProposedBlock[] {
         date: slot.dateStr,
         start,
         durationMinutes: lo.duration,
-        reason: `${lo.category} — didn't fit in working hours; optional evening overflow.`,
+        reason: `${lo.category} — didn't fit in working hours (${NO_FREE_GAP_CLAUSE}); optional evening overflow.`,
         overflow: true,
       });
       busy.push({ start: slot.startMs, end: slot.endMs });
+    } else if (unplaceableOut) {
+      // Fully unplaceable: no working-hours slot and no evening overflow slot.
+      const id = lo.task.gid ?? lo.task.adhocId;
+      if (id) unplaceableOut.push({ id, title: lo.task.title, category: lo.category });
     }
   }
 

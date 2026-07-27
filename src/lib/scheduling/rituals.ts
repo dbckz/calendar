@@ -38,8 +38,8 @@ export const LUNCH_TITLE = '🍽️ Lunch';
 export const EXERCISE_TITLE = '🏋️ Exercise';
 export const EMAILS_TITLE = '📧 Emails';
 // WORK-type rituals (they count toward work runs, coloured yellow like tasks).
-// Kindle notes is a DAILY ritual; grooming + retro are WEEKLY (placed once per
-// week, deduped by title across the whole week).
+// Kindle notes is WEEKLY x2 (placed on two distinct days a week); grooming + retro
+// are WEEKLY x1 (placed once per week, deduped by title across the whole week).
 export const KINDLE_TITLE = '📚 Kindle notes';
 export const GROOMING_TITLE = '🧹 Backlog grooming';
 export const RETRO_TITLE = '🔄 Retrospective';
@@ -69,13 +69,16 @@ export type RitualKind =
   | 'break';
 
 // Ritual cadence. Daily rituals are placed on (and deduped per) each working day;
-// weekly rituals are placed ONCE for the whole week and deduped by title across
-// every day (skip if the title is present on any day).
+// weekly rituals are placed a fixed number of times across the week (once for
+// grooming/retro, twice for kindle notes) on distinct days, deduped by title.
 export type RitualCadence = 'daily' | 'weekly';
 export function ritualCadenceForTitle(title: string): RitualCadence {
   const t = title.trim();
-  return t === GROOMING_TITLE || t === RETRO_TITLE ? 'weekly' : 'daily';
+  return t === GROOMING_TITLE || t === RETRO_TITLE || t === KINDLE_TITLE ? 'weekly' : 'daily';
 }
+
+// How many times a WEEKLY ritual is placed across the week (on distinct days).
+export const KINDLE_WEEKLY_COUNT = 2;
 
 // Lunch + exercise + break are breaks (split work runs); emails counts as work.
 // A calendar event titled exactly like any of them is treated as a break by the
@@ -191,6 +194,8 @@ export interface ProposeRitualsInput {
   // (exact-match on "🍽️ Lunch" / "📧 Emails"), so an existing ritual is not
   // duplicated. Keyed by yyyy-MM-dd.
   existingRitualTitlesByDate: Record<string, Set<string>>;
+  // Out-of-office dates (yyyy-MM-dd) to drop from working days — no rituals there.
+  outOfOfficeDates?: Set<string>;
 }
 
 // Absolute ms for an hour/minute on a working day (local).
@@ -302,6 +307,7 @@ export function placeWeekRituals(params: {
   busyIntervals: BusyInterval[];
   weekStart: Date;
   now: Date;
+  outOfOfficeDates?: Set<string>;
 }): ProposedBlock[] {
   return proposeRitualBlocks({
     config: params.config,
@@ -309,6 +315,7 @@ export function placeWeekRituals(params: {
     weekStart: params.weekStart,
     now: params.now,
     existingRitualTitlesByDate: existingRitualTitlesByDateFromEvents(params.weekEvents),
+    outOfOfficeDates: params.outOfOfficeDates,
   });
 }
 
@@ -366,7 +373,8 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
   const { workingDays, workRun, workingHoursEnd } = resolveWorkingWindow(
     config.scheduling,
     weekStart,
-    now
+    now,
+    input.outOfOfficeDates
   );
   const nowMs = now.getTime();
   const durationMs = RITUAL_DURATION_MINUTES * MS_PER_MINUTE;
@@ -509,10 +517,26 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
       }
     }
 
-    // --- Kindle notes (work) — DAILY, 30 min, afternoon preference (12:00
-    // onward), any free run-rule-valid slot, whole-day fallback. Skip the day
-    // only when nothing fits. ---
-    if (!present.has(KINDLE_TITLE)) {
+  }
+
+  // --- Weekly rituals (placed a fixed number of times across the week, on
+  // distinct days, deduped by title). Placed after the daily rituals so they
+  // flow around them. ---
+
+  // Kindle notes (work) — WEEKLY x2, 30 min each, afternoon preference: place on
+  // up to two DISTINCT working days (earliest-day-first), skipping any day that
+  // already has a kindle event. Existing kindle events across the week count
+  // toward the two, so a mid-week re-run tops up rather than re-adding.
+  {
+    let kindleExisting = 0;
+    for (const set of Object.values(existingRitualTitlesByDate)) {
+      if (set.has(KINDLE_TITLE)) kindleExisting += 1;
+    }
+    let kindleToPlace = Math.max(0, KINDLE_WEEKLY_COUNT - kindleExisting);
+    for (const day of workingDays) {
+      if (kindleToPlace <= 0) break;
+      const present = existingRitualTitlesByDate[day.dateStr] ?? new Set<string>();
+      if (present.has(KINDLE_TITLE)) continue; // day already has one
       const slot = findSlot(
         afternoonWorkWindows([day], workingHoursEnd),
         KINDLE_DURATION_MINUTES,
@@ -520,25 +544,22 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
         busy,
         nowMs
       );
-      if (slot) {
-        const start = timeStr(slot.startMs);
-        proposals.push({
-          id: `${day.dateStr}-${start}-ritual-kindle`,
-          category: 'Kindle notes',
-          kind: 'ritual',
-          title: KINDLE_TITLE,
-          date: day.dateStr,
-          start,
-          durationMinutes: KINDLE_DURATION_MINUTES,
-          reason: 'Daily Kindle notes processing.',
-        });
-        busy.push({ start: slot.startMs, end: slot.endMs }); // work — forms runs
-      }
+      if (!slot) continue;
+      const start = timeStr(slot.startMs);
+      proposals.push({
+        id: `${day.dateStr}-${start}-ritual-kindle`,
+        category: 'Kindle notes',
+        kind: 'ritual',
+        title: KINDLE_TITLE,
+        date: day.dateStr,
+        start,
+        durationMinutes: KINDLE_DURATION_MINUTES,
+        reason: 'Kindle notes processing (twice weekly).',
+      });
+      busy.push({ start: slot.startMs, end: slot.endMs }); // work — forms runs
+      kindleToPlace -= 1;
     }
   }
-
-  // --- Weekly rituals (placed once for the whole week, deduped by title across
-  // every day). Placed after the daily rituals so they flow around them. ---
 
   // Backlog grooming (work) — WEEKLY, 60 min: any working day with a free
   // run-valid hour, earliest-day-first, afternoon preference.

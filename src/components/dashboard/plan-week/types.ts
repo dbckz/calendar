@@ -20,7 +20,7 @@ export interface ReminderTriageRow {
   id: string; // Google Task id
   name: string; // editable task name (prefilled from the reminder text)
   notes: string; // editable notes (prefilled from the reminder's notes)
-  action: 'keep' | 'convert';
+  action: 'keep' | 'convert' | 'done' | 'delete';
   integrationId: string; // chosen Asana integration/workspace
   projectGid: string; // '' = no project
   taskType: string; // '' = no type / not applicable for this workspace

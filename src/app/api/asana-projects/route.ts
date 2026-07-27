@@ -40,6 +40,7 @@ export async function GET() {
             name: project.name,
             integrationId: integration.id,
             integrationName: integration.name,
+            modifiedAt: project.modifiedAt,
           });
         }
       } catch (err) {

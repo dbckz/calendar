@@ -22,9 +22,10 @@ export const BREAK_DURATION_MINUTES = 15;
 // run. A run is a continuous stretch of NON-break busy time (breaks — lunch /
 // exercise — split runs), formed by bridging gaps strictly smaller than the
 // work-run buffer, exactly as the run rule does. A break is proposed at a run's
-// end only when it is followed by more busy time that day (i.e. it is not the
-// final run) and the 15-min break fits in the gap before the next run within
-// working hours.
+// end only when the run is LONG (>= 75% of workRun.maxMinutes — i.e. a genuinely
+// maxed-out ~2h focus run, not a short 30-min run that needs no break), it is
+// followed by more busy time that day (i.e. it is not the final run), and the
+// 15-min break fits in the gap before the next run within working hours.
 export function proposeBreakBlocks(params: {
   workingDays: WorkingDay[];
   busyIntervals: BusyInterval[];
@@ -35,6 +36,9 @@ export function proposeBreakBlocks(params: {
   const nowMs = now.getTime();
   const bufferMs = workRun.bufferMinutes * MS_PER_MINUTE;
   const breakMs = BREAK_DURATION_MINUTES * MS_PER_MINUTE;
+  // Only a long, maxed-out run earns a break: at least 75% of the work-run cap
+  // (90 min with the default 120). A shorter run needs no mid-flow break.
+  const minRunMs = Math.round(workRun.maxMinutes * 0.75) * MS_PER_MINUTE;
   const proposals: ProposedBlock[] = [];
 
   // Only NON-break busy time forms work runs (a break already splits a run) —
@@ -77,6 +81,7 @@ export function proposeBreakBlocks(params: {
     for (let i = 0; i < runs.length - 1; i++) {
       const runEnd = runs[i].end;
       const nextStart = runs[i + 1].start;
+      if (runEnd - runs[i].start < minRunMs) continue; // short run — no break needed
       if (runEnd < nowMs) continue;
       if (nextStart - runEnd < breakMs) continue;
       if (runEnd + breakMs > winEnd) continue;

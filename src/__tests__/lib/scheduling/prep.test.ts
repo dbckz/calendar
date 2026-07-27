@@ -254,9 +254,43 @@ describe('proposePrepBlocks', () => {
     expect(placed[0].date).toBe('2026-07-15'); // Wednesday, the chosen day
   });
 
-  it('falls back to the default search when the preferred day is full', () => {
-    // Wednesday meeting; user prefers Monday, but Monday is fully busy. Placement
-    // falls back to the default day-before (Tuesday) search so prep isn't lost.
+  it('falls back to a PRECEDING day when the preferred day is full (never a later day)', () => {
+    // Friday meeting; user prefers Wednesday, but Wednesday is fully busy. Placement
+    // walks BACK to Tuesday (a preceding day), never forward to Thursday.
+    const startMs = new Date(2026, 6, 17, 14, 0).getTime(); // Fri 14:00
+    const wednesdayFull: BusyInterval = {
+      start: new Date(2026, 6, 15, 9, 0),
+      end: new Date(2026, 6, 15, 17, 0),
+    };
+    const { placed, unplaced } = run({
+      meetings: [meeting({ startMs, preferredDate: '2026-07-15' })],
+      busyIntervals: [wednesdayFull],
+    });
+    expect(unplaced).toHaveLength(0);
+    expect(placed).toHaveLength(1);
+    expect(placed[0].date).toBe('2026-07-14'); // Tuesday, the preceding day
+  });
+
+  it('walks back across multiple full preceding days to the first that fits', () => {
+    // Friday meeting; user prefers Thursday. Thursday and Wednesday are full, so
+    // prep lands on Tuesday (the next earlier working day with room).
+    const startMs = new Date(2026, 6, 17, 14, 0).getTime(); // Fri 14:00
+    const busy: BusyInterval[] = [
+      { start: new Date(2026, 6, 16, 9, 0), end: new Date(2026, 6, 16, 17, 0) }, // Thu full
+      { start: new Date(2026, 6, 15, 9, 0), end: new Date(2026, 6, 15, 17, 0) }, // Wed full
+    ];
+    const { placed, unplaced } = run({
+      meetings: [meeting({ startMs, preferredDate: '2026-07-16' })],
+      busyIntervals: busy,
+    });
+    expect(unplaced).toHaveLength(0);
+    expect(placed[0].date).toBe('2026-07-14'); // Tuesday
+  });
+
+  it('never slides a preferred-day prep to a LATER day: unplaced when the chosen day is the earliest and full', () => {
+    // Wednesday meeting; user prefers Monday (which is today, the earliest working
+    // day) but Monday is full. There is no preceding day, and we never slide to
+    // Tuesday/Wednesday, so the meeting is left unplaced.
     const startMs = new Date(2026, 6, 15, 14, 0).getTime(); // Wed 14:00
     const mondayFull: BusyInterval = {
       start: new Date(2026, 6, 13, 9, 0),
@@ -266,9 +300,8 @@ describe('proposePrepBlocks', () => {
       meetings: [meeting({ startMs, preferredDate: '2026-07-13' })],
       busyIntervals: [mondayFull],
     });
-    expect(unplaced).toHaveLength(0);
-    expect(placed).toHaveLength(1);
-    expect(placed[0].date).toBe('2026-07-14'); // Tuesday, the default day-before
+    expect(placed).toHaveLength(0);
+    expect(unplaced).toHaveLength(1);
   });
 
 });

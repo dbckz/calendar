@@ -239,6 +239,8 @@ export interface ReplanInput {
   // working day missing a ritual gets an `additions` proposal (exercise is the
   // number-one priority and must land every working day). Omit to skip additions.
   existingRitualTitlesByDate?: Record<string, Set<string>>;
+  // Out-of-office dates (yyyy-MM-dd) to drop from working days when re-slotting.
+  outOfOfficeDates?: Set<string>;
 }
 
 // A break block that now conflicts with a meeting. Breaks have no fixed home, so
@@ -337,7 +339,8 @@ export function planReplan(input: ReplanInput): ReplanResult {
   const { workingHoursEnd, workRun, workingDays } = resolveWorkingWindow(
     config.scheduling,
     weekStart,
-    now
+    now,
+    input.outOfOfficeDates
   );
 
   const otherBusyMs: BusyMs[] = input.otherBusy.map(i => ({

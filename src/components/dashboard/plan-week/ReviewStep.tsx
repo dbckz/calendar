@@ -8,6 +8,7 @@ import type {
   ConfirmWeekResult,
   WeekCandidateCategory,
   SpareCapacity,
+  UnplaceableTaskRow,
 } from '@/lib/api';
 import { categoryColor, timeRange, roughDuration } from './helpers';
 import type { EditableProposal } from './types';
@@ -23,10 +24,37 @@ interface ReviewStepProps {
   results: Record<string, ConfirmWeekResult>;
   hasResults: boolean;
   spareCapacity: SpareCapacity | null;
+  // Real tasks the engine couldn't place anywhere. Absent on older callers —
+  // treated as []. Used to explain WHY an unplaced task couldn't be scheduled.
+  unplaceable?: UnplaceableTaskRow[];
+  // Remaining working days (yyyy-MM-dd, out-of-office excluded) offered as the
+  // per-row day-picker options for evening-overflow blocks. Absent → no picker.
+  overflowDayOptions?: string[];
   toggleAccept: (id: string) => void;
   editStart: (id: string, start: string) => void;
+  // Change an overflow block's DAY (keeps its chosen time). The confirm path uses
+  // the edited date.
+  editDate: (id: string, date: string) => void;
   addMoreTasks: () => void;
 }
+
+// A "75 min · trimmed from 90" badge for a block the soft work-run rule shortened
+// to fit. Renders nothing when the block is at its full requested length.
+function TrimBadge({ block }: { block: EditableProposal }) {
+  if (!block.trimmedFromMinutes || block.trimmedFromMinutes <= block.durationMinutes) return null;
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-orange-100 text-orange-700 flex-shrink-0"
+      title={`Trimmed from ${block.trimmedFromMinutes} min to fit the schedule`}
+    >
+      {block.durationMinutes} min · trimmed from {block.trimmedFromMinutes}
+    </span>
+  );
+}
+
+// Clause appended to a task the engine reported as unplaceable, so the "could
+// not be scheduled" warning says why.
+const UNPLACEABLE_REASON_TEXT = 'no free gap long enough';
 
 export function ReviewStep({
   proposals,
@@ -39,8 +67,11 @@ export function ReviewStep({
   results,
   hasResults,
   spareCapacity,
+  unplaceable = [],
+  overflowDayOptions = [],
   toggleAccept,
   editStart,
+  editDate,
   addMoreTasks,
 }: ReviewStepProps) {
   if (proposals.length === 0) {
@@ -66,6 +97,8 @@ export function ReviewStep({
   }
   const titleById = new Map<string, string>();
   for (const cat of taskCats ?? []) for (const c of cat.candidates) titleById.set(c.id, c.title);
+  // Tasks the engine reported as placeable nowhere, so the warning can say WHY.
+  const unplaceableIds = new Set(unplaceable.map(u => u.id));
   // Must-dos with no slot at all → hard warning; must-dos only in overflow →
   // soft "tick it" notice; anything in working hours is fine.
   const unplacedMustDo = [...mustDoIds].filter(
@@ -87,7 +120,12 @@ export function ReviewStep({
             </p>
             <ul className="space-y-0.5">
               {unplacedMustDo.map(id => (
-                <li key={id}>{titleById.get(id) ?? id}</li>
+                <li key={id}>
+                  {titleById.get(id) ?? id}
+                  {unplaceableIds.has(id) && (
+                    <span className="text-red-500"> — {UNPLACEABLE_REASON_TEXT}</span>
+                  )}
+                </li>
               ))}
             </ul>
           </div>
@@ -218,6 +256,7 @@ export function ReviewStep({
                             Must do
                           </span>
                         )}
+                        <TrimBadge block={p} />
                       </div>
                       {/* Grouped block: list its assigned tasks as an agenda. */}
                       {isGrouped && p.tasks!.length > 0 && (
@@ -306,8 +345,29 @@ export function ReviewStep({
                           Must do
                         </span>
                       )}
+                      <TrimBadge block={p} />
                     </div>
                   </div>
+                  {/* Day picker: move the overflow block to any remaining working
+                      day (keeps its chosen time). */}
+                  {overflowDayOptions.length > 0 && (
+                    <select
+                      value={overflowDayOptions.includes(p.date) ? p.date : ''}
+                      onChange={e => editDate(p.id, e.target.value)}
+                      disabled={hasResults}
+                      aria-label="Overflow day"
+                      className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white"
+                    >
+                      {!overflowDayOptions.includes(p.date) && (
+                        <option value="">{format(parseISO(p.date), 'EEE, MMM d')}</option>
+                      )}
+                      {overflowDayOptions.map(d => (
+                        <option key={d} value={d}>
+                          {format(parseISO(d), 'EEE, MMM d')}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <input
                     type="time"
                     value={p.start}

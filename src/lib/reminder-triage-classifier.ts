@@ -28,6 +28,9 @@ export interface WorkspaceCatalogEntry {
 // dropdowns make it correctable.
 export interface ReminderSuggestion {
   id: string;
+  // Whether this reminder is worth promoting into Asana ("convert") or is a
+  // quick personal nudge best left as a reminder ("keep").
+  action: 'keep' | 'convert';
   integrationId: string;
   projectGid: string;
   taskType: string;
@@ -53,13 +56,14 @@ Available Asana workspaces (choose one by its EXACT name):
 ${catalogue}
 
 Rules:
+- "action": "convert" or "keep". Choose "keep" for quick personal errands or one-off nudges that don't belong in a task manager (e.g. "go to dry cleaner", "get keys cut", "watch this video"). Choose "convert" for substantive work items, multi-step projects, or anything you'd track or delegate in Asana.
 - "workspace": the exact workspace name from the list above that best fits the reminder's subject (e.g. work vs. a specific client/org).
 - "project": the exact project name from THAT chosen workspace's projects, or "" if none fits or the workspace has no projects. Never use a project from a different workspace.
 - "type": the exact type label from THAT chosen workspace's types, or "" if none clearly fits or the workspace has no types.
 - Copy names/labels EXACTLY as written above — same words, punctuation and capitalisation. Do not invent values.
 
 For EACH reminder below, output one object. Return ONLY a JSON array, no prose, no code fences:
-[{"id":"<id>","workspace":"<exact workspace name>","project":"<exact project name or empty>","type":"<exact type label or empty>"}]
+[{"id":"<id>","action":"keep|convert","workspace":"<exact workspace name>","project":"<exact project name or empty>","type":"<exact type label or empty>"}]
 
 Reminders:
 ${lines.join('\n')}`;
@@ -89,8 +93,12 @@ export function resolveSuggestions(
     const typeLabel = typeof r.type === 'string' ? r.type : '';
     const taskType = ws.types.includes(typeLabel) ? typeLabel : '';
 
+    // Invalid/missing action falls back to the safe default of keeping it.
+    const action = r.action === 'convert' ? 'convert' : 'keep';
+
     out.push({
       id,
+      action,
       integrationId: ws.integrationId,
       projectGid: project?.gid ?? '',
       taskType,

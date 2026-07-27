@@ -73,7 +73,7 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
     setIsResetting(true);
     setError(null);
     try {
-      await api.resetWeek();
+      await api.resetWeek(weekStart);
       // Hand off to the caller: close this modal and open the Plan-week wizard.
       onStartFromScratch?.();
     } catch (err) {
@@ -81,7 +81,7 @@ export function ReplanWeekModal({ isOpen, onClose, onApplied, onStartFromScratch
       setIsResetting(false);
       setResetConfirm(false);
     }
-  }, [onStartFromScratch]);
+  }, [onStartFromScratch, weekStart]);
 
   if (!isOpen) return null;
 

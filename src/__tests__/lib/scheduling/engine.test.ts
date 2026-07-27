@@ -12,6 +12,7 @@ import {
   type WorkRun,
   type WorkingDay,
   type Window,
+  type UnplaceableTask,
 } from '@/lib/scheduling/engine';
 import type { CandidateTask, ProposeBlocksInput } from '@/lib/scheduling/types';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
@@ -766,6 +767,519 @@ describe('proposeBlocks - must-do first pass', () => {
   });
 });
 
+describe('proposeBlocks - daily categories (one block per working day)', () => {
+  const deepDailyConfig = (scheduling: Partial<WorkflowConfig['scheduling']> = {}) =>
+    makeConfig({
+      quotas: {
+        'Writing/Deep Work': {
+          weeklyCount: 3,
+          targetLength: '1.5h',
+          grouped: true,
+          daily: true,
+          preferredTimes: ['08:30-11:00'],
+        },
+      },
+      typeMapping: { 'Writing/Deep Work': ['deep'] },
+      scheduling: { workingHours: { start: '08:30', end: '17:00' }, ...scheduling },
+    });
+
+  it('places one deep-work block per working day (5 days → 5 blocks, distinct days, mornings)', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: deepDailyConfig({ workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] }),
+        candidateTasks: ['a', 'b', 'c'].map(g => task({ gid: g, typeSignals: ['deep'] })),
+      })
+    );
+    const deep = proposals.filter(p => p.category === 'Writing/Deep Work');
+    expect(deep).toHaveLength(5); // one per working day, overriding weeklyCount 3
+    expect(new Set(deep.map(p => p.date)).size).toBe(5); // distinct days
+    expect(deep.every(p => p.start >= '08:30' && p.start < '11:00')).toBe(true);
+  });
+
+  it('scales down to one block per REMAINING day when fewer days are in the window', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: deepDailyConfig({ workingDays: ['Monday', 'Tuesday'] }),
+        candidateTasks: [task({ gid: 'a', typeSignals: ['deep'] })],
+      })
+    );
+    const deep = proposals.filter(p => p.category === 'Writing/Deep Work');
+    expect(deep).toHaveLength(2); // two working days → two blocks
+    expect(new Set(deep.map(p => p.date)).size).toBe(2);
+  });
+
+  it('subtracts existing scheduled deep-work blocks from the daily count', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: deepDailyConfig({ workingDays: ['Monday', 'Tuesday', 'Wednesday'] }),
+        candidateTasks: [task({ gid: 'a', typeSignals: ['deep'] })],
+        existingScheduledCounts: { 'Writing/Deep Work': 1 },
+      })
+    );
+    // 3 working days minus 1 already scheduled = 2 new blocks.
+    expect(proposals.filter(p => p.category === 'Writing/Deep Work')).toHaveLength(2);
+  });
+});
+
+describe('proposeBlocks - deep work placed before must-dos', () => {
+  it('deep work claims the morning; a morning-preferred must-do slots in AFTER it', () => {
+    // Monday only. Deep work (daily, grouped) prefers 08:30-11:00; a Blogs must-do
+    // prefers a morning-inclusive 08:30-16:00 window. Deep work must take 08:30
+    // and the must-do must land after it, not steal the 08:30 slot.
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: {
+            'Writing/Deep Work': {
+              weeklyCount: 1,
+              targetLength: '1.5h',
+              grouped: true,
+              daily: true,
+              preferredTimes: ['08:30-11:00'],
+            },
+            Blogs: { weeklyCount: 1, targetLength: '1h', preferredTimes: ['08:30-16:00'] },
+          },
+          typeMapping: { 'Writing/Deep Work': ['deep'], Blogs: ['blog'] },
+          scheduling: { workingDays: ['Monday'], workingHours: { start: '08:30', end: '17:00' } },
+        }),
+        candidateTasks: [
+          task({ gid: 'd', typeSignals: ['deep'] }),
+          task({ gid: 'must', typeSignals: ['blog'], isPriority: true }),
+        ],
+      })
+    );
+    const deep = proposals.find(p => p.category === 'Writing/Deep Work');
+    const blog = proposals.find(p => p.task?.gid === 'must');
+    expect(deep!.start).toBe('08:30');
+    expect(blog).toBeDefined();
+    // The must-do is pushed past deep work's 08:30-10:00 run (+ buffer), never 08:30.
+    expect(blog!.start >= '10:00').toBe(true);
+  });
+});
+
+describe('proposeBlocks - scaleToTasks (block count scales with selected tasks)', () => {
+  const batchConfig = () =>
+    makeConfig({
+      quotas: {
+        Batch: {
+          weeklyCount: 2,
+          targetLength: '15min',
+          grouped: true,
+          autoSelect: true,
+          scaleToTasks: { tasksPerBlock: 7, maxBlocks: 3 },
+          preferredTimes: [],
+        },
+      },
+      typeMapping: { Batch: ['batch'] },
+      scheduling: { workingHours: { start: '08:30', end: '18:00' } },
+    });
+  const batchTasks = (n: number) =>
+    Array.from({ length: n }, (_, i) => task({ gid: `b${i}`, typeSignals: ['batch'] }));
+
+  it('schedules ZERO blocks when no tasks are selected (overrides weeklyCount)', () => {
+    const proposals = proposeBlocks(makeInput({ config: batchConfig(), candidateTasks: [] }));
+    expect(proposals.filter(p => p.category === 'Batch')).toHaveLength(0);
+  });
+
+  it('1–7 tasks → 1 block, carrying the full agenda', () => {
+    const proposals = proposeBlocks(makeInput({ config: batchConfig(), candidateTasks: batchTasks(7) }));
+    const batch = proposals.filter(p => p.category === 'Batch');
+    expect(batch).toHaveLength(1);
+    expect(batch[0].tasks!.map(t => t.gid).sort()).toEqual(batchTasks(7).map(t => t.gid).sort());
+    expect(batch[0].durationMinutes).toBe(15);
+  });
+
+  it('8 tasks → 2 blocks (ceil(8/7))', () => {
+    const proposals = proposeBlocks(makeInput({ config: batchConfig(), candidateTasks: batchTasks(8) }));
+    expect(proposals.filter(p => p.category === 'Batch')).toHaveLength(2);
+  });
+
+  it('caps at maxBlocks (15 tasks → 3, not 3-plus)', () => {
+    const proposals = proposeBlocks(makeInput({ config: batchConfig(), candidateTasks: batchTasks(15) }));
+    expect(proposals.filter(p => p.category === 'Batch')).toHaveLength(3);
+  });
+});
+
+describe('proposeBlocks - out-of-office days', () => {
+  it('drops the OOO day and scales weekly quotas: deep 4, Engagement 2, Blogs 2 (5-day week, 1 OOO)', () => {
+    const FRIDAY = '2026-07-17';
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: {
+            'Writing/Deep Work': {
+              weeklyCount: 3,
+              targetLength: '1.5h',
+              grouped: true,
+              daily: true,
+              preferredTimes: ['08:30-11:00'],
+            },
+            'Engagement/Outreach': {
+              weeklyCount: 3,
+              targetLength: '1h',
+              grouped: true,
+              preferredTimes: ['13:00-17:00'],
+            },
+            Blogs: { weeklyCount: 2, targetLength: '1h', preferredTimes: ['08:30-16:00'] },
+          },
+          typeMapping: {
+            'Writing/Deep Work': ['deep'],
+            'Engagement/Outreach': ['engage'],
+            Blogs: ['blog'],
+          },
+          scheduling: {
+            workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+            workingHours: { start: '08:30', end: '19:00' },
+          },
+        }),
+        candidateTasks: [],
+        outOfOfficeDates: new Set([FRIDAY]),
+      })
+    );
+    // Daily deep work: one per REMAINING working day (Mon–Thu) = 4, none on Friday.
+    expect(proposals.filter(p => p.category === 'Writing/Deep Work')).toHaveLength(4);
+    // Weekly quotas scale by 4/5: Engagement round(3×4/5)=2, Blogs round(2×4/5)=2.
+    expect(proposals.filter(p => p.category === 'Engagement/Outreach')).toHaveLength(2);
+    expect(proposals.filter(p => p.category === 'Blogs')).toHaveLength(2);
+    // Nothing is scheduled on the out-of-office day.
+    expect(proposals.every(p => p.date !== FRIDAY)).toBe(true);
+  });
+});
+
+describe('proposeBlocks - soft work-run rule (4-tier search)', () => {
+  it('TIER A: places the full duration when the run rule is satisfied (no trim)', () => {
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 1, targetLength: '1.5h', preferredTimes: ['08:30-14:00'] } },
+          scheduling: { workingDays: ['Monday'], workingHours: { start: '08:30', end: '17:00' } },
+        }),
+        candidateTasks: [task({ gid: 'a' })],
+      })
+    );
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].start).toBe('08:30');
+    expect(proposals[0].durationMinutes).toBe(90); // full, untrimmed
+    expect(proposals[0].reason).not.toMatch(/trimmed/i);
+  });
+
+  it('TIER B: trims a CONTAINER block 15 min so a strict placement fits', () => {
+    // Only free gap is the morning 08:30-10:00; the rest of the day is busy from
+    // 10:00. A grouped (container) block can't fit strictly at full 90 min
+    // (08:30-10:00 abuts the busy block), but trims to 75 min (08:30-09:45, then a
+    // 15-min buffer) and leads the morning. Containers ARE trimmable.
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: {
+            'Writing/Deep Work': {
+              weeklyCount: 1,
+              targetLength: '1.5h',
+              grouped: true,
+              daily: true,
+              preferredTimes: ['08:30-11:00'],
+            },
+          },
+          typeMapping: { 'Writing/Deep Work': ['deep'] },
+          scheduling: { workingDays: ['Monday'], workingHours: { start: '08:30', end: '17:00' } },
+        }),
+        candidateTasks: [task({ gid: 'd', typeSignals: ['deep'] })],
+        busyIntervals: [{ start: new Date(2026, 6, 13, 10, 0), end: new Date(2026, 6, 13, 17, 0) }],
+      })
+    );
+    const deep = proposals.find(p => p.category === 'Writing/Deep Work');
+    expect(deep!.start).toBe('08:30');
+    expect(deep!.durationMinutes).toBe(75); // trimmed one 15-min step
+    expect(deep!.trimmedFromMinutes).toBe(90); // original length surfaced for the UI
+    expect(deep!.reason).toMatch(/trimmed 15 min to fit/i);
+  });
+
+  it('a SINGLE-task Blogs block is never trimmed: full length via the cap-ignored tier', () => {
+    // Morning-only squeeze (free 08:30-10:00, busy after). A 90-min Blogs block is
+    // a single-task block: it must NOT trim to 75. It takes the full 90 via tier
+    // (c) (cap ignored), flush 08:30-10:00.
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Blogs: { weeklyCount: 1, targetLength: '1.5h', preferredTimes: ['08:30-11:00'] } },
+          typeMapping: { Blogs: ['blog'] },
+          scheduling: { workingDays: ['Monday'], workingHours: { start: '08:30', end: '17:00' } },
+        }),
+        candidateTasks: [task({ gid: 'b', typeSignals: ['blog'] })],
+        busyIntervals: [{ start: new Date(2026, 6, 13, 10, 0), end: new Date(2026, 6, 13, 17, 0) }],
+      })
+    );
+    const blog = proposals.find(p => p.category === 'Blogs');
+    expect(blog!.start).toBe('08:30');
+    expect(blog!.durationMinutes).toBe(90); // full length, NOT trimmed
+    expect(blog!.trimmedFromMinutes).toBeUndefined();
+  });
+
+  it('a 90-min Blogs block is placed full or NOT AT ALL — never trimmed to fit a 75-min gap', () => {
+    // The only free gap is 75 min (09:00-10:15). A container would trim to 75, but
+    // Blogs is single-task: it must NOT shrink. With no overflow window it goes
+    // unplaced rather than being trimmed.
+    const unplaceable: UnplaceableTask[] = [];
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Blogs: { weeklyCount: 1, targetLength: '1.5h', preferredTimes: ['08:30-16:00'] } },
+          typeMapping: { Blogs: ['blog'] },
+          scheduling: { workingDays: ['Monday'], workingHours: { start: '08:30', end: '17:00' } },
+        }),
+        candidateTasks: [task({ gid: 'b', typeSignals: ['blog'] })],
+        busyIntervals: [
+          { start: new Date(2026, 6, 13, 8, 30), end: new Date(2026, 6, 13, 9, 0) },
+          { start: new Date(2026, 6, 13, 10, 15), end: new Date(2026, 6, 13, 17, 0) },
+        ],
+      }),
+      unplaceable
+    );
+    // No Blogs block was placed, and crucially none was trimmed to 75.
+    expect(proposals.some(p => p.category === 'Blogs')).toBe(false);
+    expect(proposals.some(p => p.durationMinutes === 75)).toBe(false);
+    expect(unplaceable.map(u => u.id)).toContain('b');
+  });
+
+  it('a RESERVED (task-less) Blogs filler block is also never trimmed', () => {
+    // Blogs has an unmet quota but NO candidate task, so it would emit a reserved
+    // filler block. Even reserved fillers of a non-grouped category keep their exact
+    // length: with only a 75-min gap and a full-90 requirement, the reserved block
+    // is NOT trimmed to 75 — it simply isn't placed.
+    const squeezed = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Blogs: { weeklyCount: 1, targetLength: '1.5h', preferredTimes: ['08:30-16:00'] } },
+          typeMapping: { Blogs: ['blog'] },
+          scheduling: { workingDays: ['Monday'], workingHours: { start: '08:30', end: '17:00' } },
+        }),
+        candidateTasks: [], // no task → reserved filler
+        busyIntervals: [
+          { start: new Date(2026, 6, 13, 8, 30), end: new Date(2026, 6, 13, 9, 0) },
+          { start: new Date(2026, 6, 13, 10, 15), end: new Date(2026, 6, 13, 17, 0) },
+        ],
+      })
+    );
+    // Only a 75-min gap: the reserved block must not trim to 75.
+    expect(squeezed.some(p => p.durationMinutes === 75)).toBe(false);
+    expect(squeezed.some(p => p.trimmedFromMinutes !== undefined)).toBe(false);
+
+    // With a full 90-min morning gap, the reserved Blogs block IS placed — full length.
+    const roomy = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Blogs: { weeklyCount: 1, targetLength: '1.5h', preferredTimes: ['08:30-16:00'] } },
+          typeMapping: { Blogs: ['blog'] },
+          scheduling: { workingDays: ['Monday'], workingHours: { start: '08:30', end: '17:00' } },
+        }),
+        candidateTasks: [],
+        busyIntervals: [{ start: new Date(2026, 6, 13, 10, 0), end: new Date(2026, 6, 13, 17, 0) }],
+      })
+    );
+    const reserved = roomy.find(p => p.category === 'Blogs');
+    expect(reserved).toBeDefined();
+    expect(reserved!.task).toBeUndefined(); // reserved filler
+    expect(reserved!.durationMinutes).toBe(90); // full length
+    expect(reserved!.trimmedFromMinutes).toBeUndefined();
+  });
+
+  it('TIER C: keeps FULL duration but ignores the run cap when trimming still would not fit strictly', () => {
+    // A 90-min gap wedged between two maxed 2h runs (08:30-10:30 and 12:00-14:00):
+    // neither a full nor a trimmed block fits STRICTLY (both bridge a maxed run or
+    // lack the two-sided buffer), so the soft rule drops the cap and places the
+    // FULL 90-min block flush in the gap (overlap still respected).
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 1, targetLength: '1.5h', preferredTimes: ['08:30-14:00'] } },
+          scheduling: { workingDays: ['Monday'], workingHours: { start: '08:30', end: '17:00' } },
+        }),
+        candidateTasks: [task({ gid: 'a' })],
+        busyIntervals: [
+          { start: new Date(2026, 6, 13, 8, 30), end: new Date(2026, 6, 13, 10, 30) }, // 2h run
+          { start: new Date(2026, 6, 13, 12, 0), end: new Date(2026, 6, 13, 17, 0) }, // busy to end of day
+        ],
+      })
+    );
+    const deep = proposals.find(p => p.category === 'Deep');
+    expect(deep!.start).toBe('10:30');
+    expect(deep!.durationMinutes).toBe(90); // full duration, cap ignored (not trimmed)
+    expect(deep!.reason).not.toMatch(/trimmed/i);
+  });
+
+  it('ACCEPTANCE: deep work lands 08:30 (not overflow) in the reported morning-gap scenario', () => {
+    // Monday 08:30-10:00 free; the rest of the day is busy from 10:00. Deep work
+    // (daily, grouped, preferred 08:30-11:00) MUST lead the morning at 08:30 —
+    // trimmed to 75 min via tier (b) — rather than being refused and pushed to
+    // evening overflow (the old hard-rule behaviour).
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: {
+            'Writing/Deep Work': {
+              weeklyCount: 3,
+              targetLength: '1.5h',
+              grouped: true,
+              daily: true,
+              preferredTimes: ['08:30-11:00'],
+            },
+          },
+          typeMapping: { 'Writing/Deep Work': ['deep'] },
+          scheduling: {
+            workingDays: ['Monday'],
+            workingHours: { start: '08:30', end: '19:00' },
+            overflow: { start: '21:00', end: '23:00' },
+          },
+        }),
+        candidateTasks: [task({ gid: 'd', typeSignals: ['deep'] })],
+        busyIntervals: [{ start: new Date(2026, 6, 13, 10, 0), end: new Date(2026, 6, 13, 19, 0) }],
+      })
+    );
+    const deep = proposals.find(p => p.category === 'Writing/Deep Work');
+    expect(deep).toBeDefined();
+    expect(deep!.start).toBe('08:30'); // leads the day
+    expect(deep!.date).toBe(dateStr(WEEK_START)); // Monday
+    expect(proposals.some(p => p.overflow)).toBe(false); // NOT overflow
+  });
+});
+
+describe('proposeBlocks - must-do preferred-tier priority', () => {
+  it('a must-do afternoon task with its earliest day full lands the next day AFTERNOON, not that day\'s morning', () => {
+    // Calls prefers afternoons (13:00-17:00). Monday afternoon is fully busy but
+    // Monday morning is free. A tier-first search must try EVERY preferred
+    // (afternoon) window before any fallback, so the must-do lands Tuesday
+    // afternoon rather than invading Monday morning (which deep work needs).
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Calls: { weeklyCount: 1, targetLength: '1h', preferredTimes: ['13:00-17:00'] } },
+          typeMapping: { Calls: ['call'] },
+          scheduling: {
+            workingDays: ['Monday', 'Tuesday'],
+            workingHours: { start: '08:30', end: '17:00' },
+          },
+        }),
+        candidateTasks: [task({ gid: 'must', typeSignals: ['call'], isPriority: true })],
+        busyIntervals: [
+          // Monday afternoon full (13:00-17:00).
+          { start: new Date(2026, 6, 13, 13, 0), end: new Date(2026, 6, 13, 17, 0) },
+        ],
+      })
+    );
+    const must = proposals.find(p => p.task?.gid === 'must');
+    expect(must).toBeDefined();
+    expect(must!.date).toBe(dateStr(new Date(2026, 6, 14))); // Tuesday
+    expect(must!.start >= '13:00').toBe(true); // afternoon (preferred), not morning
+  });
+
+  it('a must-do with ALL preferred windows full still falls back, earliest day first', () => {
+    // Both afternoons full; mornings free. With no preferred window available the
+    // must-do drops to fallback (whole working day) and takes the EARLIEST day's
+    // morning.
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Calls: { weeklyCount: 1, targetLength: '1h', preferredTimes: ['13:00-17:00'] } },
+          typeMapping: { Calls: ['call'] },
+          scheduling: {
+            workingDays: ['Monday', 'Tuesday'],
+            workingHours: { start: '08:30', end: '17:00' },
+          },
+        }),
+        candidateTasks: [task({ gid: 'must', typeSignals: ['call'], isPriority: true })],
+        busyIntervals: [
+          { start: new Date(2026, 6, 13, 13, 0), end: new Date(2026, 6, 13, 17, 0) },
+          { start: new Date(2026, 6, 14, 13, 0), end: new Date(2026, 6, 14, 17, 0) },
+        ],
+      })
+    );
+    const must = proposals.find(p => p.task?.gid === 'must');
+    expect(must).toBeDefined();
+    expect(must!.date).toBe(dateStr(WEEK_START)); // Monday (earliest day)
+    expect(must!.start < '13:00').toBe(true); // fell back to the morning
+  });
+});
+
+describe('proposeBlocks - unplaceable tasks', () => {
+  it('SOFT RULE: a run-rule-blocked SINGLE task is placed full (cap ignored), not unplaceable', () => {
+    // Monday only, 09:00-12:00. Two 1h tasks fill a maxed 09:00-11:00 run; a third
+    // can't abut it strictly (would be 3h). Single tasks are never trimmed, so it
+    // is placed at its FULL 60 min via the cap-ignored tier (11:00-12:00), and
+    // nothing is unplaceable — the soft rule still fills the visible gap.
+    const unplaceable: UnplaceableTask[] = [];
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 3, targetLength: '1h', preferredTimes: [] } },
+          scheduling: { workingDays: ['Monday'], workingHours: { start: '09:00', end: '12:00' } },
+        }),
+        candidateTasks: [task({ gid: 'a' }), task({ gid: 'b' }), task({ gid: 'c' })],
+      }),
+      unplaceable
+    );
+    expect(unplaceable).toHaveLength(0);
+    const deep = proposals.filter(p => p.category === 'Deep');
+    expect(deep).toHaveLength(3); // all three placed
+    expect(deep.every(p => p.durationMinutes === 60)).toBe(true); // none trimmed
+    expect(deep.every(p => p.trimmedFromMinutes === undefined)).toBe(true);
+    const third = deep.find(p => p.start === '11:00');
+    expect(third).toBeDefined(); // the squeezed one, placed full via tier (c)
+  });
+
+  it('reports a task as unplaceable when working hours are genuinely full', () => {
+    // Monday only, 09:00-10:00 (one hour). One task fills it; the second has no
+    // free gap of its length anywhere and no overflow window to fall to.
+    const unplaceable: UnplaceableTask[] = [];
+    proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 2, targetLength: '1h', preferredTimes: [] } },
+          scheduling: { workingDays: ['Monday'], workingHours: { start: '09:00', end: '10:00' } },
+        }),
+        candidateTasks: [task({ gid: 'a' }), task({ gid: 'b' })],
+      }),
+      unplaceable
+    );
+    expect(unplaceable).toHaveLength(1);
+    expect(unplaceable[0].id).toBe('b');
+  });
+
+  it('a task with no free gap at all overflows to the evening (reason: no free gap)', () => {
+    // A genuinely full working day (09:00-10:00, one task fills it) forces the
+    // second task to the evening even under the soft rule — there is no gap of any
+    // length. The overflow block explains it was lack of free time, not the run cap
+    // (which the soft rule would otherwise have bent to fit).
+    const unplaceable: UnplaceableTask[] = [];
+    const proposals = proposeBlocks(
+      makeInput({
+        config: makeConfig({
+          quotas: { Deep: { weeklyCount: 2, targetLength: '1h', preferredTimes: [] } },
+          scheduling: {
+            workingDays: ['Monday'],
+            workingHours: { start: '09:00', end: '10:00' },
+            overflow: { start: '21:00', end: '23:00' },
+          },
+        }),
+        candidateTasks: [task({ gid: 'a' }), task({ gid: 'b' })],
+      }),
+      unplaceable
+    );
+    expect(unplaceable).toHaveLength(0);
+    const overflow = proposals.find(p => p.overflow);
+    expect(overflow).toBeDefined();
+    expect(overflow!.reason).toMatch(/no free gap/i);
+  });
+
+  it('leaves the collector empty when everything is placed', () => {
+    const unplaceable: UnplaceableTask[] = [];
+    proposeBlocks(
+      makeInput({ candidateTasks: [task({ gid: 'a' })] }),
+      unplaceable
+    );
+    expect(unplaceable).toHaveLength(0);
+  });
+});
+
 describe('proposeBlocks - grouped blocks', () => {
   // A grouped Engagement-style category: 3 blocks/week, where every block shares
   // the SAME full agenda of all selected tasks rather than one task per block.
@@ -1034,11 +1548,13 @@ describe('computeSpareCapacity', () => {
     expect(cap.byDate).toEqual([{ date: dateStr(MON), freeMinutes: 480 }]);
   });
 
-  it('deducts the buffer after a maxed work run', () => {
-    // 09:00-11:00 is a full 120-min run; the abutting gap loses its 15-min buffer.
+  it('counts the whole gap after a maxed run (relaxed: no buffer deduction)', () => {
+    // 09:00-11:00 is a full 120-min run. Under the SOFT run rule, placement can
+    // abut it (dropping the cap), so spare measures the whole 11:00-17:00 gap with
+    // NO buffer carved out — matching what the planner could actually use.
     const cap = computeSpareCapacity([workingDay(MON)], [busy(MON, 9, 0, 11, 0)], WR, at(MON, 0));
-    expect(cap.totalMinutes).toBe(345); // 11:15-17:00
-    expect(cap.byDate).toEqual([{ date: dateStr(MON), freeMinutes: 345 }]);
+    expect(cap.totalMinutes).toBe(360); // 11:00-17:00, whole gap
+    expect(cap.byDate).toEqual([{ date: dateStr(MON), freeMinutes: 360 }]);
   });
 
   it('does not deduct a buffer next to a sub-max run', () => {
@@ -1278,33 +1794,33 @@ describe('proposeBlocks - placement/spare agreement (screenshot regression)', ()
     expect(placed!.start).toBe('11:05');
   });
 
-  it('computeSpareCapacity reports zero for a gap no block can actually occupy', () => {
-    // 110-min run, a 45-min gap, then a maxed run: any 30-min offset bridges a run
-    // past 120, so the gap is unusable — spare must not advertise it.
+  it('computeSpareCapacity counts a gap the SOFT rule could use (relaxed: overlap only)', () => {
+    // 110-min run, a 45-min gap, then busy to end. A strict run-cap would reject
+    // any 30-min block here (it bridges a run past 120), but the soft rule would
+    // place a trimmed block, so spare measures the whole 45-min gap — relaxed spare
+    // agrees with relaxed placement.
     const busy: BusyMs[] = [
       { start: at(9, 0), end: at(10, 50) }, // 110-min run
       { start: at(11, 35), end: at(17, 0) }, // fills the rest of the day
     ];
     const wd: WorkingDay = { date: MON, dateStr: dstr, whStartMs: at(9, 0), whEndMs: at(17, 0) };
     const cap = computeSpareCapacity([wd], busy, WR, at(9, 0));
-    expect(cap.totalMinutes).toBe(0);
-    expect(cap.gapCount).toBe(0);
-    expect(cap.largestGapMinutes).toBe(0);
+    expect(cap.totalMinutes).toBe(45); // whole 10:50-11:35 gap
+    expect(cap.gapCount).toBe(1);
+    expect(cap.largestGapMinutes).toBe(45);
   });
 
-  it("spare-capacity usable minutes match what the placement validator accepts", () => {
-    // The 60-min gap between two 100-min runs admits placement only from 11:05 to
-    // 11:35, so the validator accepts a 30-min span — and spare must report 30,
-    // not the raw 60.
+  it('spare capacity measures the whole free gap (run-cap ignored, overlap only)', () => {
+    // The 60-min gap between two 100-min runs: relaxed spare counts the full 60
+    // (the soft rule can fill it), not the strict-only 30-min buffered span.
     const busy: BusyMs[] = [
       { start: at(9, 10), end: at(10, 50) },
       { start: at(11, 50), end: at(13, 30) },
     ];
     const wd: WorkingDay = { date: MON, dateStr: dstr, whStartMs: at(10, 50), whEndMs: at(11, 50) };
     const cap = computeSpareCapacity([wd], busy, WR, at(9, 0));
-    // A block can be placed (validator accepts 11:05-11:35), so spare is non-zero
-    // and equals the placeable span, never more than the gap.
-    expect(cap.totalMinutes).toBe(30);
+    expect(cap.totalMinutes).toBe(60); // the whole gap is usable under the soft rule
+    // Strict findSlot still lands off-grid at 11:05 (tier a of the soft search).
     expect(findSlot([win(10, 11, 50)], 30, WR, busy, at(9, 0))).not.toBeNull();
   });
 });

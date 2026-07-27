@@ -86,6 +86,11 @@ export interface ProposedBlock {
   // 21:00–23:00). The review UI shows these in their own opt-in section
   // (default-rejected) and spare-capacity ignores overflow-window time.
   overflow?: boolean;
+  // Present only when the soft work-run rule TRIMMED this block to fit: the
+  // block's ORIGINAL (pre-trim) length in minutes. `durationMinutes` is the
+  // actual (shortened) length. The review UI badges it ("75 min · trimmed from
+  // 90"). Absent when the block was placed at its full requested length.
+  trimmedFromMinutes?: number;
 }
 
 export interface ProposeBlocksInput {
@@ -120,4 +125,8 @@ export interface ProposeBlocksInput {
   selectedCountsByCategory?: Record<string, number>;
   weekStart: Date; // local midnight of the week's Monday
   now: Date;
+  // Dates (yyyy-MM-dd) the user is out of office. These days are dropped from the
+  // working days entirely (no blocks, rituals or spread) and shrink weekly quotas
+  // proportionally. Derived from the calendar in gather; absent → none.
+  outOfOfficeDates?: Set<string>;
 }

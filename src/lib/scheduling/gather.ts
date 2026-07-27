@@ -36,7 +36,8 @@ import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations, updateIntegr
 import { getMyTasks, refreshAsanaToken } from '@/lib/asana';
 import { ensureValidCredentials, getCalendarEvents } from '@/lib/google-calendar';
 import { classifyBlockCategory, type CapacityQuota } from '@/lib/capacity';
-import { eventsToBusyIntervals } from '@/lib/scheduling/free-busy';
+import { eventsToBusyIntervals, outOfOfficeDates } from '@/lib/scheduling/free-busy';
+import { resolveWorkingWindow } from '@/lib/scheduling/engine';
 import type { BusyInterval, CandidateTask } from '@/lib/scheduling/types';
 import {
   AdHocTask,
@@ -80,6 +81,10 @@ export interface WeekContext {
   nextWeekEarlyEvents: CalendarEvent[];
   existingScheduledCounts: Record<string, number>;
   existingCategoryCountsByDate: Record<string, Record<string, number>>;
+  // Dates (yyyy-MM-dd) the user is out of office this week (a full-day OOO event
+  // covering the working window). Threaded into the schedulers so these days are
+  // dropped from working days and weekly quotas scale down.
+  outOfOfficeDates: Set<string>;
   quotas: CapacityQuota[];
   // How many still-active deferred tasks fall in each quota category (for the
   // wizard's "N deferred to next week" note). Keyed by category.
@@ -449,7 +454,27 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     weekEndStr
   );
 
-  const busyIntervals = eventsToBusyIntervals(weekEvents);
+  // App-created blocks (prep / ritual / task / ad-hoc) are written transparent on
+  // the OM calendar but must still count as busy. Collect their live Google event
+  // ids from the stored records so eventsToBusyIntervals keeps them busy even when
+  // marked free (title matching is the fallback for anything not in the store).
+  const appEventIds = new Set<string>();
+  for (const s of scheduledAsana) if (s.googleEventId) appEventIds.add(s.googleEventId);
+  for (const t of adHocTasks) if (t.googleEventId) appEventIds.add(t.googleEventId);
+  for (const p of prepBlocksRaw) if (p.googleEventId) appEventIds.add(p.googleEventId);
+  for (const r of ritualBlocksRaw) if (r.googleEventId) appEventIds.add(r.googleEventId);
+  const busyIntervals = eventsToBusyIntervals(weekEvents, appEventIds);
+
+  // Out-of-office days: a full-day OOO event (Google eventType 'outOfOffice', or
+  // an all-day OOO-titled event) covering a working day's window removes that day
+  // from scheduling entirely. Computed over this week's candidate working days
+  // (before OOO exclusion) and threaded into every scheduler via WeekContext.
+  // Requires working-hours config to know each day's window; absent → no OOO.
+  let oooDates = new Set<string>();
+  if (config.scheduling?.workingHours) {
+    const { workingDays: candidateWorkingDays } = resolveWorkingWindow(config.scheduling, weekStart, now);
+    oooDates = outOfOfficeDates(weekEvents, candidateWorkingDays);
+  }
 
   const quotas: CapacityQuota[] = Object.entries(config.taskQuotas).map(([category, quota]) => ({
     category,
@@ -609,6 +634,7 @@ export async function gatherWeekContext(weekStartParam?: string): Promise<WeekCo
     nextWeekEarlyEvents,
     existingScheduledCounts,
     existingCategoryCountsByDate,
+    outOfOfficeDates: oooDates,
     quotas,
     deferredCountsByCategory,
   };

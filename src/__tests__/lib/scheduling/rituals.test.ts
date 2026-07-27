@@ -133,8 +133,8 @@ describe('ritual kind + cadence helpers', () => {
     expect(ritualKindForTitle(RETRO_TITLE)).toBe('retro');
   });
 
-  it('classifies cadence: kindle daily, grooming/retro weekly', () => {
-    expect(ritualCadenceForTitle(KINDLE_TITLE)).toBe('daily');
+  it('classifies cadence: kindle/grooming/retro weekly, lunch daily', () => {
+    expect(ritualCadenceForTitle(KINDLE_TITLE)).toBe('weekly');
     expect(ritualCadenceForTitle(LUNCH_TITLE)).toBe('daily');
     expect(ritualCadenceForTitle(GROOMING_TITLE)).toBe('weekly');
     expect(ritualCadenceForTitle(RETRO_TITLE)).toBe('weekly');
@@ -313,33 +313,50 @@ describe('proposeRitualBlocks', () => {
   });
 });
 
-describe('proposeRitualBlocks — Kindle notes (daily, work)', () => {
-  it('places a 30-min Kindle block in the afternoon on every working day', () => {
+describe('proposeRitualBlocks — Kindle notes (weekly x2, work)', () => {
+  it('places exactly TWO 30-min Kindle blocks a week, on distinct days, in the afternoon', () => {
     const blocks = run({
       scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
     });
     const kindles = blocks.filter(b => b.title === KINDLE_TITLE);
-    expect(kindles).toHaveLength(5);
-    expect(new Set(kindles.map(k => k.date)).size).toBe(5);
+    expect(kindles).toHaveLength(2);
+    expect(new Set(kindles.map(k => k.date)).size).toBe(2); // distinct days
     for (const k of kindles) {
       expect(k.kind).toBe('ritual');
       expect(k.category).toBe('Kindle notes');
       expect(k.durationMinutes).toBe(30);
-      // Afternoon preference: 12:00 onward.
-      expect(k.start >= '12:00').toBe(true);
+      expect(k.start >= '12:00').toBe(true); // afternoon preference
     }
   });
 
-  it('falls back to the whole day and skips only when nothing fits', () => {
-    // Whole afternoon (12:00 onward) busy → Kindle falls back into the morning.
-    const morningFallback = run({ busyIntervals: [busy(12, 0, 17, 0)] });
-    const kFallback = morningFallback.find(b => b.title === KINDLE_TITLE);
-    expect(kFallback).toBeDefined();
-    expect(kFallback!.start < '12:00').toBe(true);
+  it('spreads the two Kindle blocks earliest-days-first', () => {
+    const blocks = run({
+      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+    });
+    const dates = blocks.filter(b => b.title === KINDLE_TITLE).map(k => k.date).sort();
+    expect(dates).toEqual(['2026-07-13', '2026-07-14']); // Monday + Tuesday
+  });
 
-    // The entire working day busy → Kindle is skipped.
-    const full = run({ busyIntervals: [busy(9, 0, 17, 0)] });
-    expect(full.find(b => b.title === KINDLE_TITLE)).toBeUndefined();
+  it('counts existing Kindle events toward the two (tops up rather than re-adding)', () => {
+    const blocks = run({
+      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+      // One kindle already on Wednesday → only ONE more should be proposed.
+      existingRitualTitlesByDate: { '2026-07-15': new Set([KINDLE_TITLE]) },
+    });
+    const kindles = blocks.filter(b => b.title === KINDLE_TITLE);
+    expect(kindles).toHaveLength(1);
+    expect(kindles[0].date).not.toBe('2026-07-15'); // not the day that already has one
+  });
+
+  it('proposes no Kindle when two already exist across the week', () => {
+    const blocks = run({
+      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+      existingRitualTitlesByDate: {
+        '2026-07-13': new Set([KINDLE_TITLE]),
+        '2026-07-14': new Set([KINDLE_TITLE]),
+      },
+    });
+    expect(blocks.filter(b => b.title === KINDLE_TITLE)).toHaveLength(0);
   });
 });
 
@@ -389,7 +406,7 @@ describe('proposeRitualBlocks — weekly rituals (grooming + retro)', () => {
     });
     expect(blocks.find(b => b.title === GROOMING_TITLE)).toBeUndefined();
     expect(blocks.find(b => b.title === RETRO_TITLE)).toBeUndefined();
-    // Daily Kindle is unaffected by the weekly dedupe.
+    // Kindle (no existing events here) is unaffected by the grooming/retro dedupe.
     expect(blocks.filter(b => b.title === KINDLE_TITLE).length).toBeGreaterThan(0);
   });
 });

@@ -37,11 +37,29 @@ const WORKSPACES: WorkspaceCatalogEntry[] = [
 describe('resolveSuggestions', () => {
   it('maps workspace/project/type names to ids/gids', () => {
     const out = resolveSuggestions(
-      [{ id: 'r1', workspace: 'OM', project: 'Engineering', type: 'Bug' }],
+      [{ id: 'r1', action: 'convert', workspace: 'OM', project: 'Engineering', type: 'Bug' }],
       WORKSPACES,
     );
     expect(out).toEqual([
-      { id: 'r1', integrationId: 'om-int', projectGid: 'p2', taskType: 'Bug' },
+      { id: 'r1', action: 'convert', integrationId: 'om-int', projectGid: 'p2', taskType: 'Bug' },
+    ]);
+  });
+
+  it('carries the model action through, defaulting missing/invalid to "keep"', () => {
+    const out = resolveSuggestions(
+      [
+        { id: 'r1', action: 'convert', workspace: 'OM' },
+        { id: 'r2', action: 'keep', workspace: 'OM' },
+        { id: 'r3', workspace: 'OM' }, // missing action
+        { id: 'r4', action: 'nonsense', workspace: 'OM' }, // invalid action
+      ],
+      WORKSPACES,
+    );
+    expect(out.map(s => [s.id, s.action])).toEqual([
+      ['r1', 'convert'],
+      ['r2', 'keep'],
+      ['r3', 'keep'],
+      ['r4', 'keep'],
     ]);
   });
 
@@ -67,7 +85,7 @@ describe('resolveSuggestions', () => {
       [{ id: 'r1', workspace: 'DBC', project: 'Policy', type: '' }],
       WORKSPACES,
     );
-    expect(out[0]).toEqual({ id: 'r1', integrationId: 'dbc-int', projectGid: '', taskType: '' });
+    expect(out[0]).toEqual({ id: 'r1', action: 'keep', integrationId: 'dbc-int', projectGid: '', taskType: '' });
   });
 
   it('blanks a type that is not one of the workspace labels', () => {
@@ -75,7 +93,7 @@ describe('resolveSuggestions', () => {
       [{ id: 'r1', workspace: 'OM', project: '', type: 'Chore' }],
       WORKSPACES,
     );
-    expect(out[0]).toEqual({ id: 'r1', integrationId: 'om-int', projectGid: '', taskType: '' });
+    expect(out[0]).toEqual({ id: 'r1', action: 'keep', integrationId: 'om-int', projectGid: '', taskType: '' });
   });
 
   it('ignores records without a string id', () => {
@@ -103,11 +121,13 @@ describe('suggestReminderTriage', () => {
   });
 
   it('runs one headless call and resolves the records', async () => {
-    mockRun.mockResolvedValue([{ id: 'r1', workspace: 'OM', project: 'Policy', type: 'Feature' }]);
+    mockRun.mockResolvedValue([
+      { id: 'r1', action: 'convert', workspace: 'OM', project: 'Policy', type: 'Feature' },
+    ]);
     const out = await suggestReminderTriage([{ id: 'r1', title: 'Draft policy note' }], WORKSPACES);
     expect(mockRun).toHaveBeenCalledTimes(1);
     expect(out).toEqual([
-      { id: 'r1', integrationId: 'om-int', projectGid: 'p1', taskType: 'Feature' },
+      { id: 'r1', action: 'convert', integrationId: 'om-int', projectGid: 'p1', taskType: 'Feature' },
     ]);
   });
 });
