@@ -9,11 +9,19 @@
 // advisory only.
 
 import { runClaudeJsonArray } from './ai-classifier';
+import { composePrompt } from './classifier-learning';
 
 export interface ReminderTriageInput {
   id: string;
   title: string;
   notes?: string;
+}
+
+// Stable key for a reminder: lowercase, trimmed, whitespace collapsed. Triage
+// verdicts are remembered per title so a similarly-worded reminder is judged the
+// same way next time.
+export function normalizeReminderKey(title: string): string {
+  return title.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 export interface WorkspaceCatalogEntry {
@@ -36,7 +44,13 @@ export interface ReminderSuggestion {
   taskType: string;
 }
 
-function buildPrompt(reminders: ReminderTriageInput[], workspaces: WorkspaceCatalogEntry[]): string {
+// `examples` is Dave's own keep/convert decisions as a few-shot block (see
+// classifier-learning.ts), composed at call time. Empty → prompt unchanged.
+function buildPrompt(
+  reminders: ReminderTriageInput[],
+  workspaces: WorkspaceCatalogEntry[],
+  examples = ''
+): string {
   const catalogue = workspaces
     .map(w => {
       const projects = w.projects.length ? w.projects.map(p => `"${p.name}"`).join(', ') : '(none)';
@@ -50,7 +64,7 @@ function buildPrompt(reminders: ReminderTriageInput[], workspaces: WorkspaceCata
     return `[${r.id}] ${r.title}${notes ? ` | ${notes}` : ''}`;
   });
 
-  return `A person is triaging their quick "reminders" and deciding which ones to promote into their Asana task manager. For EACH reminder, suggest the best-fitting destination.
+  const base = `A person is triaging their quick "reminders" and deciding which ones to promote into their Asana task manager. For EACH reminder, suggest the best-fitting destination.
 
 Available Asana workspaces (choose one by its EXACT name):
 ${catalogue}
@@ -67,6 +81,7 @@ For EACH reminder below, output one object. Return ONLY a JSON array, no prose, 
 
 Reminders:
 ${lines.join('\n')}`;
+  return composePrompt(base, examples);
 }
 
 // Pure mapping from the model's (name-based) records to id/gid-based suggestions,
@@ -112,8 +127,9 @@ export async function suggestReminderTriage(
   reminders: ReminderTriageInput[],
   workspaces: WorkspaceCatalogEntry[],
   timeoutSeconds = 180,
+  examples = '',
 ): Promise<ReminderSuggestion[]> {
   if (reminders.length === 0 || workspaces.length === 0) return [];
-  const records = await runClaudeJsonArray(buildPrompt(reminders, workspaces), timeoutSeconds);
+  const records = await runClaudeJsonArray(buildPrompt(reminders, workspaces, examples), timeoutSeconds);
   return resolveSuggestions(records, workspaces);
 }

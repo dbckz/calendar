@@ -325,7 +325,8 @@ export function PlanWeekModal({
       setTypeRows(
         untypedTasks.map(t => {
           const suggested = byGid.get(t.gid);
-          return { ...t, chosen: suggested && t.allowedTypes.includes(suggested) ? suggested : '' };
+          const valid = suggested && t.allowedTypes.includes(suggested) ? suggested : '';
+          return { ...t, chosen: valid, suggested: valid || undefined };
         })
       );
     } catch (err) {
@@ -363,6 +364,14 @@ export function PlanWeekModal({
           });
         })
       );
+      // Learn from what he actually decided: record each written label against its
+      // task title so the Type classifier follows his precedent next time. An
+      // override (chosen ≠ suggested) is the stronger signal. Best-effort — never
+      // let a verdict write block or fail the type application.
+      api.recordTypeVerdicts(
+        toWrite.map(r => ({ title: r.title, type: r.chosen, override: r.chosen !== r.suggested }))
+      ).catch(() => {});
+
       const failed = outcomes.filter(o => o.status === 'rejected').length;
       onApplied?.(); // refresh so applied types show up in the allocation categories
       if (failed > 0) {
@@ -961,6 +970,24 @@ export function PlanWeekModal({
     const conversions = rows.filter(r => r.action === 'convert' && r.name.trim());
     const dones = rows.filter(r => r.action === 'done');
     const deletes = rows.filter(r => r.action === 'delete');
+
+    // Learn from his triage: record the keep/convert decisions (the classifier's
+    // two classes) per reminder title so it follows his precedent next time. Done
+    // BEFORE the no-actions early-return so an all-"keep" session still teaches the
+    // negative class. Best-effort — never blocks applying the plan.
+    const learnable = rows.filter(r => r.action === 'keep' || r.action === 'convert');
+    if (learnable.length > 0) {
+      api.recordReminderVerdicts(
+        learnable.map(r => ({
+          title: r.name,
+          action: r.action as 'keep' | 'convert',
+          integrationId: r.integrationId,
+          projectGid: r.projectGid,
+          taskType: r.taskType,
+        }))
+      ).catch(() => {});
+    }
+
     const total = conversions.length + dones.length + deletes.length;
     if (total === 0) return { succeeded: 0, failed: 0 };
     setIsConvertingReminders(true);

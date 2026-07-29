@@ -123,6 +123,12 @@ export interface UserData {
   staleClassification?: Record<string, StaleClassificationEntry>; // Key is Asana task GID
   staleKeep?: Record<string, string>; // GID -> ISO timestamp: "keep active" until (snooze)
   meetingPrepDecisions?: Record<string, MeetingPrepDecision>; // Key is normalized meeting title
+  // Type labels the user decided in the wizard's type step, keyed by normalized
+  // task title. Fed back to the Type classifier as few-shot examples.
+  typeVerdicts?: Record<string, TypeVerdict>;
+  // Reminder-triage decisions the user confirmed, keyed by normalized reminder
+  // title. Fed back to the reminder-triage classifier as few-shot examples.
+  reminderVerdicts?: Record<string, ReminderVerdict>;
   prepBlocks?: PrepBlock[]; // meeting-prep blocks created on the calendar
   ritualBlocks?: RitualBlock[]; // daily lunch/emails blocks created on the calendar
   // Google event ids the user explicitly marked "done for planning" during a
@@ -159,6 +165,42 @@ export interface UserData {
 export interface DailyReviewState {
   lastReviewedAt?: string; // ISO timestamp of the last completed daily review
   dismissedTitles?: string[]; // exact event titles to skip in calendar review
+  // "Is this event a task at all?" verdicts for bare calendar-event titles,
+  // keyed by normalized title (see scheduling/not-a-task.ts). A user dismissal
+  // writes a permanent 'user' verdict; the AI classifier caches its own, keyed
+  // additionally by content hash + prompt version.
+  titleVerdicts?: Record<string, ReviewTitleVerdict>;
+}
+
+export interface ReviewTitleVerdict {
+  isTask: boolean;
+  decidedBy: 'user' | 'ai';
+  contentHash?: string; // ai entries only — cache key
+  promptVersion?: string;
+  reason?: string;
+  updatedAt: string;
+}
+
+// A reminder-triage decision the user confirmed in the wizard's reminders step,
+// keyed by NORMALISED REMINDER TITLE. Records whether he kept the reminder or
+// converted it to Asana (and, for a conversion, where), so the reminder-triage
+// classifier can learn his keep-vs-convert boundary from his own calls.
+export interface ReminderVerdict {
+  action: 'keep' | 'convert';
+  integrationId?: string; // convert: the workspace he filed it under
+  projectGid?: string;
+  taskType?: string;
+  updatedAt: string;
+}
+
+// A Type label the user decided for a task in the plan-week wizard's type step,
+// keyed by NORMALISED TASK TITLE (not gid — a title pattern teaches the Type
+// classifier about future tasks; a gid teaches nothing). `override` marks that he
+// changed the AI's suggestion, which is the stronger learning signal.
+export interface TypeVerdict {
+  type: string;
+  override?: boolean;
+  updatedAt: string;
 }
 
 const DEFAULT_USER_DATA: UserData = {
@@ -176,6 +218,8 @@ const DEFAULT_USER_DATA: UserData = {
   staleClassification: {},
   staleKeep: {},
   meetingPrepDecisions: {},
+  typeVerdicts: {},
+  reminderVerdicts: {},
   prepBlocks: [],
   ritualBlocks: [],
   blockDoneOverrides: {},
@@ -223,6 +267,8 @@ export async function getUserData(): Promise<UserData> {
       staleClassification: parsed.staleClassification || {},
       staleKeep: parsed.staleKeep || {},
       meetingPrepDecisions: parsed.meetingPrepDecisions || {},
+      typeVerdicts: parsed.typeVerdicts || {},
+      reminderVerdicts: parsed.reminderVerdicts || {},
       prepBlocks: parsed.prepBlocks || [],
       ritualBlocks: parsed.ritualBlocks || [],
       blockDoneOverrides: parsed.blockDoneOverrides || {},

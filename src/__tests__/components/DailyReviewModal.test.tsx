@@ -73,7 +73,7 @@ async function openModal(
 async function saveAndReplan(): Promise<{
   done: string[];
   notDone: string[];
-  started: string[];
+  started: Array<{ googleEventId: string; taskIds?: string[] }>;
   replacements: Array<Record<string, unknown>>;
 } | null> {
   await act(async () => {
@@ -116,7 +116,8 @@ describe('DailyReviewModal — step 1 outcomes and replacements', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Started' }));
     const body = await saveAndReplan();
 
-    expect(body?.started).toEqual(['evt-1']);
+    // Recorded against the block's own task, not the block as a whole.
+    expect(body?.started).toEqual([{ googleEventId: 'evt-1', taskIds: ['adhoc-1'] }]);
     expect(body?.done).toEqual([]);
     expect(body?.replacements).toEqual([]);
   });
@@ -243,11 +244,13 @@ describe('DailyReviewModal — step 1 outcomes and replacements', () => {
     expect(first).toBeInTheDocument();
     expect(second).toBeInTheDocument();
 
-    // One member started, the other not done: the block is started, not done.
+    // One member started, the other not done: the block is started, not done —
+    // and ONLY the started member is recorded, so the week's started count can't
+    // be inflated by the sibling left untouched.
     fireEvent.click(within(first).getByRole('button', { name: 'Started' }));
 
     const body = await saveAndReplan();
-    expect(body?.started).toEqual(['evt-1']);
+    expect(body?.started).toEqual([{ googleEventId: 'evt-1', taskIds: ['a1'] }]);
   });
 
   it('offers "Complete in Asana" for Done but not for Started', async () => {
@@ -274,5 +277,36 @@ describe('DailyReviewModal — step 1 outcomes and replacements', () => {
     expect(api.completeDailyReview).toHaveBeenCalled();
     // The replan step is reached regardless.
     expect(await screen.findByRole('button', { name: 'Done' })).toBeInTheDocument();
+  });
+
+  it('shows a prominent "Not relevant" dismissal on calendar rows and hides + remembers on click', async () => {
+    (api.dismissReviewTitle as jest.Mock).mockResolvedValue(undefined);
+    await openModal([
+      reviewBlock({
+        googleEventId: 'evt-cal',
+        source: 'calendar',
+        titles: ['Meet Corinna'],
+        tasks: [{ title: 'Meet Corinna', done: false }],
+      }),
+    ]);
+
+    const btn = screen.getByRole('button', {
+      name: /Not relevant — hide this and don’t ask again/i,
+    });
+    expect(btn).toBeInTheDocument();
+
+    fireEvent.click(btn);
+
+    // Records a permanent verdict for the title and drops the row from the review.
+    expect(api.dismissReviewTitle).toHaveBeenCalledWith('Meet Corinna');
+    expect(
+      screen.queryByRole('button', { name: /Not relevant/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows no dismissal on non-calendar (task-record) rows', async () => {
+    // The default block has no source → it comes from a local task record.
+    await openModal([reviewBlock()]);
+    expect(screen.queryByRole('button', { name: /Not relevant/i })).not.toBeInTheDocument();
   });
 });

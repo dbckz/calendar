@@ -2,10 +2,14 @@
 
 import { EventAttributionRule } from '@/types';
 import { AdHocTask, ApiError, AsanaFilterState, AsanaProject, AsanaStory, AsanaTag, CalendarEvent, CalendarEventResponse, CalendarEventsResponse, CustomTaskType, DelegationQueueEntry, GoogleSubCalendar, OrchestratorStatus, Reminder, ScheduledAsanaTask, SettingsResponse, TaskMetadata, TaskTemplate } from '@/types';
-import type { WeeklyProgressRow } from '@/lib/weekly-stats';
+import type { WeeklyProgressRow, UnscheduledTask } from '@/lib/weekly-stats';
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import type { ReplanKept, ReplanMove, ReplanUnplaceable, ReplanStale, ReplanDeletion, ReplanReviewBlock, ReplanCarryBlock } from '@/lib/scheduling/replan';
-import type { ReviewAdoptInput, ReviewReplacementInput } from '@/lib/scheduling/daily-review';
+import type {
+  ReviewAdoptInput,
+  ReviewReplacementInput,
+  ReviewStartedInput,
+} from '@/lib/scheduling/daily-review';
 import type { AiClaim } from '@/lib/ai-verdicts';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
 
@@ -306,6 +310,13 @@ export interface DashboardCapacityResponse {
   clientTime: ClientTimeRow[];
   // Minutes worked this week per Asana integration, for the header line.
   weekWorkedByIntegration?: ClientTimeRow[];
+}
+
+// The dashboard's "Left unscheduled" widget: tasks planned into this week that
+// then slid out of the schedule (deferred / carried).
+export interface UnscheduledTasksResponse {
+  weekStart: string;
+  tasks: UnscheduledTask[];
 }
 
 interface RetryOptions {
@@ -745,6 +756,23 @@ export const api = {
     );
   },
 
+  // Record the Type labels the user decided in the wizard's type step (keyed by
+  // task title server-side), so the Type classifier can learn his own decisions.
+  // Best-effort — a failure must never block applying the types.
+  async recordTypeVerdicts(
+    verdicts: Array<{ title: string; type: string; override?: boolean }>
+  ): Promise<{ recorded: number }> {
+    return fetchWithRetry(
+      '/api/tasks/type-verdicts',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verdicts }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
   // Wizard "Reminders triage" step: suggest a destination Asana workspace/project/
   // type for each reminder, in ONE headless call. Returns ids/gids the dropdowns
   // use (blank where nothing valid fit). No retry — the call is expensive.
@@ -763,6 +791,29 @@ export const api = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reminders, workspaces }),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Record the keep/convert decisions the user confirmed in the reminders step
+  // (keyed by reminder title server-side), so the triage classifier can learn his
+  // own calls. Best-effort — must never block applying the reminders.
+  async recordReminderVerdicts(
+    verdicts: Array<{
+      title: string;
+      action: 'keep' | 'convert';
+      integrationId?: string;
+      projectGid?: string;
+      taskType?: string;
+    }>
+  ): Promise<{ recorded: number }> {
+    return fetchWithRetry(
+      '/api/reminders/triage/verdicts',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verdicts }),
       },
       { maxRetries: 0 }
     );
@@ -1111,6 +1162,12 @@ export const api = {
     return fetchWithRetry<DashboardCapacityResponse>('/api/dashboard/capacity');
   },
 
+  // Tasks planned into this week that then slid out of the schedule, for the
+  // dashboard's "Left unscheduled" widget.
+  async getUnscheduledTasks(): Promise<UnscheduledTasksResponse> {
+    return fetchWithRetry<UnscheduledTasksResponse>('/api/dashboard/unscheduled');
+  },
+
   // "Plan my week" auto-scheduling. Empty body reproduces the original
   // auto-pick-everything behavior; the wizard passes selections/prep/priorities.
   async proposeWeeklyPlan(body?: ProposeWeekRequest): Promise<ProposeWeekResponse> {
@@ -1239,11 +1296,17 @@ export const api = {
   },
 
   // Daily review: stamp the review as completed now, so the next review only
-  // covers blocks that finished after this moment.
-  async completeDailyReview(): Promise<{ lastReviewedAt: string }> {
+  // covers blocks that finished after this moment. `confirmedTitles` are the bare
+  // calendar-event titles the user reviewed (not dismissed), recorded as implicit
+  // "this IS a task" verdicts so the classifier learns his confirmations.
+  async completeDailyReview(confirmedTitles: string[] = []): Promise<{ lastReviewedAt: string }> {
     return fetchWithRetry<{ lastReviewedAt: string }>(
       '/api/scheduling/daily-review/complete',
-      { method: 'POST' },
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(confirmedTitles.length > 0 ? { confirmedTitles } : {}),
+      },
       { maxRetries: 0 }
     );
   },
@@ -1306,7 +1369,7 @@ export const api = {
     carry?: Array<{ blockId?: string; blockIds?: string[]; taskIds: string[]; quiet?: boolean }>,
     // Daily-review outcomes: blocks worked on but not finished, and the
     // "what were you doing instead" answers for blocks that didn't happen.
-    started?: string[],
+    started?: ReviewStartedInput[],
     replacements?: ReviewReplacementInput[],
     // End-of-week escalation: hand a carried, AI-runnable task to an agent
     // instead of carrying it. Writes no carry-over marker.
@@ -1316,7 +1379,11 @@ export const api = {
       integrationId: string;
       title?: string;
       brief?: string;
-    }>
+    }>,
+    // Unplaceable blocks the user chose to DELETE outright ("I'm not doing this at
+    // all"): the server removes the calendar block, clears its local records,
+    // deletes each backing Asana task, and records a 'dropped' weekly outcome.
+    drop?: Array<{ googleEventId: string; googleIntegrationId?: string; taskIds: string[] }>
   ): Promise<{
     results: ReplanConfirmResult[];
     doneResults: ReplanConfirmResult[];
@@ -1326,6 +1393,7 @@ export const api = {
     deferResults?: ReplanDeferResult[];
     carryResults?: ReplanCarryResult[];
     displaceResults?: ReplanDisplaceResult[];
+    dropResults?: ReplanConfirmResult[];
     additionResults: ReplanAdditionResult[];
   }> {
     return fetchWithRetry<{
@@ -1337,6 +1405,7 @@ export const api = {
       deferResults?: ReplanDeferResult[];
       carryResults?: ReplanCarryResult[];
       displaceResults?: ReplanDisplaceResult[];
+      dropResults?: ReplanConfirmResult[];
       additionResults: ReplanAdditionResult[];
     }>(
       '/api/scheduling/replan/confirm',
@@ -1356,6 +1425,7 @@ export const api = {
           ...(started && started.length ? { started } : {}),
           ...(replacements && replacements.length ? { replacements } : {}),
           ...(delegate && delegate.length ? { delegate } : {}),
+          ...(drop && drop.length ? { drop } : {}),
           ...(dismiss && dismiss.length ? { dismiss } : {}),
           ...(additions && additions.length ? { additions } : {}),
           ...(deletions && deletions.length ? { deletions } : {}),

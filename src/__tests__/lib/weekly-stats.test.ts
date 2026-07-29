@@ -10,9 +10,10 @@ import {
   setWeeklyTaskOutcomes,
   recordWeeklyTime,
 } from '@/lib/user-data-storage';
-import { summariseWeek, weeklyProgressRows } from '@/lib/weekly-stats';
+import { summariseWeek, weeklyProgressRows, unscheduledThisWeek } from '@/lib/weekly-stats';
 import { __resetDbForTests } from '@/lib/storage/db';
 import type { WeeklyStatsRecord } from '@/types';
+import type { CarryOverEntry } from '@/lib/storage/carry-overs';
 
 const WEEK = '2026-07-20';
 
@@ -214,5 +215,73 @@ describe('started-but-unfinished outcome', () => {
     const summary = summariseWeek((await getWeeklyStats(STARTED_WEEK))!);
     expect(summary.totalStarted).toBe(0);
     expect(summary.categories[0]).toMatchObject({ carried: 1, started: 0, completed: 0 });
+  });
+});
+
+describe('unscheduledThisWeek (dashboard "Left unscheduled" derivation)', () => {
+  const record = (tasks: WeeklyStatsRecord['tasks']): WeeklyStatsRecord => ({
+    weekStart: WEEK,
+    createdAt: '2026-07-20T00:00:00.000Z',
+    updatedAt: '2026-07-20T00:00:00.000Z',
+    tasks,
+    integrations: {},
+  });
+
+  it('returns carried AND unscheduled tasks (not done/dropped), newest first, with a reason', () => {
+    const rows = unscheduledThisWeek(
+      record({
+        w1: { taskId: 'w1', title: 'Draft the brief', category: 'Writing', scheduledAt: 'x', outcome: 'carried', outcomeAt: '2026-07-22T09:00:00.000Z' },
+        e1: { taskId: 'e1', title: 'Email Ana', category: 'Engagement', scheduledAt: 'x', outcome: 'carried', outcomeAt: '2026-07-24T09:00:00.000Z' },
+        u1: { taskId: 'u1', title: 'Left out', category: 'Writing', scheduledAt: 'x', outcome: 'unscheduled', outcomeAt: '2026-07-23T09:00:00.000Z' },
+        d1: { taskId: 'd1', title: 'Done thing', category: 'Writing', scheduledAt: 'x', outcome: 'done' },
+        w2: { taskId: 'w2', title: 'Dropped thing', category: 'Writing', scheduledAt: 'x', outcome: 'dropped' },
+      }),
+      {}
+    );
+    // The two carried + the one unscheduled, newest first; done/dropped excluded.
+    expect(rows.map(r => r.taskId)).toEqual(['e1', 'u1', 'w1']);
+    // Reason discriminates deferred (carried) from left-unscheduled.
+    expect(rows.find(r => r.taskId === 'e1')).toMatchObject({ reason: 'deferred' });
+    expect(rows.find(r => r.taskId === 'u1')).toMatchObject({
+      reason: 'unscheduled',
+      title: 'Left out',
+      category: 'Writing',
+      droppedAt: '2026-07-23T09:00:00.000Z',
+    });
+  });
+
+  it('joins the carry-over streak where the marker tracks one', () => {
+    const carryOvers: Record<string, CarryOverEntry> = {
+      w1: { fromWeek: WEEK, at: 0, carries: 3 },
+    };
+    const rows = unscheduledThisWeek(
+      record({
+        w1: { taskId: 'w1', title: 'Sliding task', category: 'Writing', scheduledAt: 'x', outcome: 'carried', outcomeAt: '2026-07-22T09:00:00.000Z' },
+        w2: { taskId: 'w2', title: 'First slip', category: 'Writing', scheduledAt: 'x', outcome: 'carried', outcomeAt: '2026-07-21T09:00:00.000Z' },
+      }),
+      carryOvers
+    );
+    expect(rows.find(r => r.taskId === 'w1')?.carryStreak).toBe(3);
+    // A task with no carry-over marker (mid-week defer) has no streak.
+    expect(rows.find(r => r.taskId === 'w2')?.carryStreak).toBeUndefined();
+  });
+
+  it('returns an empty list for a missing record', () => {
+    expect(unscheduledThisWeek(null, {})).toEqual([]);
+  });
+
+  it("folds an 'unscheduled' outcome into the carried counter in summariseWeek", async () => {
+    await recordWeeklyTasks(WEEK, [
+      { taskId: 'a', category: 'Writing' },
+      { taskId: 'b', category: 'Writing' },
+    ]);
+    await setWeeklyTaskOutcomes(WEEK, [
+      { taskId: 'a', outcome: 'carried' },
+      { taskId: 'b', outcome: 'unscheduled' },
+    ]);
+
+    const summary = summariseWeek((await getWeeklyStats(WEEK))!);
+    // Both count as planned-but-not-done: carried = 2, none completed.
+    expect(summary.categories[0]).toMatchObject({ carried: 2, completed: 0, scheduled: 2 });
   });
 });

@@ -15,6 +15,7 @@ import type { CalendarEvent } from '@/types';
 
 import { asanaTaskGidsFromText } from '@/lib/asana-url';
 import { isRitualLikeTitle } from './rituals';
+import { isNotTaskLikeTitle, normalizeReviewTitleKey } from './not-a-task';
 import { formatLocalDate } from '@/lib/date-utils';
 import type { ReplanReviewBlock } from './replan';
 
@@ -105,7 +106,9 @@ export function selectCalendarReviewBlocks(input: CalendarReviewInput): ReplanRe
   }
 
   const reviewStartMs = input.reviewStartMs ?? Number.NEGATIVE_INFINITY;
-  const dismissedTitles = input.dismissedTitles ?? new Set<string>();
+  const dismissedKeys = new Set(
+    [...(input.dismissedTitles ?? new Set<string>())].map(normalizeReviewTitleKey)
+  );
 
   const blocks: ReplanReviewBlock[] = [];
   for (const event of input.events) {
@@ -114,8 +117,13 @@ export function selectCalendarReviewBlocks(input: CalendarReviewInput): ReplanRe
     // Rituals are never adopted as tasks — including one the user created by
     // hand with no emoji ("Emails"), which the exact-title set alone misses.
     if (input.ritualTitles.has(event.title.trim()) || isRitualLikeTitle(event.title)) continue;
-    // Titles the user marked "not a task" never come back.
-    if (dismissedTitles.has(event.title.trim())) continue;
+    // Titles the user marked "not a task" never come back. Matched on the
+    // normalized key, so "WAKE" covers "Wake" and "⏰ wake" too.
+    if (dismissedKeys.has(normalizeReviewTitleKey(event.title))) continue;
+    // Titles that clearly aren't work to tick off — a wake-up marker, a personal
+    // ritual or appointment, a catch-up. Asking "did you get this done?" about
+    // these is noise (see not-a-task.ts).
+    if (isNotTaskLikeTitle(event.title)) continue;
     // Meetings (anyone else invited) are not solo work → skip. attendeeCount is
     // undefined for events with no attendee list (solo, owned) and 1 for
     // self-only; both are reviewable. 2+ means other attendees.

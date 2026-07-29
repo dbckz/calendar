@@ -72,6 +72,13 @@ export interface ReplanBlock {
   // home. `isBreak` (lunch / exercise / break) splits work runs.
   ritualKind?: 'lunch' | 'exercise' | 'emails' | 'kindleNotes' | 'grooming' | 'retro' | 'break';
   isBreak?: boolean;
+  // A CATEGORY CONTAINER: one block holding several tasks of a category (a
+  // "Writing/Deep Work" block with three writing tasks in it). The container is
+  // capacity for the week's longer work, not a promise to finish every member
+  // that day — so a past, part-done container is NOT re-slotted while the same
+  // category still has a block later in the week (see planReplan). Its unfinished
+  // tasks stay attached to the category's remaining blocks.
+  isCategoryContainer?: boolean;
 }
 
 export type ReplanReason = 'missed' | 'conflict';
@@ -369,6 +376,13 @@ export function planReplan(input: ReplanInput): ReplanResult {
     keptBusy.push({ ...intervalOf(block.date, block.start, block.durationMinutes), isBreak: block.isBreak });
   };
 
+  // Categories that still have a block to come this week (a non-ritual block that
+  // hasn't ended yet). A part-done category container whose category appears here
+  // needs no new slot: the work carries on in the block already booked.
+  const categoriesWithFutureCapacity = new Set(
+    blocks.filter(b => !b.ritualKind && b.endMs > nowMs).map(b => b.category)
+  );
+
   for (const block of blocks) {
     if (block.done) {
       keep(block);
@@ -376,7 +390,14 @@ export function planReplan(input: ReplanInput): ReplanResult {
       // A past ritual is never "missed" — a skipped lunch/emails isn't rescheduled.
       keep(block);
     } else if (!block.ritualKind && !block.done && block.endMs <= nowMs) {
-      toMove.push({ block, reason: 'missed' });
+      // A past category container with capacity still to come this week is kept:
+      // deep-work blocks exist to move longer tasks along across the week, not to
+      // be finished off each day, so duplicating one into tomorrow is noise.
+      if (block.isCategoryContainer && categoriesWithFutureCapacity.has(block.category)) {
+        keep(block);
+      } else {
+        toMove.push({ block, reason: 'missed' });
+      }
     } else if (
       !block.done &&
       block.endMs > nowMs &&

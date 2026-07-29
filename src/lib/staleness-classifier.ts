@@ -5,6 +5,7 @@
 
 import { createHash } from 'node:crypto';
 import { runClaudeJsonArray } from './ai-classifier';
+import { composePrompt } from './classifier-learning';
 
 export interface StaleTask {
   gid: string;
@@ -53,17 +54,23 @@ export function staleContentHash(task: StaleTask): string {
     .slice(0, 16);
 }
 
-function buildPrompt(tasks: StaleTask[], todayIso: string): string {
+// `examples` (optional) are tasks the user reviewed and chose to KEEP — a
+// one-sided, NOT-stale-only signal (there is no recorded "yes, stale" class). The
+// caller frames it narrowly ("don't flag tasks like these") rather than as
+// neutral ground truth, so it can't teach the model to stop flagging altogether.
+// Composed at call time, so it never touches STALE_PROMPT_VERSION.
+function buildPrompt(tasks: StaleTask[], todayIso: string, examples = ''): string {
   const lines = tasks.map(t => {
     const desc = (t.description || '').replace(/\s+/g, ' ').trim().slice(0, 200);
     return `[${t.gid}] created:${t.createdAt?.slice(0, 10) || '?'} due:${t.dueOn || 'none'} start:${t.startOn || 'none'} | (${t.integrationName || '?'}) ${t.title}${desc ? ` | ${desc}` : ''}`;
   });
-  return PROMPT_TEMPLATE.replace('{{TODAY}}', todayIso.slice(0, 10)).replace('{{TASKS}}', lines.join('\n'));
+  const base = PROMPT_TEMPLATE.replace('{{TODAY}}', todayIso.slice(0, 10)).replace('{{TASKS}}', lines.join('\n'));
+  return composePrompt(base, examples);
 }
 
-export async function classifyStale(tasks: StaleTask[], todayIso: string, timeoutSeconds = 180): Promise<StaleResult[]> {
+export async function classifyStale(tasks: StaleTask[], todayIso: string, timeoutSeconds = 180, examples = ''): Promise<StaleResult[]> {
   if (tasks.length === 0) return [];
-  const records = await runClaudeJsonArray(buildPrompt(tasks, todayIso), timeoutSeconds);
+  const records = await runClaudeJsonArray(buildPrompt(tasks, todayIso, examples), timeoutSeconds);
   return records
     .filter(r => typeof r.gid === 'string')
     .map(r => ({ gid: String(r.gid), stale: Boolean(r.stale), reason: String(r.reason || '').slice(0, 120) }));

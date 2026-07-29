@@ -6,6 +6,7 @@
 // which is exactly what makes over-scheduling visible after the fact.
 
 import type { WeeklyStatsRecord, WeeklyTaskOutcome } from '@/types';
+import type { CarryOverEntry } from '@/lib/storage/carry-overs';
 
 export interface WeekCategorySummary {
   category: string;
@@ -50,7 +51,10 @@ export function summariseWeek(record: WeeklyStatsRecord): WeekSummary {
     row.scheduled += 1; // every recorded task counts toward the high-water mark
     if (task.outcome === 'done') row.completed += 1;
     else if (task.outcome === 'started') row.started += 1;
-    else if (task.outcome === 'carried') row.carried += 1;
+    // 'unscheduled' (planned, then left without a slot) folds into 'carried':
+    // both mean planned-but-not-done-and-still-open, so no progress figure or UI
+    // consumer needs to distinguish them.
+    else if (task.outcome === 'carried' || task.outcome === 'unscheduled') row.carried += 1;
     else if (task.outcome === 'dropped') row.dropped += 1;
     byCategory.set(category, row);
   };
@@ -118,6 +122,51 @@ export function weeklyProgressRows(
       });
     }
   }
+  return rows;
+}
+
+// --- Left unscheduled -------------------------------------------------------
+// Tasks planned into the week that then slid out of the schedule, so they can be
+// surfaced on the dashboard rather than silently lost. Two ways that happens,
+// both derived from the durable record (no new storage needed):
+//  * 'deferred'    — the defer / end-of-week carry paths record 'carried',
+//  * 'unscheduled' — the "leave unscheduled" path records 'unscheduled'.
+// Deliberately excludes 'dropped': a task the user explicitly deleted was not
+// lost, it was abandoned on purpose.
+export interface UnscheduledTask {
+  taskId: string;
+  title?: string;
+  category: string;
+  // How it left the schedule, so the widget can label it honestly.
+  reason: 'deferred' | 'unscheduled';
+  // ISO — when it last dropped out of the schedule (its outcome last changed).
+  droppedAt?: string;
+  // Consecutive weeks it has been carried, when the carry-over marker tracks it.
+  // Mid-week deferrals / leave-unscheduled write no marker, so this is often absent.
+  carryStreak?: number;
+}
+
+export function unscheduledThisWeek(
+  record: WeeklyStatsRecord | null,
+  carryOvers: Record<string, CarryOverEntry>
+): UnscheduledTask[] {
+  if (!record) return [];
+  const rows: UnscheduledTask[] = Object.values(record.tasks ?? {})
+    .filter(t => t.outcome === 'carried' || t.outcome === 'unscheduled')
+    .map(t => ({
+      taskId: t.taskId,
+      ...(t.title ? { title: t.title } : {}),
+      category: t.category,
+      reason: t.outcome === 'unscheduled' ? ('unscheduled' as const) : ('deferred' as const),
+      ...(t.outcomeAt ? { droppedAt: t.outcomeAt } : {}),
+      ...(carryOvers[t.taskId]?.carries ? { carryStreak: carryOvers[t.taskId].carries } : {}),
+    }));
+  // Most-recently dropped first; ties broken by title for a stable order.
+  rows.sort(
+    (a, b) =>
+      (b.droppedAt ?? '').localeCompare(a.droppedAt ?? '') ||
+      (a.title ?? '').localeCompare(b.title ?? '')
+  );
   return rows;
 }
 

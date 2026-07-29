@@ -179,6 +179,13 @@ describe('replan / daily-review confirm → weekly outcomes', () => {
     expect(outcomes).toContainEqual({ taskId: 'g-carried', outcome: 'carried' });
   });
 
+  it("records a left-unscheduled block's tasks as unscheduled", async () => {
+    await post(replanConfirm, { moves: [], leaveUnscheduled: ['evt-carried'] });
+
+    const [, outcomes] = (setWeeklyTaskOutcomes as jest.Mock).mock.calls[0];
+    expect(outcomes).toContainEqual({ taskId: 'g-carried', outcome: 'unscheduled' });
+  });
+
   it('marks an Asana completion done, and a not-done reversal back to scheduled', async () => {
     await post(replanConfirm, { moves: [], notDone: ['evt-done'] });
     const [, outcomes] = (setWeeklyTaskOutcomes as jest.Mock).mock.calls[0];
@@ -186,7 +193,8 @@ describe('replan / daily-review confirm → weekly outcomes', () => {
   });
 
   it('writes nothing when the confirm settled no outcomes', async () => {
-    await post(replanConfirm, { moves: [], leaveUnscheduled: ['evt-carried'] });
+    // Dismissing a stale prep block settles no task outcome (it has no backing task).
+    await post(replanConfirm, { moves: [], dismiss: ['evt-stale-prep'] });
     expect(setWeeklyTaskOutcomes).not.toHaveBeenCalled();
   });
 });

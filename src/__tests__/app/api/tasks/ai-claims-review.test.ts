@@ -131,7 +131,7 @@ describe('classify-ai — review mode', () => {
 });
 
 describe('ai-verdicts — applying the review', () => {
-  it('accepts only the ticked claims and records the unticked as user rejections', async () => {
+  it('records BOTH classes as user verdicts: the ticked as positive, the unticked as rejections', async () => {
     const out = await post(applyVerdicts, {
       accept: [{ gid: 'g-yes', integrationId: 'ai1' }],
       reject: [{ gid: 'g-nope', integrationId: 'ai1' }],
@@ -139,13 +139,18 @@ describe('ai-verdicts — applying the review', () => {
 
     expect(upsertTaskMetadata).toHaveBeenCalledWith('g-yes', 'ai1', { aiDelegable: true });
     expect(upsertTaskMetadata).toHaveBeenCalledWith('g-nope', 'ai1', { aiDelegable: false });
-    expect(setAiUserVerdicts).toHaveBeenCalledWith([{ gid: 'g-nope', aiSuitable: false }]);
+    // Confirmations are recorded too (so the classifier can learn his positives),
+    // alongside the rejection — both classes, in one write.
+    expect(setAiUserVerdicts).toHaveBeenCalledWith([
+      { gid: 'g-yes', aiSuitable: true },
+      { gid: 'g-nope', aiSuitable: false },
+    ]);
     expect(out).toEqual({ accepted: 1, rejected: 1 });
   });
 
-  it('accepting everything writes no rejection verdicts', async () => {
+  it('accepting everything records positive verdicts but no rejections', async () => {
     await post(applyVerdicts, { accept: [{ gid: 'g-yes', integrationId: 'ai1' }], reject: [] });
-    expect(setAiUserVerdicts).toHaveBeenCalledWith([]);
+    expect(setAiUserVerdicts).toHaveBeenCalledWith([{ gid: 'g-yes', aiSuitable: true }]);
   });
 
   it('an empty decision set is rejected (cancel never calls this route at all)', async () => {

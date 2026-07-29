@@ -69,7 +69,7 @@ describe('buildReviewApplyPayload', () => {
       e1: mark({ done: false }),
       e2: mark({ done: false }),
     });
-    expect(out).toEqual({ done: [], notDone: [], started: [], completeAsana: [], adopt: [], replacements: [] });
+    expect(out).toEqual({ done: [], notDone: [], started: [], completeAsana: [], adopt: [], replacements: [], reviewedCalendarTitles: [] });
   });
 
   it('marks a prep block done', () => {
@@ -156,7 +156,7 @@ describe('buildReviewApplyPayload', () => {
     const out = buildReviewApplyPayload(blocks, {
       e1: mark({ done: true, completeInAsana: true }),
     });
-    expect(out).toEqual({ done: [], notDone: [], started: [], completeAsana: [], adopt: [], replacements: [] });
+    expect(out).toEqual({ done: [], notDone: [], started: [], completeAsana: [], adopt: [], replacements: [], reviewedCalendarTitles: [] });
   });
 
   it('emits nothing for a task already complete in Asana (completedInAsana)', () => {
@@ -169,7 +169,7 @@ describe('buildReviewApplyPayload', () => {
     const out = buildReviewApplyPayload([block], {
       e1: mark({ done: true, completeInAsana: true }),
     });
-    expect(out).toEqual({ done: [], notDone: [], started: [], completeAsana: [], adopt: [], replacements: [] });
+    expect(out).toEqual({ done: [], notDone: [], started: [], completeAsana: [], adopt: [], replacements: [], reviewedCalendarTitles: [] });
   });
 });
 
@@ -265,7 +265,9 @@ describe('buildReviewApplyPayload — started, and rewriting a missed slot', () 
       evt: { tasks: [{ done: false, completeInAsana: false, outcome: 'started' }] },
     });
 
-    expect(payload.started).toEqual(['evt']);
+    // Ad-hoc block: the started member's own id is recorded, so the week's
+    // "started" count is per task rather than per block.
+    expect(payload.started).toEqual([{ googleEventId: 'evt', taskIds: ['ad1'] }]);
     expect(payload.done).toEqual([]);
   });
 
@@ -277,7 +279,7 @@ describe('buildReviewApplyPayload — started, and rewriting a missed slot', () 
       { evt: { googleEventId: 'evt', ...slot, mode: 'none' } }
     );
 
-    expect(payload.started).toEqual(['evt']);
+    expect(payload.started).toEqual([{ googleEventId: 'evt', taskIds: ['ad1'] }]);
     expect(payload.replacements).toEqual([]);
   });
 
@@ -370,7 +372,9 @@ describe('buildReviewApplyPayload — started, and rewriting a missed slot', () 
       },
       { 'evt-group': { googleEventId: 'evt-group', ...slot, mode: 'none' } }
     );
-    expect(partly.started).toEqual(['evt-group']);
+    // Only the member actually started is recorded — the untouched sibling must
+    // never inflate the week's started count.
+    expect(partly.started).toEqual([{ googleEventId: 'evt-group', taskIds: ['g1'] }]);
     expect(partly.replacements).toEqual([]);
 
     // Nothing done or started → the whole block was missed, so the answer applies.
@@ -387,5 +391,29 @@ describe('buildReviewApplyPayload — started, and rewriting a missed slot', () 
       { 'evt-group': { googleEventId: 'evt-group', ...slot, mode: 'none' } }
     );
     expect(wholly.replacements).toHaveLength(1);
+  });
+
+  it('records reviewed calendar-source titles (implicit "this IS a task"), not local-record ones', () => {
+    const calendar: ReplanReviewBlock = {
+      googleEventId: 'evt-cal',
+      kind: 'task',
+      source: 'calendar',
+      category: 'Calendar',
+      date: '2026-07-21',
+      start: '14:00',
+      durationMinutes: 45,
+      startMs: 0,
+      endMs: 0,
+      done: false,
+      titles: ['Meet Corinna'],
+      tasks: [{ title: 'Meet Corinna', done: false }],
+    };
+    const out = buildReviewApplyPayload(
+      [calendar, adhocBlock('e-ad', false)],
+      { 'evt-cal': mark({ done: false }), 'e-ad': mark({ done: false }) }
+    );
+    // The calendar row was reviewed (not dismissed) → recorded, whatever outcome.
+    // The ad-hoc row comes from a local task record, so it is never recorded here.
+    expect(out.reviewedCalendarTitles).toEqual(['Meet Corinna']);
   });
 });

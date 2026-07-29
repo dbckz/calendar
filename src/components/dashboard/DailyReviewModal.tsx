@@ -245,8 +245,10 @@ export function DailyReviewModal({
         onApplied?.();
       }
       // Stamp the review as completed so the next one only covers what finishes
-      // after now. Best-effort — a failure here must not block the replan step.
-      await api.completeDailyReview().catch(() => {});
+      // after now, and record the calendar rows he reviewed (rather than
+      // dismissed) as implicit "this IS a task" verdicts. Best-effort — a failure
+      // here must not block the replan step.
+      await api.completeDailyReview(payload.reviewedCalendarTitles).catch(() => {});
       // Re-gather so the replan step sees the just-applied done/not-done state
       // (Asana-completed tasks drop out of the fresh incomplete fetch).
       await analyze();
@@ -526,29 +528,37 @@ function ReviewRow({
               </span>
             )}
           </div>
-          <div className="mt-0.5 flex items-center gap-2 text-xs text-gray-400">
+          <div className="mt-0.5 text-xs text-gray-400">
             <span>{slotLabelMs(block.startMs)}</span>
-            {onDismiss && (
-              <button
-                onClick={onDismiss}
-                className="inline-flex items-center gap-0.5 text-gray-400 hover:text-gray-600 transition-colors"
-                title="Not a task — hide this event and don’t show it again"
-              >
-                <Ban className="w-3 h-3" />
-                Not a task
-              </button>
-            )}
           </div>
         </div>
 
-        {/* Single-task blocks: the outcome control sits inline in the header. */}
-        {!grouped && (
-          <OutcomeToggle
-            value={markOutcome(marks[0], block.tasks[0]?.done ?? false)}
-            onChange={outcome => onSetOutcome(0, outcome)}
-            groupLabel={`Outcome for ${titleLabel(block.titles)}`}
-          />
-        )}
+        {/* Row action area. The "Not relevant" dismissal (calendar rows only) sits
+            beside the outcome control — the escape hatch is the safety net for the
+            loosened filter, so it must be obvious, not buried under the timestamp.
+            Single-task blocks show their outcome control here; grouped blocks show
+            one per member below. */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {onDismiss && (
+            <button
+              type="button"
+              onClick={onDismiss}
+              aria-label="Not relevant — hide this and don’t ask again"
+              title="Not relevant — hide this and don’t ask again"
+              className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-[11px] font-medium text-gray-500 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-300 transition-colors"
+            >
+              <Ban className="w-4 h-4" />
+              <span className="hidden sm:inline">Not relevant</span>
+            </button>
+          )}
+          {!grouped && (
+            <OutcomeToggle
+              value={markOutcome(marks[0], block.tasks[0]?.done ?? false)}
+              onChange={outcome => onSetOutcome(0, outcome)}
+              groupLabel={`Outcome for ${titleLabel(block.titles)}`}
+            />
+          )}
+        </div>
       </div>
 
       {/* Grouped block: each member gets its own compact outcome control. */}

@@ -486,15 +486,26 @@ export interface TaskMetadata {
 //    changes its `outcome`, not its presence — that is what makes end-of-week
 //    over-scheduling visible ("you planned 14, finished 6").
 //  * Only outcome 'done' counts as completed. 'started' (worked on but not
-//    finished), 'carried' and 'dropped' are explicitly NOT completed — a started
-//    task still has to be finished, so it stays in the not-done pool for replan
-//    and carry-over. The progress display shows it separately so partial
-//    progress on a long task is visible rather than reading as a total miss.
+//    finished), 'carried', 'unscheduled' and 'dropped' are explicitly NOT
+//    completed — a started task still has to be finished, so it stays in the
+//    not-done pool for replan and carry-over. The progress display shows started
+//    separately so partial progress on a long task is visible rather than
+//    reading as a total miss.
+//  * 'unscheduled' means: planned this week, then left without a slot — still
+//    open, no longer on the calendar. Distinct from 'carried' (explicitly parked
+//    for next week) and 'dropped' (deleted on purpose), but counted alongside
+//    'carried' in the summaries since both mean planned-but-not-done-and-open.
 //  * Per-category totals are DERIVED from `tasks` (see summariseWeek) rather
 //    than stored, so the counters can never drift from the task list.
 //  * Times are per integration per day, so a week's OM/DBC split can be
 //    recovered without the (rolling) time-tracking file.
-export type WeeklyTaskOutcomeKind = 'scheduled' | 'started' | 'done' | 'carried' | 'dropped';
+export type WeeklyTaskOutcomeKind =
+  | 'scheduled'
+  | 'started'
+  | 'done'
+  | 'carried'
+  | 'unscheduled'
+  | 'dropped';
 
 export interface WeeklyTaskOutcome {
   taskId: string; // Asana gid or ad-hoc id

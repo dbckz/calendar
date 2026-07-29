@@ -38,9 +38,12 @@ export interface UntypedTask {
 }
 
 // Row state for the type-review step: an untyped task plus the currently chosen
-// label ('' = leave untyped, i.e. don't write).
+// label ('' = leave untyped, i.e. don't write). `suggested` is the AI's original
+// proposal, kept so applying can tell an override from an accepted suggestion
+// (the override is the stronger learning signal).
 export interface TypeRow extends UntypedTask {
   chosen: string;
+  suggested?: string;
 }
 
 export interface EditableProposal extends ProposedBlock {

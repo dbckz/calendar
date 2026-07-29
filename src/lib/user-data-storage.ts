@@ -15,6 +15,7 @@ export type {
   GoogleEventAttribution,
   PrepBlock,
   RitualBlock,
+  ReviewTitleVerdict,
 } from './storage/core';
 
 export * from './storage/templates';
@@ -31,3 +32,5 @@ export * from './storage/attributions';
 export * from './storage/deferrals';
 export * from './storage/carry-overs';
 export * from './storage/daily-review';
+export * from './storage/type-verdicts';
+export * from './storage/reminder-verdicts';

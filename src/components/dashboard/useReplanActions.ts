@@ -9,10 +9,11 @@ export type MoveMode = 'reschedule' | 'done';
 // Per-stale-row action: leave untouched, mark done, or dismiss (delete record).
 export type StaleMode = 'leave' | 'done' | 'dismiss';
 // Per-unplaceable-row action: defer to next week (default), leave unscheduled,
-// move into the evening overflow slot (only when one was found), or prioritise
-// it tomorrow by displacing one of tomorrow's blocks (only when there is one to
-// bump).
-export type UnplaceableMode = 'defer' | 'leave' | 'overflow' | 'prioritise';
+// move into the evening overflow slot (only when one was found), prioritise it
+// tomorrow by displacing one of tomorrow's blocks (only when there is one to
+// bump), or drop it outright — "I'm not doing this at all": the calendar block
+// and the backing Asana task are both deleted.
+export type UnplaceableMode = 'defer' | 'leave' | 'overflow' | 'prioritise' | 'drop';
 // Per-row action in END-OF-WEEK mode (the last working day and the weekend after
 // it): there is no week left to reschedule into, so each unfinished task is
 // carried into next week's plan (default), dropped back to the backlog with no
@@ -109,6 +110,9 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     const dismissIds: string[] = [];
     const defer: Array<{ taskIds: string[]; googleEventId?: string }> = [];
     const leaveUnscheduled: string[] = [];
+    // Unplaceable blocks the user chose to delete outright — the calendar block and
+    // the backing Asana task both go, and a 'dropped' outcome is recorded.
+    const drop: Array<{ googleEventId: string; googleIntegrationId?: string; taskIds: string[] }> = [];
     const carry: Array<{ blockId?: string; blockIds?: string[]; taskIds: string[]; quiet?: boolean; mustDo?: boolean }> = [];
     const delegate: Array<{ blockId?: string; gid: string; integrationId: string; title?: string }> = [];
     const completeAsana: Array<{ gid: string; integrationId: string }> = [];
@@ -180,6 +184,12 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
               durationMinutes: u.durationMinutes,
             });
           }
+        } else if (mode === 'drop') {
+          drop.push({
+            googleEventId: u.googleEventId,
+            googleIntegrationId: u.googleIntegrationId,
+            taskIds: u.deferTaskIds ?? [],
+          });
         } else if (mode === 'leave') {
           leaveUnscheduled.push(u.googleEventId);
         } else {
@@ -235,7 +245,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     const deletionBlocks = deletions
       .filter(d => deletionIncluded.has(d.googleEventId))
       .map(d => ({ googleEventId: d.googleEventId, googleIntegrationId: d.googleIntegrationId }));
-    return { moves, doneIds, dismissIds, defer, leaveUnscheduled, carry, delegate, completeAsana, displace, additionBlocks, deletionBlocks };
+    return { moves, doneIds, dismissIds, defer, leaveUnscheduled, drop, carry, delegate, completeAsana, displace, additionBlocks, deletionBlocks };
   }, [data, included, moveMode, stale, staleMode, unplaceableMode, unplaceableVictim, carryBlocks, carriedEventIds, carryMode, additions, additionIncluded, deletions, deletionIncluded]);
 
   const actionCount =
@@ -244,6 +254,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     payload.dismissIds.length +
     payload.defer.length +
     payload.leaveUnscheduled.length +
+    payload.drop.length +
     payload.carry.length +
     payload.delegate.length +
     payload.completeAsana.length +
@@ -280,7 +291,7 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
     setIsConfirming(true);
     setError(null);
     try {
-      const { results: res, doneResults, deferResults, carryResults, displaceResults, additionResults: addRes } = await api.confirmReplan(
+      const { results: res, doneResults, deferResults, carryResults, displaceResults, dropResults, additionResults: addRes } = await api.confirmReplan(
         payload.moves,
         payload.doneIds,
         payload.dismissIds,
@@ -295,7 +306,8 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
         payload.carry.length > 0 ? payload.carry : undefined,
         undefined, // started — daily-review only
         undefined, // replacements — daily-review only
-        payload.delegate.length > 0 ? payload.delegate : undefined
+        payload.delegate.length > 0 ? payload.delegate : undefined,
+        payload.drop.length > 0 ? payload.drop : undefined
       );
       const map: Record<string, ReplanConfirmResult> = {};
       for (const r of [...res, ...doneResults]) map[r.googleEventId] = r;
@@ -318,11 +330,15 @@ export function useReplanActions(data: ReplanAnalyzeResponse | null, onApplied?:
       for (const r of displaceResults ?? []) {
         map[r.googleEventId] = { googleEventId: r.googleEventId, success: r.success, error: r.error };
       }
+      // Fold drop results in so a deleted unplaceable row shows a status icon.
+      for (const r of dropResults ?? []) {
+        map[r.googleEventId] = { googleEventId: r.googleEventId, success: r.success, error: r.error };
+      }
       setResults(map);
       const addMap: Record<string, ReplanAdditionResult> = {};
       for (const r of addRes ?? []) addMap[r.id] = r;
       setAdditionResults(addMap);
-      if ([...res, ...doneResults, ...(deferResults ?? []), ...(carryResults ?? []), ...(displaceResults ?? []), ...(addRes ?? [])].some(r => r.success)) onApplied?.();
+      if ([...res, ...doneResults, ...(deferResults ?? []), ...(carryResults ?? []), ...(displaceResults ?? []), ...(dropResults ?? []), ...(addRes ?? [])].some(r => r.success)) onApplied?.();
       setDone(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to apply changes');

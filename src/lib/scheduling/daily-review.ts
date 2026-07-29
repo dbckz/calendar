@@ -68,15 +68,29 @@ export interface ReviewAdoptInput {
   integrationId?: string;
 }
 
+// A block whose work was STARTED but not finished. `taskIds` names the members
+// actually worked on, so a grouped block where two of three tasks were started
+// records exactly two 'started' outcomes. Absent taskIds means the whole block
+// (older callers, and single-task blocks with no resolvable id).
+export interface ReviewStartedInput {
+  googleEventId: string;
+  taskIds?: string[];
+}
+
 export interface ReviewApplyPayload {
   done: string[];
   notDone: string[];
-  // Event ids whose work was STARTED but not finished. Recorded as a 'started'
-  // outcome in the weekly stats; treated as not-done everywhere else.
-  started: string[];
+  // Blocks whose work was STARTED but not finished, with the started member tasks.
+  // Recorded as 'started' outcomes in the weekly stats; not-done everywhere else.
+  started: ReviewStartedInput[];
   completeAsana: Array<{ gid: string; integrationId: string }>;
   adopt: ReviewAdoptInput[];
   replacements: ReviewReplacementInput[];
+  // Titles of the bare CALENDAR-source rows the user reviewed (marked, not
+  // dismissed) — an implicit "this IS a task". Recorded as positive user verdicts
+  // so the not-a-task classifier learns his confirmations, not just his
+  // dismissals. Raw titles; the caller normalizes the key when writing them.
+  reviewedCalendarTitles: string[];
 }
 
 // The effective outcome of a task mark, tolerating callers that only set `done`.
@@ -96,14 +110,23 @@ export function buildReviewApplyPayload(
 ): ReviewApplyPayload {
   const done: string[] = [];
   const notDone: string[] = [];
-  const started: string[] = [];
+  const started: ReviewStartedInput[] = [];
   const completeAsana: Array<{ gid: string; integrationId: string }> = [];
   const adopt: ReviewAdoptInput[] = [];
   const replacements: ReviewReplacementInput[] = [];
+  const reviewedCalendarTitles: string[] = [];
 
   for (const block of blocks) {
     const mark = marks[block.googleEventId];
     if (!mark) continue;
+
+    // Reviewing a bare calendar row (rather than dismissing it) is an implicit
+    // "this IS a task", whatever outcome was chosen — record its title so the
+    // classifier learns the positive.
+    if (block.source === 'calendar') {
+      const rawTitle = block.titles[0] ?? block.tasks[0]?.title;
+      if (rawTitle) reviewedCalendarTitles.push(rawTitle);
+    }
 
     // The user's intended outcome per task (default: leave as-is).
     const outcomes = block.tasks.map((t, i) => markOutcome(mark.tasks[i], t.done));
@@ -112,7 +135,20 @@ export function buildReviewApplyPayload(
     // A block counts as started when nothing is finished-and-done but at least
     // one task was worked on. Recorded for the stats; it stays not-done.
     const anyStarted = outcomes.some(o => o === 'started');
-    if (anyStarted && !allWantDone) started.push(block.googleEventId);
+    if (anyStarted && !allWantDone) {
+      // Only the members actually marked started are recorded, so a grouped block
+      // never inflates the week's "started" count with tasks left untouched. Ids
+      // come from the tasks themselves (Asana gid, else ad-hoc id); a block whose
+      // tasks carry no id at all (prep) falls back to the whole block.
+      const startedIds = block.tasks
+        .filter((_, i) => outcomes[i] === 'started')
+        .map(t => t.gid ?? t.adhocId)
+        .filter((id): id is string => !!id);
+      started.push({
+        googleEventId: block.googleEventId,
+        ...(startedIds.length > 0 ? { taskIds: startedIds } : {}),
+      });
+    }
 
     // A replacement answer only applies to a block that was NOT started and NOT
     // done — "didn't do" means the slot didn't happen as planned. A started block
@@ -180,5 +216,5 @@ export function buildReviewApplyPayload(
     }
   }
 
-  return { done, notDone, started, completeAsana, adopt, replacements };
+  return { done, notDone, started, completeAsana, adopt, replacements, reviewedCalendarTitles };
 }

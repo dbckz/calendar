@@ -9,6 +9,8 @@ import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
+import { composePrompt } from './classifier-learning';
+
 export interface ClassifierTask {
   gid: string;
   title: string;
@@ -62,12 +64,17 @@ function claudeModel(): string {
   return process.env.CLAUDE_MODEL || 'claude-opus-4-8';
 }
 
-function buildPrompt(tasks: ClassifierTask[]): string {
+// `examples` is Dave's own labelled verdicts as a few-shot block (see
+// classifier-learning.ts). It is PREPENDED at call time and is deliberately NOT
+// part of PROMPT_TEMPLATE / PROMPT_VERSION — folding it into the hash would
+// invalidate every cached verdict on each new example. Empty string → the prompt
+// is byte-identical to the no-examples prompt.
+function buildPrompt(tasks: ClassifierTask[], examples = ''): string {
   const lines = tasks.map(t => {
     const desc = (t.description || '').replace(/\s+/g, ' ').trim().slice(0, 300);
     return `[${t.gid}] (${t.integrationName || '?'}) ${t.title}${desc ? ` | ${desc}` : ''}`;
   });
-  return PROMPT_TEMPLATE.replace('{{TASKS}}', lines.join('\n'));
+  return composePrompt(PROMPT_TEMPLATE.replace('{{TASKS}}', lines.join('\n')), examples);
 }
 
 // Recover the JSON array of objects from the model's (possibly fenced/prose-
@@ -146,10 +153,17 @@ export async function runClaudeJsonArray(prompt: string, timeoutSeconds = 180): 
   return extractJsonArray(await runClaudeText(prompt, { timeoutSeconds }));
 }
 
-// Classify a batch of tasks for AI-suitability in one headless call.
-export async function classifyTasks(tasks: ClassifierTask[], timeoutSeconds = 180): Promise<ClassifierResult[]> {
+// Classify a batch of tasks for AI-suitability in one headless call. `examples`
+// (optional) is Dave's own labelled verdicts as a few-shot block, prepended to
+// the prompt so the model follows his precedent; omitting it leaves the prompt
+// unchanged.
+export async function classifyTasks(
+  tasks: ClassifierTask[],
+  timeoutSeconds = 180,
+  examples = ''
+): Promise<ClassifierResult[]> {
   if (tasks.length === 0) return [];
-  const records = await runClaudeJsonArray(buildPrompt(tasks), timeoutSeconds);
+  const records = await runClaudeJsonArray(buildPrompt(tasks, examples), timeoutSeconds);
   return records
     .filter(r => typeof r.gid === 'string')
     .map(r => ({ gid: String(r.gid), aiSuitable: Boolean(r.aiSuitable), reason: String(r.reason || '').slice(0, 120) }));

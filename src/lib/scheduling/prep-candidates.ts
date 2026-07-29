@@ -21,6 +21,7 @@ import {
   type PrepResult,
 } from '@/lib/prep-classifier';
 import { getMeetingPrepDecisions, setMeetingPrepDecision, type PrepBlock } from '@/lib/user-data-storage';
+import { buildExamplesBlock, isVerdictReusable } from '@/lib/classifier-learning';
 import { isPrepTitle, prepMeetingTitleFromEvent } from '@/lib/scheduling/event-titles';
 import { localDateStr, timeStr } from '@/lib/scheduling/engine';
 import type { CalendarEvent, MeetingPrepDecision } from '@/types';
@@ -125,22 +126,29 @@ export async function resolvePrepCandidates(input: ResolvePrepInput): Promise<Pr
       verdicts.set(key, { needsPrep: decision.needsPrep, decidedBy: 'user', reason: 'Your choice' });
       continue;
     }
-    const hash = prepContentHash(meetingInput);
-    if (
-      decision?.decidedBy === 'ai' &&
-      decision.contentHash === hash &&
-      decision.promptVersion === PREP_PROMPT_VERSION
-    ) {
-      verdicts.set(key, { needsPrep: decision.needsPrep, decidedBy: 'ai', reason: '' });
+    if (isVerdictReusable(decision, prepContentHash(meetingInput), PREP_PROMPT_VERSION)) {
+      verdicts.set(key, { needsPrep: decision!.needsPrep, decidedBy: 'ai', reason: '' });
       continue;
     }
     toClassify.push(meetingInput);
   }
 
   if (toClassify.length > 0) {
+    // Feed Dave's own prep decisions back as few-shot examples (keyed by meeting
+    // title), so the classifier follows his precedent. Empty → prompt unchanged.
+    const examples = buildExamplesBlock(
+      Object.entries(decisions)
+        .filter(([, d]) => d.decidedBy === 'user')
+        .map(([key, d]) => ({ key, label: d.needsPrep ? 'yes' : 'no', at: d.updatedAt })),
+      {
+        heading:
+          'The person has already decided prep for these meetings themselves — treat as ground truth and apply the same standard:',
+        render: label => (label === 'yes' ? 'needs prep' : 'no prep needed'),
+      }
+    );
     let results: PrepResult[];
     try {
-      results = await classifyPrep(toClassify);
+      results = await classifyPrep(toClassify, 120, examples);
     } catch (error) {
       console.error('[Scheduling Prep Candidates] classifier failed:', error);
       results = [];

@@ -42,7 +42,15 @@ export async function POST(request: NextRequest) {
     for (const { gid, integrationId } of reject) {
       await upsertTaskMetadata(gid, integrationId, { aiDelegable: false });
     }
-    await setAiUserVerdicts(reject.map(({ gid }) => ({ gid, aiSuitable: false })));
+    // Record BOTH classes as user verdicts. Rejections pin the task out of the
+    // list (the classify route skips a negative verdict, as before). Confirmations
+    // are recorded too — not to pin (a positive verdict never blocks re-assessment,
+    // preserving re-claim), but so the classifier can learn his positives as
+    // few-shot examples instead of only ever seeing his rejections.
+    await setAiUserVerdicts([
+      ...accept.map(({ gid }) => ({ gid, aiSuitable: true })),
+      ...reject.map(({ gid }) => ({ gid, aiSuitable: false })),
+    ]);
 
     return NextResponse.json({ accepted: accept.length, rejected: reject.length });
   } catch (error) {

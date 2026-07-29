@@ -23,6 +23,7 @@ import {
 import { logicalTodayDate, normalizeRolloverHour } from '@/lib/date-utils';
 import { ritualKindForTitle, isBreakTitle, isRitualLikeTitle, existingRitualTitlesByDateFromEvents, RITUAL_TITLES } from '@/lib/scheduling/rituals';
 import { selectCalendarReviewBlocks } from '@/lib/scheduling/calendar-review';
+import { filterNonTaskReviewBlocks } from '@/lib/scheduling/review-task-filter';
 import { prepTitle } from '@/lib/scheduling/event-titles';
 import type { ScheduledAsanaTask } from '@/types';
 
@@ -212,6 +213,9 @@ export async function POST(request: NextRequest) {
         done,
         startMs,
         endMs,
+        // Several tasks sharing one block = a category container (deep work,
+        // outreach). Held to the week, not to the day it sat on.
+        ...(entries.length > 1 ? { isCategoryContainer: true } : {}),
       });
       pushReview({
         googleEventId: eventId,
@@ -381,6 +385,16 @@ export async function POST(request: NextRequest) {
     })) {
       reviewBlocks.push(b);
     }
+
+    // Second pass over the bare calendar events: drop anything that isn't a task
+    // at all (a wake-up marker, a personal ritual, a name standing in for a
+    // catch-up). Fails open — a classifier problem leaves the blocks in place.
+    const reviewableBlocks = await filterNonTaskReviewBlocks({
+      blocks: reviewBlocks,
+      verdicts: reviewState.titleVerdicts,
+    });
+    reviewBlocks.length = 0;
+    reviewBlocks.push(...reviewableBlocks);
 
     // Busy intervals from everything that is NOT an app block (real meetings).
     const otherBusy = eventsToBusyIntervals(ctx.weekEvents.filter(e => !appEventIds.has(e.id)));

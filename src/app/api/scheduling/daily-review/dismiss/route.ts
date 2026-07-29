@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { addDismissedReviewTitle } from '@/lib/user-data-storage';
+import { normalizeReviewTitleKey } from '@/lib/scheduling/not-a-task';
 
 // Dismiss a bare calendar-event title as "not a task" so it never resurfaces in
 // the daily review. Idempotent.
@@ -11,7 +12,7 @@ export async function POST(request: NextRequest) {
     if (!title.trim()) {
       return NextResponse.json({ error: 'A title is required' }, { status: 400 });
     }
-    await addDismissedReviewTitle(title);
+    await addDismissedReviewTitle(title, normalizeReviewTitleKey(title));
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error('Error dismissing review title:', error);

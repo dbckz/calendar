@@ -16,6 +16,7 @@ jest.mock('@/lib/google-calendar', () => ({
 
 jest.mock('@/lib/asana', () => ({
   completeTask: jest.fn(),
+  deleteTask: jest.fn(),
   refreshAsanaToken: jest.fn(),
 }));
 
@@ -48,23 +49,31 @@ jest.mock('@/lib/user-data-storage', () => ({
   removeBlockDoneOverride: jest.fn(),
   setTaskDeferrals: jest.fn(),
   updateScheduledAsanaTasksByGoogleEvent: jest.fn(),
+  deleteAdHocTask: jest.fn(),
+  removeCarryOvers: jest.fn(),
+  setWeeklyTaskOutcomes: jest.fn(),
 }));
 
 import { POST } from '@/app/api/scheduling/replan/confirm/route';
 import { createCalendarEvent, deleteCalendarEvent, updateCalendarEvent, ensureValidCredentials } from '@/lib/google-calendar';
-import { getEnabledGoogleIntegrations, getGoogleIntegrationById } from '@/lib/integration-storage';
+import { getEnabledGoogleIntegrations, getGoogleIntegrationById, getIntegrationById } from '@/lib/integration-storage';
+import { deleteTask } from '@/lib/asana';
 import {
   getAdHocTasks,
   getPrepBlocks,
   getRitualBlocks,
   getScheduledAsanaTasks,
   addPrepBlock,
+  deletePrepBlock,
   unscheduleAsanaTask,
   updateAdHocTask,
   setTaskDeferrals,
   removeBlockDoneOverride,
   removeGoogleEventAttribution,
   updateScheduledAsanaTasksByGoogleEvent,
+  deleteAdHocTask,
+  removeCarryOvers,
+  setWeeklyTaskOutcomes,
 } from '@/lib/user-data-storage';
 
 const INTEGRATION = { id: 'gi1', clientId: 'c', clientSecret: 's', credentials: { accessToken: 't' } };
@@ -129,7 +138,7 @@ describe('replan confirm — prioritise tomorrow (displace)', () => {
     expect(out.results).toEqual([{ googleEventId: 'evt-missed', success: true }]);
   });
 
-  it("leaves a victim's tasks in the pool (no deferral) when mode is 'leave'", async () => {
+  it("leaves a victim's tasks in the pool (no deferral) and records them unscheduled when mode is 'leave'", async () => {
     await confirm({
       displace: [
         {
@@ -147,6 +156,10 @@ describe('replan confirm — prioritise tomorrow (displace)', () => {
     expect(unscheduleAsanaTask).toHaveBeenCalledWith('s-thu');
     expect(setTaskDeferrals).not.toHaveBeenCalled();
     expect(removeBlockDoneOverride).toHaveBeenCalledWith('evt-thu');
+    // Left without a slot but still open → recorded as unscheduled for the week.
+    expect((setWeeklyTaskOutcomes as jest.Mock).mock.calls[0][1]).toEqual([
+      { taskId: 'g-thu', outcome: 'unscheduled' },
+    ]);
   });
 
   it('rejects a victim too short to hold the prioritised block', async () => {
@@ -196,6 +209,108 @@ describe('replan confirm — prioritise tomorrow (displace)', () => {
       dueTime: undefined,
     });
     expect(setTaskDeferrals).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('replan confirm — drop (delete task outright)', () => {
+  it('deletes the calendar block, the Asana task, clears local records and records a dropped outcome', async () => {
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([
+      { id: 's1', asanaTaskId: 'g1', integrationId: 'ai1', googleEventId: 'evt-drop' },
+    ]);
+    (getIntegrationById as jest.Mock).mockResolvedValue({
+      id: 'ai1',
+      type: 'asana',
+      clientId: 'c',
+      clientSecret: 's',
+      credentials: { accessToken: 'atok' },
+    });
+
+    const out = await confirm({
+      drop: [{ googleEventId: 'evt-drop', googleIntegrationId: 'gi1', taskIds: ['g1'] }],
+    });
+
+    // Calendar block removed.
+    expect(deleteCalendarEvent).toHaveBeenCalledTimes(1);
+    expect((deleteCalendarEvent as jest.Mock).mock.calls[0][3]).toBe('evt-drop');
+    // Backing Asana task deleted with the resolved token + its gid.
+    expect(deleteTask).toHaveBeenCalledWith('atok', 'g1');
+    // Local schedule cleared; carry-over marker dropped.
+    expect(unscheduleAsanaTask).toHaveBeenCalledWith('s1');
+    expect(removeCarryOvers).toHaveBeenCalledWith(['g1']);
+    expect(removeBlockDoneOverride).toHaveBeenCalledWith('evt-drop');
+    expect(removeGoogleEventAttribution).toHaveBeenCalledWith('evt-drop');
+    // Recorded as dropped for the week.
+    expect((setWeeklyTaskOutcomes as jest.Mock).mock.calls[0][1]).toEqual([
+      { taskId: 'g1', outcome: 'dropped' },
+    ]);
+    expect(out.dropResults).toEqual([{ googleEventId: 'evt-drop', success: true }]);
+  });
+
+  it('removes only the local record for an ad-hoc block (no Asana call)', async () => {
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([]);
+    (getAdHocTasks as jest.Mock).mockResolvedValue([{ id: 'ah1', googleEventId: 'evt-adhoc' }]);
+
+    const out = await confirm({
+      drop: [{ googleEventId: 'evt-adhoc', googleIntegrationId: 'gi1', taskIds: ['ah1'] }],
+    });
+
+    expect(deleteCalendarEvent).toHaveBeenCalledTimes(1);
+    expect(deleteAdHocTask).toHaveBeenCalledWith('ah1');
+    // No Asana task to delete for an ad-hoc block.
+    expect(deleteTask).not.toHaveBeenCalled();
+    expect(out.dropResults).toEqual([{ googleEventId: 'evt-adhoc', success: true }]);
+  });
+
+  it('reports failure per row and continues when the Asana delete fails', async () => {
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([
+      { id: 's1', asanaTaskId: 'g1', integrationId: 'ai1', googleEventId: 'evt-drop' },
+    ]);
+    (getIntegrationById as jest.Mock).mockResolvedValue({
+      id: 'ai1',
+      type: 'asana',
+      clientId: 'c',
+      clientSecret: 's',
+      credentials: { accessToken: 'atok' },
+    });
+    (deleteTask as jest.Mock).mockRejectedValueOnce(new Error('Asana 500'));
+
+    const out = await confirm({
+      drop: [{ googleEventId: 'evt-drop', googleIntegrationId: 'gi1', taskIds: ['g1'] }],
+    });
+
+    expect(out.dropResults).toHaveLength(1);
+    expect(out.dropResults[0]).toMatchObject({ googleEventId: 'evt-drop', success: false });
+  });
+
+  it('deletes the calendar block cleanly for a task-less (meeting-prep) row with empty taskIds', async () => {
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([]);
+    (getPrepBlocks as jest.Mock).mockResolvedValue([{ id: 'p1', googleEventId: 'evt-prep' }]);
+
+    const out = await confirm({
+      drop: [{ googleEventId: 'evt-prep', googleIntegrationId: 'gi1', taskIds: [] }],
+    });
+
+    // Calendar block + prep record removed, even with nothing to delete in Asana.
+    expect(deleteCalendarEvent).toHaveBeenCalledTimes(1);
+    expect((deleteCalendarEvent as jest.Mock).mock.calls[0][3]).toBe('evt-prep');
+    expect(deletePrepBlock).toHaveBeenCalledWith('p1');
+    expect(deleteTask).not.toHaveBeenCalled();
+    // No task ids → no 'dropped' outcomes recorded.
+    expect(setWeeklyTaskOutcomes).not.toHaveBeenCalled();
+    expect(out.dropResults).toEqual([{ googleEventId: 'evt-prep', success: true }]);
+  });
+});
+
+describe('replan confirm — leave unscheduled', () => {
+  it("clears the override and records the block's tasks as unscheduled", async () => {
+    const out = await confirm({ leaveUnscheduled: ['evt-thu'] });
+
+    expect(removeBlockDoneOverride).toHaveBeenCalledWith('evt-thu');
+    expect((setWeeklyTaskOutcomes as jest.Mock).mock.calls[0][1]).toEqual([
+      { taskId: 'g-thu', outcome: 'unscheduled' },
+    ]);
+    // Folded into deferResults so the row shows a status icon in the UI.
+    expect(out.deferResults).toEqual([{ taskIds: [], googleEventId: 'evt-thu', success: true }]);
   });
 });
 

@@ -13,6 +13,7 @@ import {
   upsertTaskMetadata,
 } from '@/lib/user-data-storage';
 import { selectNewAiClaims, type AiClaimCandidate } from '@/lib/ai-verdicts';
+import { buildExamplesBlock } from '@/lib/classifier-learning';
 import { AiClassificationEntry } from '@/types';
 
 interface IncomingTask extends ClassifierTask {
@@ -50,12 +51,14 @@ export async function POST(request: NextRequest) {
       getAllTaskMetadata(),
     ]);
 
-    // Split into cached (unchanged) vs. needs-assessment. A task Dave has already
-    // ruled on is skipped entirely — his verdict stands, so there is nothing to
-    // spend an LLM call on.
+    // Split into cached (unchanged) vs. needs-assessment. A task Dave RULED OUT is
+    // skipped entirely — his rejection stands, so there is nothing to spend an LLM
+    // call on. A positive verdict does NOT skip: an accepted task may still be
+    // re-assessed (and legitimately re-claimed), exactly as before this learning
+    // change added the positive class.
     const toAssess: IncomingTask[] = [];
     for (const task of tasks) {
-      if (userVerdicts[task.gid]) continue;
+      if (userVerdicts[task.gid]?.aiSuitable === false) continue;
       const hash = contentHash(task);
       const cached = cache[task.gid];
       if (!cached || cached.contentHash !== hash || cached.promptVersion !== PROMPT_VERSION) {
@@ -63,7 +66,27 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const results = await classifyTasks(toAssess);
+    // Feed Dave's own verdicts back as few-shot examples so the classifier follows
+    // his precedent. Titles come from the current batch (the only place a verdict
+    // gid's title is to hand); verdicts for tasks not in the batch are simply not
+    // shown. Empty → the prompt is unchanged.
+    const titleByGid = new Map(tasks.map(t => [t.gid, t.title]));
+    const examples = buildExamplesBlock(
+      Object.entries(userVerdicts)
+        .filter(([gid]) => titleByGid.has(gid))
+        .map(([gid, v]) => ({
+          key: titleByGid.get(gid) as string,
+          label: v.aiSuitable ? 'yes' : 'no',
+          at: v.decidedAt,
+        })),
+      {
+        heading:
+          'The person has already judged these tasks themselves — treat them as ground truth and apply the same standard:',
+        render: label => (label === 'yes' ? 'AI-runnable' : 'NOT AI-runnable'),
+      }
+    );
+
+    const results = await classifyTasks(toAssess, 180, examples);
     const byGid = new Map(results.map(r => [r.gid, r]));
 
     const now = new Date().toISOString();

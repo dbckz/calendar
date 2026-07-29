@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { addDays, format, startOfWeek } from 'date-fns';
 
 import { createCalendarEvent, deleteCalendarEvent, ensureValidCredentials, updateCalendarEvent } from '@/lib/google-calendar';
-import { completeTask, refreshAsanaToken } from '@/lib/asana';
+import { completeTask, deleteTask, refreshAsanaToken } from '@/lib/asana';
 import { blockEventDescription, colorIdForBlock, eventTitleForBlock } from '@/lib/scheduling/event-titles';
 import {
   getEnabledGoogleIntegrations,
@@ -21,6 +21,7 @@ import {
   getScheduledAsanaTasks,
   addAdHocTask,
   updateAdHocTask,
+  deleteAdHocTask,
   addPrepBlock,
   updatePrepBlock,
   deletePrepBlock,
@@ -190,6 +191,22 @@ interface DisplaceResult {
   error?: string;
 }
 
+// One "delete task" decision from the couldn't-fit section ("I'm not doing this
+// at all"): the calendar block is removed, its local records cleared, and every
+// backing Asana task deleted outright. Ad-hoc tasks (no gid) are simply removed
+// locally. The abandoned task ids are recorded as 'dropped' for the week.
+interface DropInput {
+  googleEventId: string;
+  googleIntegrationId?: string;
+  taskIds: string[];
+}
+
+interface DropResult {
+  googleEventId: string;
+  success: boolean;
+  error?: string;
+}
+
 // One created ritual addition, reported back by its proposal id.
 interface AdditionResult {
   id: string;
@@ -325,6 +342,22 @@ export async function POST(request: NextRequest) {
             })
           )
       : [];
+    // Unplaceable blocks the user chose to delete outright: remove the calendar
+    // block, clear its local records, and delete each backing Asana task.
+    const dropInputs: DropInput[] = Array.isArray(body?.drop)
+      ? body.drop
+          .filter(
+            (d: unknown): d is { googleEventId: string } =>
+              !!d && typeof d === 'object' && typeof (d as { googleEventId?: unknown }).googleEventId === 'string'
+          )
+          .map((d: { googleEventId: string; googleIntegrationId?: unknown; taskIds?: unknown }) => ({
+            googleEventId: d.googleEventId,
+            googleIntegrationId: typeof d.googleIntegrationId === 'string' ? d.googleIntegrationId : undefined,
+            taskIds: Array.isArray(d.taskIds)
+              ? d.taskIds.filter((t: unknown): t is string => typeof t === 'string')
+              : [],
+          }))
+      : [];
     // Stale prep blocks the user dismissed: the prep record is deleted (its past
     // meeting is over, so there is nothing left to prepare for).
     const dismissEventIds: string[] = Array.isArray(body?.dismiss)
@@ -348,8 +381,27 @@ export async function POST(request: NextRequest) {
     // Blocks the user marked STARTED (worked on, not finished): recorded as a
     // 'started' outcome for the week. They stay not-done everywhere else, and
     // their calendar event is never touched — that time really was spent.
-    const startedEventIds: string[] = Array.isArray(body?.started)
-      ? body.started.filter((id: unknown): id is string => typeof id === 'string')
+    // Each entry is either a bare event id (whole block started) or
+    // { googleEventId, taskIds } naming the members actually worked on — so a
+    // grouped block never records 'started' for tasks left untouched.
+    const startedEntries: Array<{ googleEventId: string; taskIds?: string[] }> = Array.isArray(
+      body?.started
+    )
+      ? body.started
+          .map((entry: unknown) => {
+            if (typeof entry === 'string') return { googleEventId: entry };
+            if (!entry || typeof entry !== 'object') return null;
+            const e = entry as { googleEventId?: unknown; taskIds?: unknown };
+            if (typeof e.googleEventId !== 'string') return null;
+            const taskIds = Array.isArray(e.taskIds)
+              ? e.taskIds.filter((id: unknown): id is string => typeof id === 'string')
+              : undefined;
+            return {
+              googleEventId: e.googleEventId,
+              ...(taskIds && taskIds.length > 0 ? { taskIds } : {}),
+            };
+          })
+          .filter((e: { googleEventId: string } | null): e is { googleEventId: string; taskIds?: string[] } => !!e)
       : [];
     // "Didn't do" answers: delete the block's own event and, optionally, put what
     // actually happened in the slot instead.
@@ -392,7 +444,7 @@ export async function POST(request: NextRequest) {
     if (
       moves.length === 0 &&
       doneEventIds.length === 0 &&
-      startedEventIds.length === 0 &&
+      startedEntries.length === 0 &&
       replacementInputs.length === 0 &&
       notDoneEventIds.length === 0 &&
       asanaCompletions.length === 0 &&
@@ -402,6 +454,7 @@ export async function POST(request: NextRequest) {
       carryInputs.length === 0 &&
       delegateInputs.length === 0 &&
       displaceInputs.length === 0 &&
+      dropInputs.length === 0 &&
       dismissEventIds.length === 0 &&
       additions.length === 0 &&
       deletions.length === 0
@@ -432,6 +485,29 @@ export async function POST(request: NextRequest) {
       return resolved;
     };
 
+    // Resolve + refresh an Asana integration's access token at most once per
+    // request. Shared by the Asana-completion and delete-task paths.
+    const asanaCredCache = new Map<string, string>(); // integrationId -> accessToken
+    const resolveAsanaToken = async (integrationId: string): Promise<string> => {
+      const cached = asanaCredCache.get(integrationId);
+      if (cached) return cached;
+      const integration = (await getIntegrationById(integrationId)) as AsanaIntegration | null;
+      if (!integration || integration.type !== 'asana' || !integration.credentials) {
+        throw new Error('Asana integration not found or not authenticated');
+      }
+      let credentials = integration.credentials;
+      if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
+        credentials = await refreshAsanaToken(
+          credentials.refreshToken!,
+          integration.clientId,
+          integration.clientSecret
+        );
+        await updateIntegration(integration.id, { credentials });
+      }
+      asanaCredCache.set(integrationId, credentials.accessToken);
+      return credentials.accessToken;
+    };
+
     const [adHocTasks, prepBlocks, ritualBlocks, scheduledAsana] = await Promise.all([
       getAdHocTasks(),
       getPrepBlocks(),
@@ -446,7 +522,7 @@ export async function POST(request: NextRequest) {
     const weekStartStr = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd');
     const weeklyOutcomes: Array<{
       taskId: string;
-      outcome: 'done' | 'started' | 'carried' | 'scheduled';
+      outcome: 'done' | 'started' | 'carried' | 'scheduled' | 'unscheduled' | 'dropped';
     }> = [];
     // The task ids behind a block's Google event, from whichever store owns it.
     const taskIdsForEvent = (googleEventId: string): string[] => {
@@ -564,29 +640,10 @@ export async function POST(request: NextRequest) {
     }
 
     // --- Asana completions: mark selected tasks complete in Asana directly ---
-    // Cache + refresh each Asana integration's credentials at most once per run.
     const asanaResults: AsanaCompleteResult[] = [];
-    const asanaCredCache = new Map<string, string>(); // integrationId -> accessToken
     for (const { gid, integrationId } of asanaCompletions) {
       try {
-        let accessToken = asanaCredCache.get(integrationId);
-        if (!accessToken) {
-          const integration = (await getIntegrationById(integrationId)) as AsanaIntegration | null;
-          if (!integration || integration.type !== 'asana' || !integration.credentials) {
-            throw new Error('Asana integration not found or not authenticated');
-          }
-          let credentials = integration.credentials;
-          if (credentials.expiresAt && Date.now() >= credentials.expiresAt - 60000) {
-            credentials = await refreshAsanaToken(
-              credentials.refreshToken!,
-              integration.clientId,
-              integration.clientSecret
-            );
-            await updateIntegration(integration.id, { credentials });
-          }
-          accessToken = credentials.accessToken;
-          asanaCredCache.set(integrationId, accessToken);
-        }
+        const accessToken = await resolveAsanaToken(integrationId);
         await completeTask(accessToken, gid, true);
         // A completed task is no longer carried over.
         await removeCarryOvers([gid]);
@@ -628,10 +685,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // --- Leave unscheduled: just clear any stale planning override ---
+    // --- Leave unscheduled: clear the override AND record the outcome --------
+    // The block leaves the calendar but its tasks stay open, so they must show
+    // up in the dashboard's "Left unscheduled" list rather than silently
+    // vanishing. Recorded as 'unscheduled' (counted alongside 'carried' in the
+    // week's denominator — see summariseWeek).
     for (const googleEventId of leaveEventIds) {
       try {
         await removeBlockDoneOverride(googleEventId);
+        for (const taskId of taskIdsForEvent(googleEventId)) {
+          weeklyOutcomes.push({ taskId, outcome: 'unscheduled' });
+        }
         deferResults.push({ taskIds: [], googleEventId, success: true });
       } catch (err) {
         console.error(`[Replan Confirm] Failed to leave-unscheduled ${googleEventId}:`, err);
@@ -647,8 +711,11 @@ export async function POST(request: NextRequest) {
     // --- Started: worked on but not finished --------------------------------
     // Recorded for the week's stats only. No calendar change, no done marking:
     // the task still needs finishing, so replan and carry-over still offer it.
-    for (const googleEventId of startedEventIds) {
-      for (const taskId of taskIdsForEvent(googleEventId)) {
+    for (const entry of startedEntries) {
+      // Named tasks only when the review named them; otherwise every task on the
+      // block (a single-task block, or an older caller that sent a bare id).
+      const taskIds = entry.taskIds ?? taskIdsForEvent(entry.googleEventId);
+      for (const taskId of taskIds) {
         weeklyOutcomes.push({ taskId, outcome: 'started' });
       }
     }
@@ -967,9 +1034,13 @@ export async function POST(request: NextRequest) {
             await updateAdHocTask(adhoc.id, { googleEventId: undefined, dueDate: undefined, dueTime: undefined });
           }
           // Defer the freed work to next week, or leave it in the pool ('leave').
+          // Either way it did not get a slot this week: 'defer' records it as
+          // carried, 'leave' as unscheduled (both count as planned-but-not-done).
           if (d.mode === 'defer' && d.taskIds.length > 0) {
             await setTaskDeferrals(d.taskIds.map(taskId => ({ taskId, until })));
             for (const taskId of d.taskIds) weeklyOutcomes.push({ taskId, outcome: 'carried' });
+          } else if (d.mode === 'leave') {
+            for (const taskId of d.taskIds) weeklyOutcomes.push({ taskId, outcome: 'unscheduled' });
           }
           await removeBlockDoneOverride(d.googleEventId);
           await removeGoogleEventAttribution(d.googleEventId);
@@ -982,6 +1053,72 @@ export async function POST(request: NextRequest) {
             error: err instanceof Error ? err.message : 'Failed to displace block',
           });
         }
+      }
+    }
+
+    // --- Drops: delete the block AND its backing task(s) outright -------------
+    // "I'm not doing this at all." Mirrors the replacements cleanup — delete the
+    // calendar event, clear every local record pointing at it — then goes one
+    // further and deletes the underlying Asana task (ad-hoc tasks, which have no
+    // gid, are simply removed locally). Every failure is caught per row so the
+    // rest of the apply continues. The abandoned tasks stay in the week's
+    // denominator as 'dropped'.
+    const dropResults: DropResult[] = [];
+    for (const d of dropInputs) {
+      try {
+        const record = scheduledAsana.find(s => s.googleEventId === d.googleEventId);
+        const adhoc = adHocTasks.find(t => t.googleEventId === d.googleEventId);
+        const prep = prepBlocks.find(p => p.googleEventId === d.googleEventId);
+        const ritual = ritualBlocks.find(x => x.googleEventId === d.googleEventId);
+        const resolved = await resolveGoogle(
+          d.googleIntegrationId ??
+            record?.googleIntegrationId ??
+            adhoc?.googleIntegrationId ??
+            prep?.googleIntegrationId ??
+            ritual?.googleIntegrationId
+        );
+        if (resolved) {
+          try {
+            await deleteCalendarEvent(
+              resolved.credentials,
+              resolved.integration.clientId,
+              resolved.integration.clientSecret,
+              d.googleEventId
+            );
+          } catch (err) {
+            // Already-gone events still count as a successful drop.
+            if (!isEventGoneError(err)) throw err;
+          }
+        }
+
+        // Delete each backing Asana task before clearing its local schedule (the
+        // scheduled record carries the gid + integration id needed to reach it).
+        for (const s of scheduledAsana.filter(x => x.googleEventId === d.googleEventId && x.integrationId)) {
+          const accessToken = await resolveAsanaToken(s.integrationId!);
+          await deleteTask(accessToken, s.asanaTaskId);
+        }
+
+        // Clear every local record that pointed at the deleted block. An ad-hoc
+        // task has no gid, so removing its record here is the whole story.
+        for (const s of scheduledAsana.filter(x => x.googleEventId === d.googleEventId)) {
+          await unscheduleAsanaTask(s.id);
+        }
+        if (adhoc) await deleteAdHocTask(adhoc.id);
+        if (prep) await deletePrepBlock(prep.id);
+        if (ritual) await deleteRitualBlock(ritual.id);
+        await removeGoogleEventAttribution(d.googleEventId);
+        await removeBlockDoneOverride(d.googleEventId);
+        await removeCarryOvers(d.taskIds);
+
+        for (const taskId of d.taskIds) weeklyOutcomes.push({ taskId, outcome: 'dropped' });
+        dropResults.push({ googleEventId: d.googleEventId, success: true });
+      } catch (err) {
+        console.error(`[Replan Confirm] Failed to drop ${d.googleEventId}:`, err);
+        dropResults.push({
+          googleEventId: d.googleEventId,
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to drop task',
+        });
       }
     }
 
@@ -1123,7 +1260,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, carryResults, displaceResults, additionResults, replacementResults, delegateResults });
+    return NextResponse.json({ results, doneResults, notDoneResults, asanaResults, adoptResults, deferResults, carryResults, displaceResults, dropResults, additionResults, replacementResults, delegateResults });
   } catch (error) {
     console.error('Error confirming mid-week replan:', error);
     return NextResponse.json(

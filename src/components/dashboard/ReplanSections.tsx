@@ -485,13 +485,20 @@ export function ReplanSections({
               // section, so anything left here (meeting prep) has no week to be
               // rescheduled or bumped into — leaving it unscheduled is the only
               // sensible action.
+              // "Delete task" is always offered — mid-week and end-of-week alike —
+              // but never the default, and styled distinctly because it is
+              // destructive.
               const options: Array<{ v: UnplaceableMode; label: string }> = data.endOfWeek
-                ? [{ v: 'leave', label: 'Leave unscheduled' }]
+                ? [
+                    { v: 'leave', label: 'Leave unscheduled' },
+                    { v: 'drop', label: 'Delete task' },
+                  ]
                 : [
                     { v: 'defer', label: 'Defer to next week' },
                     { v: 'leave', label: 'Leave unscheduled' },
                     ...(hasOverflow ? [{ v: 'overflow' as UnplaceableMode, label: 'Try evening overflow' }] : []),
                     ...(canPrioritise ? [{ v: 'prioritise' as UnplaceableMode, label: 'Prioritise tomorrow' }] : []),
+                    { v: 'drop', label: 'Delete task' },
                   ];
               return (
                 <li
@@ -585,6 +592,11 @@ export function ReplanSections({
                         )}
                       </div>
                     )}
+                    {mode === 'drop' && !hasResults && (
+                      <p className="mt-0.5 text-xs text-rose-600">
+                        Deletes the calendar block and the Asana task.
+                      </p>
+                    )}
                     {!hasResults && (
                       <div className="mt-2 inline-flex rounded-md border border-gray-200 overflow-hidden text-[11px] font-medium">
                         {options.map(opt => (
@@ -595,7 +607,9 @@ export function ReplanSections({
                             }
                             className={`px-2.5 py-1 transition-colors ${
                               mode === opt.v
-                                ? 'bg-orange-500 text-white'
+                                ? opt.v === 'drop'
+                                  ? 'bg-rose-600 text-white'
+                                  : 'bg-orange-500 text-white'
                                 : 'bg-white text-gray-600 hover:bg-gray-50'
                             }`}
                           >

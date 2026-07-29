@@ -122,6 +122,47 @@ describe('planReplan - classification', () => {
     expect(kept).toHaveLength(2);
   });
 
+  it('keeps a part-done category container when the category still has a later block', () => {
+    // Dave's deep-work blocks are capacity for the week's longer tasks, not a
+    // promise to finish every member that day. A Monday container with a Thursday
+    // sibling needs no new slot — the work continues there.
+    const { kept, moves, unplaceable } = run({
+      blocks: [
+        block({
+          googleEventId: 'container',
+          date: '2026-07-13',
+          start: '09:00',
+          titles: ['Task A', 'Task B', 'Task C'],
+          isCategoryContainer: true,
+        }),
+        block({ googleEventId: 'later', date: '2026-07-16', start: '09:00' }), // Thursday
+      ],
+      now: WED_8AM,
+    });
+    expect(moves).toHaveLength(0);
+    expect(unplaceable).toHaveLength(0);
+    expect(kept.map(k => k.googleEventId).sort()).toEqual(['container', 'later']);
+  });
+
+  it('still re-slots a category container when nothing of its category remains', () => {
+    const { moves } = run({
+      blocks: [
+        block({
+          googleEventId: 'container',
+          date: '2026-07-13',
+          start: '09:00',
+          titles: ['Task A', 'Task B'],
+          isCategoryContainer: true,
+        }),
+        // A later block of a DIFFERENT category is no substitute.
+        block({ googleEventId: 'other', date: '2026-07-16', start: '09:00', category: 'Admin' }),
+      ],
+      now: WED_8AM,
+    });
+    expect(moves.map(m => m.googleEventId)).toEqual(['container']);
+    expect(moves[0].reason).toBe('missed');
+  });
+
   it('keeps a future block with no conflict untouched', () => {
     const { kept, moves, unplaceable } = run({
       blocks: [block({ googleEventId: 'k', date: '2026-07-16', start: '10:00' })], // Thursday, future

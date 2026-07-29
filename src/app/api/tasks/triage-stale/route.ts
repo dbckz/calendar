@@ -6,6 +6,7 @@ import {
   type StaleTask,
 } from '@/lib/staleness-classifier';
 import { getStaleData, saveStaleClassification } from '@/lib/user-data-storage';
+import { buildExamplesBlock } from '@/lib/classifier-learning';
 import { StaleClassificationEntry } from '@/types';
 
 interface IncomingTask extends StaleTask {
@@ -68,8 +69,27 @@ export async function POST(request: NextRequest) {
       if (!fresh) toAssess.push(task);
     }
 
+    // The ONLY recorded human signal here is "keep active" — an implicit NOT
+    // stale. There is no positive (deleted-as-stale) class, so this is one-sided:
+    // frame it NARROWLY ("don't flag tasks LIKE these") and cap it tight, so it
+    // can never teach the model to stop flagging. Titles come from the current
+    // batch (snoozed tasks are still passed in, just excluded from assessment).
+    const titleByGid = new Map(tasks.map(t => [t.gid, t.title]));
+    const examples = buildExamplesBlock(
+      Object.entries(staleKeep)
+        .filter(([gid, until]) => titleByGid.has(gid) && Date.parse(until) > now)
+        .map(([gid, until]) => ({ key: titleByGid.get(gid) as string, label: 'keep', at: until })),
+      {
+        perClass: 10,
+        maxTotal: 10,
+        heading:
+          'The person reviewed these tasks and chose to KEEP them as active — do NOT flag tasks like these as stale:',
+        render: () => 'keep active',
+      }
+    );
+
     const assessedAt = new Date(now).toISOString();
-    const results = await classifyStale(toAssess, assessedAt);
+    const results = await classifyStale(toAssess, assessedAt, 180, examples);
     const byGid = new Map(results.map(r => [r.gid, r]));
 
     const newEntries: Record<string, StaleClassificationEntry> = {};

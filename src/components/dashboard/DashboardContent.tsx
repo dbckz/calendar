@@ -6,6 +6,7 @@ import { CalendarClock, Bot, Loader2, Archive, RefreshCw, ClipboardCheck, Search
 import { CalendarEvent, DelegationQueueEntry, TaskMetadata } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
 import { api, DashboardCapacityResponse, type WeekStateResponse, type AiClaim } from '@/lib/api';
+import type { UnscheduledTask } from '@/lib/weekly-stats';
 import { WEEK_ACTION_LABELS, targetWeekForAction, type WeekAction } from '@/lib/scheduling/week-state';
 import { usePlanningNudge } from '@/hooks/usePlanningNudge';
 import { TodayColumn } from './TodayColumn';
@@ -13,6 +14,7 @@ import { TopTasks } from './TopTasks';
 import { CapacityWidget } from './CapacityWidget';
 import { ClientTimeWidget, formatDuration } from './ClientTimeWidget';
 import { DelegationWidget } from './DelegationWidget';
+import { LeftUnscheduledWidget } from './LeftUnscheduledWidget';
 import { AiRunnableTasks } from './AiRunnableTasks';
 import { StaleTasksModal } from './StaleTasksModal';
 import { PlanWeekModal } from './PlanWeekModal';
@@ -130,6 +132,18 @@ export function DashboardContent({
       .catch(() => setWeekState(null));
   }, []);
   useEffect(() => loadWeekState(), [loadWeekState]);
+
+  // Tasks planned into this week that then slid out of the schedule (deferred /
+  // carried) — surfaced in the "Left unscheduled" widget so they aren't lost.
+  // Refetched whenever a plan / replan / review applies, since those are what
+  // move a task out of the schedule.
+  const [unscheduled, setUnscheduled] = useState<UnscheduledTask[]>([]);
+  const loadUnscheduled = useCallback(() => {
+    api.getUnscheduledTasks()
+      .then(r => setUnscheduled(r.tasks))
+      .catch(() => setUnscheduled([]));
+  }, []);
+  useEffect(() => loadUnscheduled(), [loadUnscheduled]);
 
   // Open the wizard / replan on a given week. `week` is 'current' or 'next';
   // undefined weekStart means "the current week" to every downstream endpoint.
@@ -396,6 +410,11 @@ export function DashboardContent({
               integrations={asanaIntegrations}
             />
           </div>
+          {unscheduled.length > 0 && (
+            <div className="flex-shrink-0 min-w-0">
+              <LeftUnscheduledWidget tasks={unscheduled} />
+            </div>
+          )}
           <div className="flex-1 min-h-0 min-w-0">
             <DelegationWidget
               delegationByGid={delegationByGid}
@@ -444,6 +463,7 @@ export function DashboardContent({
         onApplied={() => {
           refetch();
           loadWeekState();
+          loadUnscheduled();
           onPlanApplied?.();
         }}
       />
@@ -459,6 +479,7 @@ export function DashboardContent({
         onApplied={() => {
           refetch();
           loadWeekState();
+          loadUnscheduled();
           onPlanApplied?.();
         }}
       />
@@ -470,6 +491,7 @@ export function DashboardContent({
         onApplied={() => {
           refetch();
           loadWeekState();
+          loadUnscheduled();
           onPlanApplied?.();
         }}
         onStartFromScratch={() => {
@@ -477,6 +499,7 @@ export function DashboardContent({
           // wizard on the same week that was just reset.
           refetch();
           loadWeekState();
+          loadUnscheduled();
           onPlanApplied?.();
           setShowReplanModal(false);
           setPlanWeekStart(replanWeekStart);

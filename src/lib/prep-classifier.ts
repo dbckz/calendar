@@ -6,6 +6,7 @@
 
 import { createHash } from 'node:crypto';
 import { runClaudeJsonArray } from './ai-classifier';
+import { composePrompt } from './classifier-learning';
 
 export interface PrepMeetingInput {
   key: string; // normalized title (see normalizePrepKey)
@@ -59,22 +60,31 @@ export function prepContentHash(m: PrepMeetingInput): string {
     .slice(0, 16);
 }
 
-function buildPrompt(meetings: PrepMeetingInput[]): string {
+// `examples` is Dave's own prep decisions as a few-shot block (see
+// classifier-learning.ts). PREPENDED at call time and deliberately kept OUT of
+// PROMPT_TEMPLATE / PREP_PROMPT_VERSION so a new decision never invalidates the
+// verdict cache. Empty string → the prompt is byte-identical to before.
+function buildPrompt(meetings: PrepMeetingInput[], examples = ''): string {
   const lines = meetings.map(m => {
     const desc = (m.description || '').replace(/\s+/g, ' ').trim().slice(0, 200);
     const recurring = m.isRecurring ? 'recurring' : 'one-off';
     const attendees = m.attendeeCount ?? '?';
     return `[${m.key}] ${recurring} | attendees:${attendees} | ${m.durationMinutes}min | ${m.title}${desc ? ` | ${desc}` : ''}`;
   });
-  return PROMPT_TEMPLATE.replace('{{MEETINGS}}', lines.join('\n'));
+  return composePrompt(PROMPT_TEMPLATE.replace('{{MEETINGS}}', lines.join('\n')), examples);
 }
 
 // Classify a batch of meetings for prep-worthiness in one headless call.
 // Conservative: any meeting the model omits is treated as needsPrep=false by the
-// caller (it simply gets no result here).
-export async function classifyPrep(meetings: PrepMeetingInput[], timeoutSeconds = 120): Promise<PrepResult[]> {
+// caller (it simply gets no result here). `examples` (optional) are Dave's own
+// prep decisions, prepended so the model follows his precedent.
+export async function classifyPrep(
+  meetings: PrepMeetingInput[],
+  timeoutSeconds = 120,
+  examples = ''
+): Promise<PrepResult[]> {
   if (meetings.length === 0) return [];
-  const records = await runClaudeJsonArray(buildPrompt(meetings), timeoutSeconds);
+  const records = await runClaudeJsonArray(buildPrompt(meetings, examples), timeoutSeconds);
   return records
     .filter(r => typeof r.key === 'string')
     .map(r => ({ key: String(r.key), needsPrep: Boolean(r.needsPrep), reason: String(r.reason || '').slice(0, 120) }));

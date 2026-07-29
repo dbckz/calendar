@@ -43,6 +43,29 @@ describe('selectCalendarReviewBlocks — ritual events are never adopted', () =>
     expect(run([event({ id: 'e-retro', title: 'Retrospective' })])).toEqual([]);
   });
 
+  it('skips events that are markers or personal, not tasks', () => {
+    // Real review noise: none of these is work Dave could tick off, so they must
+    // never reach the review at all (see not-a-task.ts). Meetings / catch-ups are
+    // deliberately NOT skipped any more — they can be work worth recording, so the
+    // filter is conservative and the manual dismissal handles the rest.
+    for (const [id, title] of [
+      ['e-wake', 'WAKE'],
+      ['e-grat', 'MPs - gratitude'],
+      ['e-dentist', 'Dentist'],
+    ] as const) {
+      expect(run([event({ id, title })])).toEqual([]);
+    }
+  });
+
+  it('matches a dismissed title however it was typed', () => {
+    // The dismissal is remembered per normalized title, so a re-typed variant of
+    // the same event stays dismissed.
+    const out = run([event({ id: 'e-wake', title: '  wake  ' })], {
+      dismissedTitles: new Set(['WAKE']),
+    });
+    expect(out).toEqual([]);
+  });
+
   it('still adopts a real task whose title merely starts with a ritual word', () => {
     const out = run([event({ id: 'e-triage', title: 'Email triage' })]);
     expect(out.map(b => b.googleEventId)).toEqual(['e-triage']);
