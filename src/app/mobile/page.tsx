@@ -1,11 +1,11 @@
 import type { Metadata } from 'next';
-import { MobilePlanner } from './MobilePlanner';
+import { MobileShell } from './MobileShell';
 
 export const metadata: Metadata = {
   title: 'Mobile Planner',
-  description: 'Read-only mobile view for Dave\'s Daily Planner',
+  description: 'Mobile companion for Dave\'s Command Center',
 };
 
 export default function MobilePage() {
-  return <MobilePlanner />;
+  return <MobileShell />;
 }
