@@ -14,30 +14,21 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { containsHtml, htmlToReadableText } from '@/lib/html-utils';
+import {
+  SOURCE_STYLES,
+  formatDuration,
+  formatTimeRange,
+  fullDescription,
+  getDayLabel,
+  plainDescription,
+  sourceLabel,
+} from '@/lib/event-display';
+import { mergeEventsForDate } from '@/lib/event-merge';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
+import { useReminders } from '@/hooks/useReminders';
 import { NotificationBell } from '@/components/NotificationBell';
 import { useTasks } from '@/hooks/useTasks';
-import { useToast } from '@/hooks/useToast';
-import { CalendarEvent, Reminder, SettingsResponse } from '@/types';
-
-const SOURCE_STYLES: Record<CalendarEvent['source'], { label: string; className: string; dot: string }> = {
-  google: {
-    label: 'Google',
-    className: 'bg-blue-50 text-blue-700 border-blue-200',
-    dot: 'bg-blue-500',
-  },
-  asana: {
-    label: 'Asana',
-    className: 'bg-orange-50 text-orange-700 border-orange-200',
-    dot: 'bg-orange-500',
-  },
-  adhoc: {
-    label: 'Task',
-    className: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200',
-    dot: 'bg-fuchsia-500',
-  },
-};
+import { CalendarEvent, SettingsResponse } from '@/types';
 
 const EVENT_OPEN_DELAY_MS = 200;
 const DOUBLE_TAP_WINDOW_MS = 220;
@@ -94,55 +85,6 @@ function isEventOpenTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
 
   return Boolean(target.closest('[data-event-open-trigger="true"]'));
-}
-
-function isEventOnDate(event: CalendarEvent, targetDate: string): boolean {
-  const startDateStr = format(event.startTime, 'yyyy-MM-dd');
-  const endDateStr = format(event.endTime, 'yyyy-MM-dd');
-
-  if (event.allDay) {
-    return targetDate >= startDateStr && targetDate < endDateStr;
-  }
-
-  return startDateStr === targetDate;
-}
-
-function formatTimeRange(event: CalendarEvent): string {
-  if (event.allDay) return 'All day';
-  return `${format(event.startTime, 'h:mm a')} - ${format(event.endTime, 'h:mm a')}`;
-}
-
-function formatDuration(minutes: number): string {
-  if (minutes < 60) return `${Math.round(minutes)}m`;
-
-  const hours = Math.floor(minutes / 60);
-  const mins = Math.round(minutes % 60);
-  return mins === 0 ? `${hours}h` : `${hours}h ${mins}m`;
-}
-
-function plainDescription(description?: string): string {
-  if (!description) return '';
-
-  const text = containsHtml(description) ? htmlToReadableText(description) : description;
-  return text.replace(/\s+/g, ' ').trim();
-}
-
-function fullDescription(description?: string): string {
-  if (!description) return '';
-
-  return containsHtml(description) ? htmlToReadableText(description) : description.trim();
-}
-
-function getDayLabel(date: Date): string {
-  const today = new Date();
-  if (isSameDay(date, today)) return 'Today';
-  if (isSameDay(date, subDays(today, 1))) return 'Yesterday';
-  if (isSameDay(date, addDays(today, 1))) return 'Tomorrow';
-  return format(date, 'EEE, MMM d');
-}
-
-function sourceLabel(event: CalendarEvent): string {
-  return event.integrationName || event.calendarName || SOURCE_STYLES[event.source].label;
 }
 
 function renderLinkedText(text: string) {
@@ -377,20 +319,11 @@ function EmptyState() {
 }
 
 export function MobilePlanner() {
-  const toast = useToast();
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [now, setNow] = useState(() => new Date());
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [colorSchemeIndex, setColorSchemeIndex] = useState(0);
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
-  const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [updatingReminderIds, setUpdatingReminderIds] = useState<Set<string>>(() => new Set());
-  const [undoReminderState, setUndoReminderState] = useState<{
-    id: string;
-    text: string;
-    previousCompleted: boolean;
-    nextCompleted: boolean;
-  } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const lastTapRef = useRef<{ time: number; x: number; y: number; side: 'left' | 'right' } | null>(null);
@@ -398,7 +331,6 @@ export function MobilePlanner() {
   const suppressNextEventOpenRef = useRef(false);
   const nowIndicatorRef = useRef<HTMLDivElement | null>(null);
   const hasAutoScrolledRef = useRef(false);
-  const undoTimeoutRef = useRef<number | null>(null);
 
   const { getTasksForDate } = useTasks();
   const {
@@ -412,16 +344,20 @@ export function MobilePlanner() {
     getScheduledAsanaEventsForDate,
     asanaIntegrations,
   } = useCalendarEvents();
+  const {
+    reminders,
+    updatingIds: updatingReminderIds,
+    undoState: undoReminderState,
+    refetch: refetchReminders,
+    completeReminder,
+    undo: undoReminderCompletion,
+  } = useReminders();
 
   const loadSettings = useCallback(async () => {
     try {
       setSettingsError(null);
-      const [settingsData, remindersData] = await Promise.all([
-        api.getSettings(),
-        api.getReminders(),
-      ]);
+      const settingsData = await api.getSettings();
       setSettings(settingsData);
-      setReminders(remindersData.reminders);
     } catch (error) {
       console.error('Failed to load mobile planner settings:', error);
       setSettingsError('Unable to load planner settings');
@@ -470,127 +406,23 @@ export function MobilePlanner() {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [selectedEvent]);
 
-  const clearUndoReminderState = useCallback(() => {
-    if (undoTimeoutRef.current) {
-      window.clearTimeout(undoTimeoutRef.current);
-      undoTimeoutRef.current = null;
-    }
-    setUndoReminderState(null);
-  }, []);
-
-  const queueUndoReminderState = useCallback((reminder: Reminder, nextCompleted: boolean) => {
-    if (undoTimeoutRef.current) {
-      window.clearTimeout(undoTimeoutRef.current);
-    }
-
-    setUndoReminderState({
-      id: reminder.id,
-      text: reminder.text,
-      previousCompleted: reminder.completed,
-      nextCompleted,
-    });
-
-    undoTimeoutRef.current = window.setTimeout(() => {
-      undoTimeoutRef.current = null;
-      setUndoReminderState(null);
-    }, 10000);
-  }, []);
-
-  const undoReminderCompletion = useCallback(async () => {
-    if (!undoReminderState) return;
-
-    const state = undoReminderState;
-    clearUndoReminderState();
-    setReminders(prev => prev.map(reminder => (
-      reminder.id === state.id
-        ? { ...reminder, completed: state.previousCompleted }
-        : reminder
-    )));
-    setUpdatingReminderIds(prev => {
-      const next = new Set(prev);
-      next.add(state.id);
-      return next;
-    });
-
-    try {
-      await api.updateReminder(state.id, { completed: state.previousCompleted });
-      toast.success(`Reinstated "${state.text}"`);
-    } catch (error) {
-      console.error('Failed to undo reminder change:', error);
-      setReminders(prev => prev.map(reminder => (
-        reminder.id === state.id
-          ? { ...reminder, completed: state.nextCompleted }
-          : reminder
-      )));
-      toast.error('Failed to undo reminder change');
-    } finally {
-      setUpdatingReminderIds(prev => {
-        const next = new Set(prev);
-        next.delete(state.id);
-        return next;
-      });
-    }
-  }, [clearUndoReminderState, toast, undoReminderState]);
-
-  useEffect(() => {
-    return () => {
-      if (undoTimeoutRef.current) {
-        window.clearTimeout(undoTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (!undoReminderState) return;
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
-      if (event.key.toLowerCase() !== 'z') return;
-
-      const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
-      ) {
-        return;
-      }
-
-      event.preventDefault();
-      void undoReminderCompletion();
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [undoReminderCompletion, undoReminderState]);
-
   const dateKey = useMemo(() => format(selectedDate, 'yyyy-MM-dd'), [selectedDate]);
 
   const allEvents = useMemo(() => {
-    const filteredGoogleEvents = googleEvents
-      .filter(event => isEventOnDate(event, dateKey))
-      .map(event => {
-        const linkedAsana = scheduledAsanaTasks.find(s => s.googleEventId === event.id);
-        if (!linkedAsana) return event;
-
-        return {
-          ...event,
-          linkedAsanaTaskId: linkedAsana.asanaTaskId,
-          linkedAsanaIntegrationId: linkedAsana.integrationId,
-          color: '#f06a6a',
-        };
-      });
-
     const adhocEvents = getTasksForDate(dateKey)
       .filter(task => task.dueTime && !task.googleEventId)
       .map(adhocToCalendarEvent);
 
-    const scheduledAsanaEvents = getScheduledAsanaEventsForDate(dateKey).filter(event => {
-      const schedule = scheduledAsanaTasks.find(s => s.id === event.id);
-      return !schedule?.googleEventId;
+    return mergeEventsForDate(dateKey, {
+      googleEvents,
+      scheduledAsanaTasks,
+      adhocEvents,
+      scheduledAsanaEvents: getScheduledAsanaEventsForDate(dateKey),
+      allAsanaTasks,
     });
-
-    return [...filteredGoogleEvents, ...adhocEvents, ...scheduledAsanaEvents];
   }, [
     adhocToCalendarEvent,
+    allAsanaTasks,
     dateKey,
     getScheduledAsanaEventsForDate,
     getTasksForDate,
@@ -697,11 +529,11 @@ export function MobilePlanner() {
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      await Promise.all([fetchAllEvents(), loadSettings()]);
+      await Promise.all([fetchAllEvents(), loadSettings(), refetchReminders()]);
     } finally {
       setIsRefreshing(false);
     }
-  }, [fetchAllEvents, loadSettings]);
+  }, [fetchAllEvents, loadSettings, refetchReminders]);
 
   const prevDay = subDays(selectedDate, 1);
   const nextDay = addDays(selectedDate, 1);
@@ -758,32 +590,6 @@ export function MobilePlanner() {
       side,
     };
   }, [cancelPendingEventOpen, selectedEvent]);
-
-  const handleCompleteReminder = useCallback(async (reminder: Reminder) => {
-    queueUndoReminderState(reminder, true);
-    setUpdatingReminderIds(prev => {
-      const next = new Set(prev);
-      next.add(reminder.id);
-      return next;
-    });
-    setReminders(prev => prev.map(item => item.id === reminder.id ? { ...item, completed: true } : item));
-    toast.info('Reminder completed. Press Cmd/Ctrl+Z to undo.');
-
-    try {
-      await api.updateReminder(reminder.id, { completed: true });
-    } catch (error) {
-      console.error('Failed to complete reminder:', error);
-      clearUndoReminderState();
-      setReminders(prev => prev.map(item => item.id === reminder.id ? reminder : item));
-      toast.error('Failed to complete reminder');
-    } finally {
-      setUpdatingReminderIds(prev => {
-        const next = new Set(prev);
-        next.delete(reminder.id);
-        return next;
-      });
-    }
-  }, [clearUndoReminderState, queueUndoReminderState, toast]);
 
   return (
     <div
@@ -968,7 +774,7 @@ export function MobilePlanner() {
                   <div key={reminder.id} className="flex items-start gap-3">
                     <button
                       type="button"
-                      onClick={() => handleCompleteReminder(reminder)}
+                      onClick={() => completeReminder(reminder)}
                       disabled={updatingReminderIds.has(reminder.id)}
                       className="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-emerald-600 transition-colors hover:bg-emerald-50 disabled:opacity-50"
                       aria-label={`Mark ${reminder.text} done`}
