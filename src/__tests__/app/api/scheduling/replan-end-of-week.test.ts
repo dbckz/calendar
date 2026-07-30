@@ -25,6 +25,7 @@ jest.mock('@/lib/user-data-storage', () => ({
   setMeetingPrepDecision: jest.fn(),
   getCarryOvers: jest.fn(),
   getAllTaskMetadata: jest.fn(),
+  getWeeklyStats: jest.fn(),
 }));
 
 import { POST } from '@/app/api/scheduling/replan/analyze/route';
@@ -39,6 +40,7 @@ import {
   getDailyReviewState,
   getCarryOvers,
   getAllTaskMetadata,
+  getWeeklyStats,
 } from '@/lib/user-data-storage';
 import type { ReplanCarryBlock } from '@/lib/scheduling/replan';
 
@@ -155,6 +157,7 @@ beforeEach(() => {
   (getBlockDoneOverrides as jest.Mock).mockResolvedValue({});
   (getCarryOvers as jest.Mock).mockResolvedValue({});
   (getAllTaskMetadata as jest.Mock).mockResolvedValue({});
+  (getWeeklyStats as jest.Mock).mockResolvedValue(null);
   (getDailyReviewState as jest.Mock).mockResolvedValue({
     lastReviewedAt: '2026-07-01T00:00:00.000Z',
     dismissedTitles: [],

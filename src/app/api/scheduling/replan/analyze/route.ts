@@ -5,7 +5,7 @@ import { classifyBlockCategory } from '@/lib/capacity';
 import { adHocTypeSignals, gatherWeekContext } from '@/lib/scheduling/gather';
 import { eventsToBusyIntervals } from '@/lib/scheduling/free-busy';
 import { mergeCarryBlocks, planReplan, type ReplanBlock, type ReplanCarryBlock, type ReplanCarryTask, type ReplanReviewBlock } from '@/lib/scheduling/replan';
-import { isEndOfWeekReview } from '@/lib/scheduling/end-of-week';
+import { isEndOfWeekReview, countMissedWorkingDays } from '@/lib/scheduling/end-of-week';
 import { proposePrepBlocks, type PrepMeeting } from '@/lib/scheduling/prep';
 import { resolvePrepCandidates } from '@/lib/scheduling/prep-candidates';
 import type { BusyInterval } from '@/lib/scheduling/types';
@@ -19,6 +19,7 @@ import {
   getDailyReviewState,
   getCarryOvers,
   getAllTaskMetadata,
+  getWeeklyStats,
 } from '@/lib/user-data-storage';
 import { logicalTodayDate, normalizeRolloverHour } from '@/lib/date-utils';
 import { ritualKindForTitle, isBreakTitle, isRitualLikeTitle, existingRitualTitlesByDateFromEvents, RITUAL_TITLES } from '@/lib/scheduling/rituals';
@@ -28,6 +29,10 @@ import { prepTitle } from '@/lib/scheduling/event-titles';
 import type { ScheduledAsanaTask } from '@/types';
 
 const MS_PER_MINUTE = 60 * 1000;
+const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;
+// The review never looks back further than this, so a long absence (holiday) is
+// a fresh start over the recent window rather than an unbounded guilt trip.
+const REVIEW_LOOKBACK_DAYS = 7;
 
 // Analyze this week's app-created blocks and propose moves for the ones that
 // have been missed (past + not done) or now conflict with a meeting. Pure logic
@@ -49,6 +54,7 @@ export async function POST(request: NextRequest) {
       reviewState,
       carryOvers,
       taskMetadata,
+      weeklyStats,
     ] = await Promise.all([
       getScheduledAsanaTasks(),
       getAdHocTasks(),
@@ -59,6 +65,7 @@ export async function POST(request: NextRequest) {
       getDailyReviewState(),
       getCarryOvers(),
       getAllTaskMetadata(),
+      getWeeklyStats(ctx.weekStartStr),
     ]);
 
     // How many weeks running a task has been carried, and whether an agent could
@@ -109,9 +116,21 @@ export async function POST(request: NextRequest) {
     const lastReviewedMs = reviewState.lastReviewedAt
       ? Date.parse(reviewState.lastReviewedAt)
       : NaN;
-    const reviewStartMs = Number.isNaN(lastReviewedMs)
-      ? logicalDayStart.getTime()
-      : lastReviewedMs;
+    const hadReview = !Number.isNaN(lastReviewedMs);
+    // The window starts at the last completed review, but never earlier than the
+    // 7-day cap (so a fortnight's holiday only surfaces the recent week), and
+    // falls back to the start of the logical day when there's been no review at
+    // all. `clamped` records when the cap actually bit, so the modal can read as
+    // a fresh start rather than a backlog.
+    const capMs = nowMs - REVIEW_LOOKBACK_DAYS * MS_PER_DAY;
+    const reviewStartMs = hadReview ? Math.max(lastReviewedMs, capMs) : logicalDayStart.getTime();
+    const clamped = hadReview && lastReviewedMs < capMs;
+    // Coarse outer bound (local date of the window start) for selecting which
+    // stored records to even consider. The precise cut is pushReview's
+    // endMs > reviewStartMs; this only widens record selection across the week
+    // boundary. Records dated on/after this and BEFORE this week feed the review
+    // ONLY — never planning (see the prior-week passes below).
+    const reviewRangeStartStr = format(new Date(reviewStartMs), 'yyyy-MM-dd');
     const dismissedTitles = new Set(reviewState.dismissedTitles);
     // eventId → backing task ids (Asana gid / ad-hoc id), so unplaceable rows can
     // carry what to defer. Preps have no deferrable task.
@@ -126,14 +145,19 @@ export async function POST(request: NextRequest) {
     };
 
     // Group scheduled Asana tasks by their Google event: a grouped block records
-    // several tasks against one event.
-    const asanaGroups = new Map<string, ScheduledAsanaTask[]>();
-    for (const s of scheduledAsana) {
-      if (!s.googleEventId || !inWeek(s.scheduledDate)) continue;
-      const list = asanaGroups.get(s.googleEventId) ?? [];
-      list.push(s);
-      asanaGroups.set(s.googleEventId, list);
-    }
+    // several tasks against one event. Used for this week (planning + review) and
+    // again for the prior-week review-only pass, with a different date range.
+    const groupAsanaByEvent = (inRange: (date?: string) => boolean) => {
+      const groups = new Map<string, ScheduledAsanaTask[]>();
+      for (const s of scheduledAsana) {
+        if (!s.googleEventId || !inRange(s.scheduledDate)) continue;
+        const list = groups.get(s.googleEventId) ?? [];
+        list.push(s);
+        groups.set(s.googleEventId, list);
+      }
+      return groups;
+    };
+    const asanaGroups = groupAsanaByEvent(inWeek);
 
     // Recover a task title from the app-created calendar event for legacy
     // scheduled entries with no stored taskName: a single-task event is titled
@@ -153,17 +177,20 @@ export async function POST(request: NextRequest) {
       return m?.[1]?.trim() || undefined;
     };
 
-    for (const [eventId, entries] of asanaGroups) {
-      appEventIds.add(eventId);
-      taskIdsByEvent.set(eventId, entries.map(e => e.asanaTaskId));
-      const first = entries[0];
-      // Prefer the live Asana name — the incomplete fetch first, then the
-      // completed-inclusive name map so a member completed this week still
-      // resolves; then the title captured at scheduling time; then a title
-      // recovered from the calendar event — so a task already completed (and thus
-      // absent from the incomplete fetch) still shows its name rather than a
-      // generic placeholder.
-      const titles = entries.map(
+    // --- Review-block builders (pure, no planning side-effects) -------------
+    // One source of truth for each review block — and, since it resolves the same
+    // titles / done state / category / slot, for the planning block the in-week
+    // loops derive from it. The prior-week passes below call the SAME builders so
+    // a block dated in last week reviews identically — without ever entering
+    // planning, carry or move computation.
+    //
+    // Prefer the live Asana name — the incomplete fetch first, then the
+    // completed-inclusive name map so a member completed this week still resolves;
+    // then the title captured at scheduling time; then a title recovered from the
+    // calendar event — so a task already completed (and thus absent from the
+    // incomplete fetch) still shows its name rather than a generic placeholder.
+    const asanaReviewTitles = (eventId: string, entries: ScheduledAsanaTask[]): string[] =>
+      entries.map(
         e =>
           incompleteByGid.get(e.asanaTaskId)?.name ??
           ctx.asanaNameByGid.get(e.asanaTaskId) ??
@@ -171,6 +198,12 @@ export async function POST(request: NextRequest) {
           titleFromEvent(eventId, e.asanaTaskId, entries.length === 1) ??
           'Scheduled task'
       );
+    const buildAsanaReviewBlock = (
+      eventId: string,
+      entries: ScheduledAsanaTask[]
+    ): ReplanReviewBlock => {
+      const first = entries[0];
+      const titles = asanaReviewTitles(eventId, entries);
       // Done when the Asana task(s) are complete, OR the user marked this block
       // "done for planning" in a prior replan (Asana task stays open).
       const done =
@@ -181,43 +214,13 @@ export async function POST(request: NextRequest) {
         category = classifyBlockCategory(tv ? [tv] : [], ctx.quotas);
         if (category) break;
       }
-      carryTasksByEvent.set(
-        eventId,
-        entries.map((e, i) => {
-          const streak = carryStreakFor(e.asanaTaskId);
-          return {
-            id: e.asanaTaskId,
-            title: titles[i],
-            done: !incompleteByGid.has(e.asanaTaskId),
-            gid: e.asanaTaskId,
-            ...(e.integrationId ? { integrationId: e.integrationId } : {}),
-            ...(streak ? { carryStreak: streak } : {}),
-            ...(taskMetadata[e.asanaTaskId]?.aiDelegable ? { aiDelegable: true } : {}),
-          };
-        })
-      );
       const { startMs, endMs } = intervalFor(
         eventId,
         first.scheduledDate,
         first.scheduledTime,
         first.duration
       );
-      blocks.push({
-        googleEventId: eventId,
-        googleIntegrationId: first.googleIntegrationId,
-        category: category ?? 'Scheduled',
-        date: first.scheduledDate,
-        start: first.scheduledTime,
-        durationMinutes: first.duration,
-        titles,
-        done,
-        startMs,
-        endMs,
-        // Several tasks sharing one block = a category container (deep work,
-        // outreach). Held to the week, not to the day it sat on.
-        ...(entries.length > 1 ? { isCategoryContainer: true } : {}),
-      });
-      pushReview({
+      return {
         googleEventId: eventId,
         googleIntegrationId: first.googleIntegrationId,
         kind: 'task',
@@ -242,7 +245,86 @@ export async function POST(request: NextRequest) {
             ...(asanaComplete ? { completedInAsana: true } : {}),
           };
         }),
+      };
+    };
+    const buildAdhocReviewBlock = (t: (typeof adHocTasks)[number]): ReplanReviewBlock => {
+      const category =
+        classifyBlockCategory(adHocTypeSignals(t.taskType, customTypes), ctx.quotas) ?? 'Scheduled';
+      const duration = t.duration ?? 30;
+      const { startMs, endMs } = intervalFor(t.googleEventId!, t.dueDate!, t.dueTime!, duration);
+      const adhocDone = t.completed || !!doneOverrides[t.googleEventId!];
+      return {
+        googleEventId: t.googleEventId!,
+        googleIntegrationId: t.googleIntegrationId,
+        kind: 'task',
+        category,
+        date: t.dueDate!,
+        start: t.dueTime!,
+        durationMinutes: duration,
+        startMs,
+        endMs,
+        done: adhocDone,
+        titles: [t.title],
+        tasks: [{ title: t.title, done: adhocDone, adhocId: t.id }],
+      };
+    };
+    const buildPrepReviewBlock = (p: (typeof prepBlocks)[number]): ReplanReviewBlock => {
+      const { startMs, endMs } = intervalFor(p.googleEventId, p.date, p.start, p.durationMinutes);
+      const prepDone = p.done || !!doneOverrides[p.googleEventId];
+      const prepTitleStr = prepTitle(p.meetingTitle);
+      return {
+        googleEventId: p.googleEventId,
+        googleIntegrationId: p.googleIntegrationId,
+        kind: 'prep',
+        category: 'Meeting prep',
+        date: p.date,
+        start: p.start,
+        durationMinutes: p.durationMinutes,
+        startMs,
+        endMs,
+        done: prepDone,
+        titles: [prepTitleStr],
+        tasks: [{ title: prepTitleStr, done: prepDone }],
+      };
+    };
+
+    for (const [eventId, entries] of asanaGroups) {
+      appEventIds.add(eventId);
+      taskIdsByEvent.set(eventId, entries.map(e => e.asanaTaskId));
+      // The review block already resolves the titles, done state, category and
+      // slot the planning block needs, so both derive from one build.
+      const review = buildAsanaReviewBlock(eventId, entries);
+      carryTasksByEvent.set(
+        eventId,
+        entries.map((e, i) => {
+          const streak = carryStreakFor(e.asanaTaskId);
+          return {
+            id: e.asanaTaskId,
+            title: review.titles[i],
+            done: !incompleteByGid.has(e.asanaTaskId),
+            gid: e.asanaTaskId,
+            ...(e.integrationId ? { integrationId: e.integrationId } : {}),
+            ...(streak ? { carryStreak: streak } : {}),
+            ...(taskMetadata[e.asanaTaskId]?.aiDelegable ? { aiDelegable: true } : {}),
+          };
+        })
+      );
+      blocks.push({
+        googleEventId: eventId,
+        googleIntegrationId: review.googleIntegrationId,
+        category: review.category,
+        date: review.date,
+        start: review.start,
+        durationMinutes: review.durationMinutes,
+        titles: review.titles,
+        done: review.done,
+        startMs: review.startMs,
+        endMs: review.endMs,
+        // Several tasks sharing one block = a category container (deep work,
+        // outreach). Held to the week, not to the day it sat on.
+        ...(entries.length > 1 ? { isCategoryContainer: true } : {}),
       });
+      pushReview(review);
     }
 
     // Ad-hoc tasks placed on the calendar (each is its own block).
@@ -259,37 +341,20 @@ export async function POST(request: NextRequest) {
           ...(carryStreakFor(t.id) ? { carryStreak: carryStreakFor(t.id) } : {}),
         },
       ]);
-      const category =
-        classifyBlockCategory(adHocTypeSignals(t.taskType, customTypes), ctx.quotas) ?? 'Scheduled';
-      const duration = t.duration ?? 30;
-      const { startMs, endMs } = intervalFor(t.googleEventId, t.dueDate!, t.dueTime, duration);
-      const adhocDone = t.completed || !!doneOverrides[t.googleEventId];
+      const review = buildAdhocReviewBlock(t);
       blocks.push({
         googleEventId: t.googleEventId,
-        googleIntegrationId: t.googleIntegrationId,
-        category,
-        date: t.dueDate!,
-        start: t.dueTime,
-        durationMinutes: duration,
-        titles: [t.title],
-        done: adhocDone,
-        startMs,
-        endMs,
+        googleIntegrationId: review.googleIntegrationId,
+        category: review.category,
+        date: review.date,
+        start: review.start,
+        durationMinutes: review.durationMinutes,
+        titles: review.titles,
+        done: review.done,
+        startMs: review.startMs,
+        endMs: review.endMs,
       });
-      pushReview({
-        googleEventId: t.googleEventId,
-        googleIntegrationId: t.googleIntegrationId,
-        kind: 'task',
-        category,
-        date: t.dueDate!,
-        start: t.dueTime,
-        durationMinutes: duration,
-        startMs,
-        endMs,
-        done: adhocDone,
-        titles: [t.title],
-        tasks: [{ title: t.title, done: adhocDone, adhocId: t.id }],
-      });
+      pushReview(review);
     }
 
     // Meeting-prep blocks (from the prep store). Each re-slots under the extra
@@ -297,37 +362,22 @@ export async function POST(request: NextRequest) {
     for (const p of prepBlocks) {
       if (!inWeek(p.date)) continue;
       appEventIds.add(p.googleEventId);
-      const { startMs, endMs } = intervalFor(p.googleEventId, p.date, p.start, p.durationMinutes);
       const meetingStartMs = new Date(p.meetingStart).getTime();
-      const prepDone = p.done || !!doneOverrides[p.googleEventId];
-      const prepTitleStr = prepTitle(p.meetingTitle);
+      const review = buildPrepReviewBlock(p);
       blocks.push({
         googleEventId: p.googleEventId,
-        googleIntegrationId: p.googleIntegrationId,
-        category: 'Meeting prep',
-        date: p.date,
-        start: p.start,
-        durationMinutes: p.durationMinutes,
-        titles: [prepTitleStr],
-        done: prepDone,
-        startMs,
-        endMs,
+        googleIntegrationId: review.googleIntegrationId,
+        category: review.category,
+        date: review.date,
+        start: review.start,
+        durationMinutes: review.durationMinutes,
+        titles: review.titles,
+        done: review.done,
+        startMs: review.startMs,
+        endMs: review.endMs,
         ...(Number.isNaN(meetingStartMs) ? {} : { mustEndBeforeMs: meetingStartMs }),
       });
-      pushReview({
-        googleEventId: p.googleEventId,
-        googleIntegrationId: p.googleIntegrationId,
-        kind: 'prep',
-        category: 'Meeting prep',
-        date: p.date,
-        start: p.start,
-        durationMinutes: p.durationMinutes,
-        startMs,
-        endMs,
-        done: prepDone,
-        titles: [prepTitleStr],
-        tasks: [{ title: prepTitleStr, done: prepDone }],
-      });
+      pushReview(review);
     }
 
     // Daily ritual blocks (lunch/exercise/emails). Never "missed" — only a future
@@ -363,6 +413,31 @@ export async function POST(request: NextRequest) {
         ritualKind: kind,
         isBreak,
       });
+    }
+
+    // --- Prior-week review-only passes --------------------------------------
+    // Records dated BEFORE this week but on/after the review-window start (i.e. a
+    // Friday block a Monday review must still account for). These produce review
+    // blocks ONLY — they deliberately skip appEventIds, taskIdsByEvent,
+    // carryTasksByEvent and blocks[], so they can never enter replan planning,
+    // the end-of-week carry computation, or any move/defer. pushReview's precise
+    // endMs > reviewStartMs gate still applies; intervalFor falls back to the
+    // stored slot for these (their events aren't in this week's fetch), so no
+    // second Google fetch is needed. Bare calendar rows stay current-week only —
+    // they need live event data we don't have for prior weeks.
+    const inPriorWeekReviewRange = (d?: string) =>
+      !!d && d >= reviewRangeStartStr && d < ctx.weekStartStr;
+
+    for (const [eventId, entries] of groupAsanaByEvent(inPriorWeekReviewRange)) {
+      pushReview(buildAsanaReviewBlock(eventId, entries));
+    }
+    for (const t of adHocTasks) {
+      if (!t.googleEventId || !t.dueTime || !inPriorWeekReviewRange(t.dueDate)) continue;
+      pushReview(buildAdhocReviewBlock(t));
+    }
+    for (const p of prepBlocks) {
+      if (!inPriorWeekReviewRange(p.date)) continue;
+      pushReview(buildPrepReviewBlock(p));
     }
 
     // Ad-hoc Google Calendar events with no local record (added straight into
@@ -458,6 +533,29 @@ export async function POST(request: NextRequest) {
     // Earliest-first so the review reads chronologically.
     reviewBlocks.sort((a, b) => a.endMs - b.endMs);
 
+    // Seed the review from this week's durable stats: any not-done task already
+    // recorded 'started' (worked on in an earlier review, e.g. a deep-work task
+    // begun Monday) presents as 'started' when its later block comes up again,
+    // rather than blank/not-done. Covers every review-block source that carries a
+    // task id — grouped scheduled-Asana, ad-hoc, and calendar rows matched to an
+    // Asana task; meeting-prep tasks carry no id and are skipped. Post-processed
+    // over the assembled array so the flag needn't thread through each build site.
+    const startedTaskIds = new Set(
+      Object.values(weeklyStats?.tasks ?? {})
+        .filter(t => t.outcome === 'started')
+        .map(t => t.taskId)
+    );
+    if (startedTaskIds.size > 0) {
+      for (const block of reviewBlocks) {
+        for (const task of block.tasks) {
+          const taskId = task.gid ?? task.adhocId;
+          if (taskId && !task.done && startedTaskIds.has(taskId)) {
+            task.previouslyStarted = true;
+          }
+        }
+      }
+    }
+
     // Attach the deferrable task ids to each unplaceable block.
     const unplaceable = result.unplaceable.map(u => ({
       ...u,
@@ -545,11 +643,28 @@ export async function POST(request: NextRequest) {
         .map(b => ({ ...b, mergedEventIds: [] }))
     );
 
+    // Catch-up context for the modal. `missedWorkingDays` counts only configured
+    // working days (weekends/OOO don't count) strictly between the window start
+    // and today, so the copy can reassure rather than guilt. OOO covers just the
+    // current week (all we fetched) — prior-week days simply aren't excludable.
+    const reviewWindowStartDate = logicalTodayDate(new Date(reviewStartMs), rolloverHour);
+    const review = {
+      sinceIso: hadReview ? new Date(reviewStartMs).toISOString() : null,
+      missedWorkingDays: countMissedWorkingDays(
+        reviewWindowStartDate,
+        logicalDayStart,
+        ctx.config.scheduling?.workingDays,
+        ctx.outOfOfficeDates
+      ),
+      clamped,
+    };
+
     return NextResponse.json({
       weekStart: ctx.weekStartStr,
       weekEnd: ctx.weekEndStr,
       ...result,
       endOfWeek,
+      review,
       // Only present in end-of-week mode; the rest of the payload is byte-for-byte
       // what a mid-week analyze has always returned.
       ...(endOfWeek ? { carryBlocks } : {}),

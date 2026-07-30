@@ -122,6 +122,38 @@ describe('DailyReviewModal — step 1 outcomes and replacements', () => {
     expect(body?.replacements).toEqual([]);
   });
 
+  it('seeds a previously-started task as Started', async () => {
+    // A deep-work task begun earlier this week (recorded 'started') comes up
+    // again: it must present as Started, not blank/Didn’t do.
+    await openModal([
+      reviewBlock({
+        tasks: [{ title: 'Write the policy brief', done: false, adhocId: 'adhoc-1', previouslyStarted: true }],
+      }),
+    ]);
+
+    expect(screen.getByRole('button', { name: 'Started' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Done' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: DIDNT_DO })).toHaveAttribute('aria-pressed', 'false');
+
+    // Left as started, the apply re-emits the started entry (an idempotent
+    // re-record; the confirm route never downgrades an outcome already 'done').
+    const body = await saveAndReplan();
+    expect(body?.started).toEqual([{ googleEventId: 'evt-1', taskIds: ['adhoc-1'] }]);
+  });
+
+  it('lets Done override a previously-started seed', async () => {
+    await openModal([
+      reviewBlock({
+        tasks: [{ title: 'Write the policy brief', done: false, adhocId: 'adhoc-1', previouslyStarted: true }],
+      }),
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    const body = await saveAndReplan();
+    expect(body?.done).toEqual(['evt-1']);
+    expect(body?.started).toEqual([]);
+  });
+
   it('shows the replacement panel only for a block marked Didn’t do', async () => {
     await openModal([reviewBlock()], { workspaceOptions: WORKSPACES });
     const trigger = /What were you doing instead\?/;
@@ -308,5 +340,87 @@ describe('DailyReviewModal — step 1 outcomes and replacements', () => {
     // The default block has no source → it comes from a local task record.
     await openModal([reviewBlock()]);
     expect(screen.queryByRole('button', { name: /Not relevant/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('DailyReviewModal — catch-up context', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (api.confirmReplan as jest.Mock).mockResolvedValue({
+      results: [],
+      doneResults: [],
+      additionResults: [],
+    });
+    (api.completeDailyReview as jest.Mock).mockResolvedValue({});
+    (api.getReviewMessage as jest.Mock).mockResolvedValue({ message: 'Good day.' });
+  });
+
+  // Render with a specific `review` payload attached to the analyze response.
+  async function openWithReview(
+    blocks: ReplanReviewBlock[],
+    review: { sinceIso: string | null; missedWorkingDays: number; clamped: boolean }
+  ) {
+    (api.analyzeReplan as jest.Mock).mockResolvedValue({ ...analyzeResponse(blocks), review });
+    await act(async () => {
+      render(<DailyReviewModal isOpen onClose={() => {}} />);
+    });
+  }
+
+  it('shows the catch-up subtitle when working days were missed', async () => {
+    await openWithReview([reviewBlock()], {
+      sinceIso: '2026-07-17T12:00:00.000Z',
+      missedWorkingDays: 2,
+      clamped: false,
+    });
+
+    expect(screen.getByText(/Catching up since/)).toBeInTheDocument();
+    expect(screen.getByText(/weekends and days off don’t count/)).toBeInTheDocument();
+  });
+
+  it('reads as a fresh start when the 7-day cap bit', async () => {
+    await openWithReview([reviewBlock()], {
+      sinceIso: '2026-07-01T12:00:00.000Z',
+      missedWorkingDays: 5,
+      clamped: true,
+    });
+
+    expect(screen.getByText('Welcome back — reviewing the last 7 days.')).toBeInTheDocument();
+  });
+
+  it('keeps the generic subtitle when nothing was missed', async () => {
+    await openWithReview([reviewBlock()], {
+      sinceIso: '2026-07-23T12:00:00.000Z',
+      missedWorkingDays: 0,
+      clamped: false,
+    });
+
+    expect(screen.getByText('What got done since your last review?')).toBeInTheDocument();
+  });
+
+  it('badges a prior-week row and withholds its replacement UI', async () => {
+    // A not-done block dated before this week's Monday (weekStart 2026-07-20).
+    await openWithReview(
+      [reviewBlock({ googleEventId: 'evt-prior', date: '2026-07-17', titles: ['Friday leftover'], tasks: [{ title: 'Friday leftover', done: false, adhocId: 'a-prior' }] })],
+      { sinceIso: '2026-07-17T12:00:00.000Z', missedWorkingDays: 0, clamped: false }
+    );
+
+    expect(screen.getByText('Last week')).toBeInTheDocument();
+    // No "what were you doing instead" prompt — that path rewrites the current
+    // week's calendar and must not touch a prior week.
+    expect(
+      screen.queryByRole('button', { name: /What were you doing instead\?/ })
+    ).not.toBeInTheDocument();
+  });
+
+  it('still offers the replacement UI for a current-week not-done row', async () => {
+    await openWithReview([reviewBlock({ date: '2026-07-24' })], {
+      sinceIso: null,
+      missedWorkingDays: 0,
+      clamped: false,
+    });
+
+    expect(
+      screen.getByRole('button', { name: /What were you doing instead\?/ })
+    ).toBeInTheDocument();
   });
 });

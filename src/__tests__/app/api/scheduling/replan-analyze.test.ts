@@ -30,6 +30,7 @@ jest.mock('@/lib/user-data-storage', () => ({
   setMeetingPrepDecision: jest.fn(),
   getCarryOvers: jest.fn(),
   getAllTaskMetadata: jest.fn(),
+  getWeeklyStats: jest.fn(),
 }));
 
 import { POST } from '@/app/api/scheduling/replan/analyze/route';
@@ -46,6 +47,7 @@ import {
   setMeetingPrepDecision,
   getCarryOvers,
   getAllTaskMetadata,
+  getWeeklyStats,
 } from '@/lib/user-data-storage';
 import type { ReplanReviewBlock } from '@/lib/scheduling/replan';
 import type { ProposedBlock } from '@/lib/scheduling/types';
@@ -111,6 +113,15 @@ async function analyze(): Promise<{
   return res.json();
 }
 
+// Full response (moves / unplaceable / review / etc.) for the tests that assert
+// prior-week blocks stay OUT of planning and check the catch-up context.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function analyzeFull(): Promise<any> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const res = await POST({ json: async () => ({}) } as any);
+  return res.json();
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockAdHoc.mockResolvedValue([]);
@@ -122,6 +133,7 @@ beforeEach(() => {
   (setMeetingPrepDecision as jest.Mock).mockResolvedValue(undefined);
   (getCarryOvers as jest.Mock).mockResolvedValue({});
   (getAllTaskMetadata as jest.Mock).mockResolvedValue({});
+  (getWeeklyStats as jest.Mock).mockResolvedValue(null);
   // A last-review well before the week's blocks, so the "since last review"
   // window includes them (these tests exercise title/interval logic, not the
   // window itself — see the dedicated window test below).
@@ -423,6 +435,188 @@ describe('replan analyze — daily review blocks', () => {
 
     const { reviewBlocks } = await analyze();
     expect(reviewBlocks.find(b => b.googleEventId === 'cal-1')).toBeUndefined();
+  });
+});
+
+describe('replan analyze — previouslyStarted seeding from weekly stats', () => {
+  const scheduled = {
+    id: 's1',
+    asanaTaskId: 'g-open',
+    scheduledDate: '2026-07-13',
+    scheduledTime: '09:00',
+    duration: 60,
+    googleEventId: 'evt-open',
+    googleIntegrationId: 'gi1',
+    taskName: 'Deep work task',
+  };
+
+  it('flags a not-done task recorded "started" this week as previouslyStarted', async () => {
+    mockScheduled.mockResolvedValue([scheduled]);
+    setContext({
+      asanaCandidates: [{ task: { gid: 'g-open', name: 'Deep work task' }, typeValue: 'deep' }],
+    });
+    (getWeeklyStats as jest.Mock).mockResolvedValue({
+      weekStart: '2026-07-13',
+      tasks: {
+        'g-open': { taskId: 'g-open', category: 'deep', scheduledAt: '2026-07-13T09:00:00.000Z', outcome: 'started' },
+      },
+      integrations: {},
+    });
+
+    const { reviewBlocks } = await analyze();
+    const block = reviewBlocks.find(b => b.googleEventId === 'evt-open');
+
+    expect(block!.tasks[0].done).toBe(false);
+    expect(block!.tasks[0].previouslyStarted).toBe(true);
+  });
+
+  it('does not flag a task whose stats outcome is not "started"', async () => {
+    mockScheduled.mockResolvedValue([scheduled]);
+    setContext({
+      asanaCandidates: [{ task: { gid: 'g-open', name: 'Deep work task' }, typeValue: 'deep' }],
+    });
+    // Recorded 'done' (a positive outcome) — must not seed a started state.
+    (getWeeklyStats as jest.Mock).mockResolvedValue({
+      weekStart: '2026-07-13',
+      tasks: {
+        'g-open': { taskId: 'g-open', category: 'deep', scheduledAt: '2026-07-13T09:00:00.000Z', outcome: 'done' },
+      },
+      integrations: {},
+    });
+
+    const { reviewBlocks } = await analyze();
+    const block = reviewBlocks.find(b => b.googleEventId === 'evt-open');
+
+    expect(block!.tasks[0].previouslyStarted).toBeUndefined();
+  });
+});
+
+describe('replan analyze — 7-day catch-up window across the week boundary', () => {
+  // A block dated last Friday (2026-07-10), before this week's Monday. The route
+  // fetches only this week's events, so intervalFor falls back to the stored slot.
+  const priorFridayBlock = {
+    id: 's-prior',
+    asanaTaskId: 'g-prior',
+    scheduledDate: '2026-07-10',
+    scheduledTime: '09:00',
+    duration: 60,
+    googleEventId: 'evt-prior',
+    googleIntegrationId: 'gi1',
+    taskName: 'Friday leftover',
+  };
+
+  it('surfaces a prior-week block in reviewBlocks but never in planning (moves/kept/unplaceable)', async () => {
+    // Last review Thursday last week, so the window reaches back to Friday.
+    mockReviewState.mockResolvedValue({
+      lastReviewedAt: new Date(2026, 6, 9, 0, 0, 0).toISOString(),
+      dismissedTitles: [],
+    });
+    mockScheduled.mockResolvedValue([priorFridayBlock]);
+    // Still incomplete → not done, so if it wrongly entered planning it would be
+    // classified "missed" and show up as a move or unplaceable.
+    setContext({
+      asanaCandidates: [{ task: { gid: 'g-prior', name: 'Friday leftover' }, typeValue: 'deep' }],
+    });
+
+    const out = await analyzeFull();
+    expect(out.reviewBlocks.find((b: ReplanReviewBlock) => b.googleEventId === 'evt-prior')).toBeDefined();
+    // Absent from every planning channel.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(out.moves.find((m: any) => m.googleEventId === 'evt-prior')).toBeUndefined();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(out.kept.find((k: any) => k.googleEventId === 'evt-prior')).toBeUndefined();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(out.unplaceable.find((u: any) => u.googleEventId === 'evt-prior')).toBeUndefined();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(out.tomorrowBlocks.find((t: any) => t.googleEventId === 'evt-prior')).toBeUndefined();
+  });
+
+  it('clamps the lookback at 7 days — a block older than the cap is dropped', async () => {
+    // Last review a month ago, so the effective window start is now − 7 days
+    // (2026-07-08 08:00). A block on 07-05 is out; one on 07-10 is in.
+    mockReviewState.mockResolvedValue({
+      lastReviewedAt: new Date(2026, 5, 15, 0, 0, 0).toISOString(),
+      dismissedTitles: [],
+    });
+    mockScheduled.mockResolvedValue([
+      priorFridayBlock, // 07-10, within the 7-day window
+      { ...priorFridayBlock, id: 's-old', asanaTaskId: 'g-old', googleEventId: 'evt-old', scheduledDate: '2026-07-05', taskName: 'Too old' },
+    ]);
+    setContext({
+      asanaCandidates: [
+        { task: { gid: 'g-prior', name: 'Friday leftover' }, typeValue: 'deep' },
+        { task: { gid: 'g-old', name: 'Too old' }, typeValue: 'deep' },
+      ],
+    });
+
+    const out = await analyzeFull();
+    const ids = out.reviewBlocks.map((b: ReplanReviewBlock) => b.googleEventId);
+    expect(ids).toContain('evt-prior');
+    expect(ids).not.toContain('evt-old');
+    expect(out.review.clamped).toBe(true);
+  });
+
+  it('leaves the never-reviewed fallback at today (no prior-week reach, sinceIso null)', async () => {
+    mockReviewState.mockResolvedValue({ lastReviewedAt: undefined, dismissedTitles: [] });
+    mockScheduled.mockResolvedValue([priorFridayBlock]);
+    setContext({
+      asanaCandidates: [{ task: { gid: 'g-prior', name: 'Friday leftover' }, typeValue: 'deep' }],
+    });
+
+    const out = await analyzeFull();
+    // Window is today's logical start, so last week's block never reaches it.
+    expect(out.reviewBlocks.find((b: ReplanReviewBlock) => b.googleEventId === 'evt-prior')).toBeUndefined();
+    expect(out.review.sinceIso).toBeNull();
+    expect(out.review.clamped).toBe(false);
+    expect(out.review.missedWorkingDays).toBe(0);
+  });
+});
+
+describe('replan analyze — catch-up context (missedWorkingDays / sinceIso)', () => {
+  // A Monday review that follows a Friday-evening one: the weekend in between is
+  // not working time, so nothing was "missed". Uses its own gather mock so `now`
+  // can be a Monday.
+  it('counts zero missed working days for a Friday→Monday gap (weekend skipped)', async () => {
+    const monday = new Date(2026, 6, 20, 9, 0, 0);
+    mockGather.mockResolvedValue({
+      now: monday,
+      weekStart: new Date(2026, 6, 20, 0, 0, 0),
+      weekStartStr: '2026-07-20',
+      weekEndStr: '2026-07-26',
+      weekEvents: [],
+      nextWeekEarlyEvents: [],
+      asanaCandidates: [],
+      asanaNameByGid: new Map(),
+      quotas: [],
+      config: CONFIG,
+      outOfOfficeDates: new Set<string>(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    mockReviewState.mockResolvedValue({
+      lastReviewedAt: new Date(2026, 6, 17, 18, 0, 0).toISOString(), // Fri 18:00
+      dismissedTitles: [],
+    });
+    mockScheduled.mockResolvedValue([]);
+
+    const out = await analyzeFull();
+    expect(out.review.missedWorkingDays).toBe(0);
+    expect(out.review.clamped).toBe(false);
+    expect(out.review.sinceIso).toBe(new Date(2026, 6, 17, 18, 0, 0).toISOString());
+  });
+
+  it('counts the working days missed after a mid-week gap', async () => {
+    // Last review Monday, now Wednesday (NOW). Strictly between: Tuesday only —
+    // today (Wed) is the review being done now and is excluded.
+    mockReviewState.mockResolvedValue({
+      lastReviewedAt: new Date(2026, 6, 13, 9, 0, 0).toISOString(),
+      dismissedTitles: [],
+    });
+    mockScheduled.mockResolvedValue([]);
+    setContext({});
+
+    const out = await analyzeFull();
+    expect(out.review.missedWorkingDays).toBe(1);
+    expect(out.review.clamped).toBe(false);
   });
 });
 

@@ -280,6 +280,11 @@ export interface ReplanReviewTask {
   // override. The review UI explains the pre-ticked state and hides the
   // "Complete in Asana" affordance (there is nothing left to complete).
   completedInAsana?: boolean;
+  // True when this (not-done) task was already recorded 'started' in this week's
+  // stats by an earlier review — a deep-work task worked on Monday whose next
+  // block comes up later in the week. The review seeds it as 'started' rather
+  // than blank, so it isn't asked from scratch again (see the analyze route).
+  previouslyStarted?: boolean;
 }
 
 // A PAST app block (task or prep, never ritual/break) surfaced in the daily

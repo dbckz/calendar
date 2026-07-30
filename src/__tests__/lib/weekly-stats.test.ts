@@ -216,6 +216,19 @@ describe('started-but-unfinished outcome', () => {
     expect(summary.totalStarted).toBe(0);
     expect(summary.categories[0]).toMatchObject({ carried: 1, started: 0, completed: 0 });
   });
+
+  it('never downgrades a done task back to started', async () => {
+    // A task done earlier in the week that a later review re-seeds (and confirms)
+    // as 'started' must stay done — 'done' is a positive terminal outcome.
+    await recordWeeklyTasks(STARTED_WEEK, [{ taskId: 'a', category: 'Writing' }]);
+    await setWeeklyTaskOutcomes(STARTED_WEEK, [{ taskId: 'a', outcome: 'done' }]);
+    const changed = await setWeeklyTaskOutcomes(STARTED_WEEK, [{ taskId: 'a', outcome: 'started' }]);
+
+    expect(changed).toBe(0);
+    const summary = summariseWeek((await getWeeklyStats(STARTED_WEEK))!);
+    expect(summary.totalCompleted).toBe(1);
+    expect(summary.totalStarted).toBe(0);
+  });
 });
 
 describe('unscheduledThisWeek (dashboard "Left unscheduled" derivation)', () => {

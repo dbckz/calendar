@@ -24,6 +24,11 @@ export interface NudgeInput {
   // yyyy-MM-dd of the logical day a nudge was last fired on, if any.
   lastNudgedDay?: string;
   logicalToday: string; // yyyy-MM-dd
+  // Whether today is a configured working day. The wrap-up nudge is gated on
+  // this so an unfinished week can't nag on a Saturday/Sunday evening; the
+  // Sunday plan-next-week nudge is deliberately exempt (planning for Monday on
+  // Sunday evening is the point).
+  isWorkingDay: boolean;
 }
 
 // The hour from which each nudge becomes due.
@@ -39,8 +44,10 @@ export function selectNudge(input: NudgeInput): NudgeKind | null {
   const hour = input.now.getHours();
 
   // The wrap-up state already means "last working day (or later) and the
-  // end-of-week review is still outstanding" — all that is left is the hour.
-  if (input.action === 'wrap-up' && hour >= WRAP_UP_HOUR) return 'wrap-up';
+  // end-of-week review is still outstanding". "Or later" spills onto the weekend,
+  // so gate on today actually being a working day — Dave is never nudged to
+  // review on a non-working day (the dashboard button may still offer it).
+  if (input.action === 'wrap-up' && input.isWorkingDay && hour >= WRAP_UP_HOUR) return 'wrap-up';
 
   // The Sunday-evening reminder is only useful while next week is genuinely
   // unplanned; once it is planned the state machine moves on by itself.

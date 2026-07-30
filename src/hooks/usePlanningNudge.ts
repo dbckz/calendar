@@ -5,6 +5,7 @@ import { useEffect } from 'react';
 import { NOTIFICATIONS_STORAGE_KEY } from './useEventNotifications';
 import { logicalToday, DEFAULT_ROLLOVER_HOUR } from '@/lib/date-utils';
 import { NUDGE_CONTENT, selectNudge, type NudgeKind } from '@/lib/planning-nudge';
+import { isWorkingDay } from '@/lib/scheduling/end-of-week';
 import type { WeekStateResponse } from '@/lib/api';
 
 // Remembers the logical day a nudge last fired on, so a reload doesn't re-nag.
@@ -46,6 +47,9 @@ export function usePlanningNudge(
         nextWeekPlanned: weekState.nextWeekPlanned,
         lastNudgedDay: stored,
         logicalToday: today,
+        // At 17:00+ the logical day equals the clock day (rollover is early
+        // morning), so `now` is the right day to test against working days.
+        isWorkingDay: isWorkingDay(now, weekState.workingDays),
       });
       if (!kind) return;
 

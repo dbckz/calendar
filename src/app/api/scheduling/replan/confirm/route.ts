@@ -41,7 +41,12 @@ import {
   updateScheduledAsanaTasksByGoogleEvent,
 } from '@/lib/user-data-storage';
 import type { ReviewAdoptInput } from '@/lib/scheduling/daily-review';
-import type { AsanaIntegration, GoogleCalendarCredentials, GoogleIntegration } from '@/types';
+import type {
+  AsanaIntegration,
+  GoogleCalendarCredentials,
+  GoogleIntegration,
+  WeeklyTaskOutcomeKind,
+} from '@/types';
 
 // One accepted move: patch the existing Google event to a new time and update
 // the stored schedule for its linked work.
@@ -517,13 +522,30 @@ export async function POST(request: NextRequest) {
     const results: MoveResult[] = [];
 
     // --- Durable weekly record -------------------------------------------
-    // Outcomes collected as we go and written once at the end. The week is the
-    // CURRENT one: these actions only ever resolve work planned into it.
+    // Outcomes collected as we go and written once at the end, EACH keyed to the
+    // week its block belongs to. Most actions resolve current-week work, so they
+    // default to `weekStartStr`; but a block reviewed now can belong to a PRIOR
+    // week (a Friday block picked up on the following Monday), and its outcome
+    // must land in THAT week's record — where the task already has a
+    // high-water-mark entry from when it was scheduled — not this week's.
     const weekStartStr = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd');
     const weeklyOutcomes: Array<{
       taskId: string;
-      outcome: 'done' | 'started' | 'carried' | 'scheduled' | 'unscheduled' | 'dropped';
+      outcome: WeeklyTaskOutcomeKind;
+      weekStart: string;
     }> = [];
+    const recordOutcome = (
+      taskId: string,
+      outcome: WeeklyTaskOutcomeKind,
+      weekStart: string = weekStartStr
+    ) => weeklyOutcomes.push({ taskId, outcome, weekStart });
+    // The Monday of the week a block's scheduled date falls in (same date the
+    // analyze route used to place it). Current-week dates resolve to weekStartStr,
+    // so the common case stays byte-identical.
+    const weekStartForDate = (date?: string): string =>
+      date
+        ? format(startOfWeek(new Date(`${date}T00:00:00`), { weekStartsOn: 1 }), 'yyyy-MM-dd')
+        : weekStartStr;
     // The task ids behind a block's Google event, from whichever store owns it.
     const taskIdsForEvent = (googleEventId: string): string[] => {
       const asana = scheduledAsana
@@ -532,6 +554,24 @@ export async function POST(request: NextRequest) {
       if (asana.length > 0) return asana;
       const adhoc = adHocTasks.find(t => t.googleEventId === googleEventId);
       return adhoc ? [adhoc.id] : [];
+    };
+    // The week a block's Google event belongs to, resolved from whichever store
+    // owns it — so a prior-week block's outcome is attributed to its own week.
+    const weekStartForEvent = (googleEventId: string): string => {
+      const asana = scheduledAsana.find(s => s.googleEventId === googleEventId);
+      if (asana) return weekStartForDate(asana.scheduledDate);
+      const adhoc = adHocTasks.find(t => t.googleEventId === googleEventId);
+      if (adhoc) return weekStartForDate(adhoc.dueDate);
+      const prep = prepBlocks.find(p => p.googleEventId === googleEventId);
+      if (prep) return weekStartForDate(prep.date);
+      return weekStartStr;
+    };
+    // The week an Asana task's scheduled block belongs to (for Complete-in-Asana,
+    // which is keyed by gid rather than event id).
+    const weekStartForTask = (taskId: string): string => {
+      const asana = scheduledAsana.find(s => s.asanaTaskId === taskId);
+      if (asana) return weekStartForDate(asana.scheduledDate);
+      return weekStartStr;
     };
 
     // --- Done markings (no calendar mutation; the event stays as history) ---
@@ -552,8 +592,9 @@ export async function POST(request: NextRequest) {
             await setBlockDoneOverride(googleEventId);
           }
         }
+        const wk = weekStartForEvent(googleEventId);
         for (const taskId of taskIdsForEvent(googleEventId)) {
-          weeklyOutcomes.push({ taskId, outcome: 'done' });
+          recordOutcome(taskId, 'done', wk);
         }
         doneResults.push({ googleEventId, success: true });
       } catch (err) {
@@ -583,8 +624,9 @@ export async function POST(request: NextRequest) {
         await removeBlockDoneOverride(googleEventId);
         // Reversing a done marking puts the task back in the week's outstanding
         // set — it stays in the denominator either way.
+        const wk = weekStartForEvent(googleEventId);
         for (const taskId of taskIdsForEvent(googleEventId)) {
-          weeklyOutcomes.push({ taskId, outcome: 'scheduled' });
+          recordOutcome(taskId, 'scheduled', wk);
         }
         notDoneResults.push({ googleEventId, success: true });
       } catch (err) {
@@ -647,7 +689,7 @@ export async function POST(request: NextRequest) {
         await completeTask(accessToken, gid, true);
         // A completed task is no longer carried over.
         await removeCarryOvers([gid]);
-        weeklyOutcomes.push({ taskId: gid, outcome: 'done' });
+        recordOutcome(gid, 'done', weekStartForTask(gid));
         asanaResults.push({ gid, success: true });
       } catch (err) {
         console.error(`[Replan Confirm] Failed to complete Asana task ${gid}:`, err);
@@ -671,7 +713,7 @@ export async function POST(request: NextRequest) {
             await setTaskDeferrals(d.taskIds.map(taskId => ({ taskId, until })));
           }
           if (d.googleEventId) await removeBlockDoneOverride(d.googleEventId);
-          for (const taskId of d.taskIds) weeklyOutcomes.push({ taskId, outcome: 'carried' });
+          for (const taskId of d.taskIds) recordOutcome(taskId, 'carried');
           deferResults.push({ taskIds: d.taskIds, googleEventId: d.googleEventId, success: true });
         } catch (err) {
           console.error(`[Replan Confirm] Failed to defer ${d.googleEventId ?? d.taskIds.join(',')}:`, err);
@@ -694,7 +736,7 @@ export async function POST(request: NextRequest) {
       try {
         await removeBlockDoneOverride(googleEventId);
         for (const taskId of taskIdsForEvent(googleEventId)) {
-          weeklyOutcomes.push({ taskId, outcome: 'unscheduled' });
+          recordOutcome(taskId, 'unscheduled');
         }
         deferResults.push({ taskIds: [], googleEventId, success: true });
       } catch (err) {
@@ -715,8 +757,9 @@ export async function POST(request: NextRequest) {
       // Named tasks only when the review named them; otherwise every task on the
       // block (a single-task block, or an older caller that sent a bare id).
       const taskIds = entry.taskIds ?? taskIdsForEvent(entry.googleEventId);
+      const wk = weekStartForEvent(entry.googleEventId);
       for (const taskId of taskIds) {
-        weeklyOutcomes.push({ taskId, outcome: 'started' });
+        recordOutcome(taskId, 'started', wk);
       }
     }
 
@@ -892,7 +935,7 @@ export async function POST(request: NextRequest) {
           }
           // Carried (or dropped back to the backlog) — either way it did NOT get
           // done this week, and it stays in the week's denominator.
-          for (const taskId of taskIds) weeklyOutcomes.push({ taskId, outcome: 'carried' });
+          for (const taskId of taskIds) recordOutcome(taskId, 'carried');
           // Clear the planning override on every block behind the card.
           for (const id of c.blockIds) await removeBlockDoneOverride(id);
           carryResults.push({ blockId: c.blockId, taskIds, success: true });
@@ -1038,9 +1081,9 @@ export async function POST(request: NextRequest) {
           // carried, 'leave' as unscheduled (both count as planned-but-not-done).
           if (d.mode === 'defer' && d.taskIds.length > 0) {
             await setTaskDeferrals(d.taskIds.map(taskId => ({ taskId, until })));
-            for (const taskId of d.taskIds) weeklyOutcomes.push({ taskId, outcome: 'carried' });
+            for (const taskId of d.taskIds) recordOutcome(taskId, 'carried');
           } else if (d.mode === 'leave') {
-            for (const taskId of d.taskIds) weeklyOutcomes.push({ taskId, outcome: 'unscheduled' });
+            for (const taskId of d.taskIds) recordOutcome(taskId, 'unscheduled');
           }
           await removeBlockDoneOverride(d.googleEventId);
           await removeGoogleEventAttribution(d.googleEventId);
@@ -1110,7 +1153,7 @@ export async function POST(request: NextRequest) {
         await removeBlockDoneOverride(d.googleEventId);
         await removeCarryOvers(d.taskIds);
 
-        for (const taskId of d.taskIds) weeklyOutcomes.push({ taskId, outcome: 'dropped' });
+        for (const taskId of d.taskIds) recordOutcome(taskId, 'dropped');
         dropResults.push({ googleEventId: d.googleEventId, success: true });
       } catch (err) {
         console.error(`[Replan Confirm] Failed to drop ${d.googleEventId}:`, err);
@@ -1250,13 +1293,25 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // One write for every outcome this confirm settled. Unknown task ids are
-    // ignored by the store, so nothing that was never planned can appear.
+    // One write PER WEEK for the outcomes this confirm settled. Almost always a
+    // single group (the current week) — a byte-identical single write to
+    // weekStartStr — but a review that crossed the week boundary also writes the
+    // prior week's group to its own record, where the task's high-water-mark
+    // entry already lives. Unknown task ids are ignored by the store, so nothing
+    // that was never planned can appear.
     if (weeklyOutcomes.length > 0) {
-      try {
-        await setWeeklyTaskOutcomes(weekStartStr, weeklyOutcomes);
-      } catch (err) {
-        console.error('[Replan Confirm] Failed to record weekly outcomes:', err);
+      const byWeek = new Map<string, Array<{ taskId: string; outcome: WeeklyTaskOutcomeKind }>>();
+      for (const { taskId, outcome, weekStart } of weeklyOutcomes) {
+        const list = byWeek.get(weekStart) ?? [];
+        list.push({ taskId, outcome });
+        byWeek.set(weekStart, list);
+      }
+      for (const [wk, outs] of byWeek) {
+        try {
+          await setWeeklyTaskOutcomes(wk, outs);
+        } catch (err) {
+          console.error(`[Replan Confirm] Failed to record weekly outcomes for ${wk}:`, err);
+        }
       }
     }
 

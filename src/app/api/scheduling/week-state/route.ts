@@ -98,6 +98,7 @@ export async function GET() {
       endOfWeek,
       endOfWeekReviewDone,
       hasReviewableBlocks,
+      workingDays: config.scheduling?.workingDays,
     });
   } catch (error) {
     console.error('Error deriving week state:', error);

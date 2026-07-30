@@ -192,6 +192,9 @@ export interface WeekStateResponse {
   endOfWeek: boolean;
   endOfWeekReviewDone: boolean;
   hasReviewableBlocks: boolean;
+  // The configured working days (default Mon–Fri), so the client can gate the
+  // wrap-up nudge to working days only.
+  workingDays?: string[];
 }
 
 export interface ConfirmWeekResponse {
@@ -241,6 +244,19 @@ export interface ReplanAnalyzeResponse {
   // Unfinished, task-backed blocks to carry over / drop / mark done. Present only
   // in end-of-week mode; never contains ritual or meeting-prep blocks.
   carryBlocks?: ReplanCarryBlock[];
+  // Catch-up context for the review's subtitle. Absent on older responses.
+  review?: {
+    // Effective review-window start (ISO). Null when this is a first-ever review
+    // (no prior completed review to look back from).
+    sinceIso: string | null;
+    // Configured working days missed since the last review (weekends and
+    // out-of-office days excluded) — 0 when nothing was missed.
+    missedWorkingDays: number;
+    // True when the 7-day lookback cap bit (last review older than a week), so
+    // the copy reads as a fresh start over the recent window rather than a
+    // backlog.
+    clamped: boolean;
+  };
 }
 
 export interface ReplanConfirmResult {

@@ -104,6 +104,10 @@ export async function setWeeklyTaskOutcomes(
     const task = record.tasks[taskId];
     if (!task) continue;
     if (task.outcome === outcome) continue;
+    // 'done' is a positive terminal outcome. A later 'started' — e.g. a task
+    // re-seeded as 'started' in a subsequent review and confirmed unchanged —
+    // must never downgrade a done task back to started.
+    if (outcome === 'started' && task.outcome === 'done') continue;
     record.tasks[taskId] = { ...task, outcome, outcomeAt: at };
     changed++;
   }

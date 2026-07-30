@@ -16,7 +16,7 @@ import {
 import { format, parseISO } from 'date-fns';
 
 import { api, type ReplanAnalyzeResponse } from '@/lib/api';
-import type { ReplanReviewBlock } from '@/lib/scheduling/replan';
+import type { ReplanReviewBlock, ReplanReviewTask } from '@/lib/scheduling/replan';
 import {
   buildReviewApplyPayload,
   markOutcome,
@@ -42,12 +42,21 @@ type Marks = Record<string, ReviewTaskMark[]>; // eventId -> per-task marks
 // blocks appear; an unanswered didn't-do block is left entirely alone.
 type Replacements = Record<string, ReviewReplacementInput | undefined>;
 
+// The outcome a task's row opens on. A task already recorded 'started' earlier
+// this week seeds as 'started' (not blank), so a later block for the same work
+// doesn't ask from scratch.
+function initialOutcome(task: ReplanReviewTask): ReviewOutcome {
+  if (task.done) return 'done';
+  if (task.previouslyStarted) return 'started';
+  return 'notDone';
+}
+
 function initMarks(blocks: ReplanReviewBlock[]): Marks {
   const marks: Marks = {};
   for (const b of blocks) {
     marks[b.googleEventId] = b.tasks.map(t => ({
       done: t.done,
-      outcome: t.done ? 'done' : 'notDone',
+      outcome: initialOutcome(t),
       // Default the "complete in Asana" box on for Asana tasks the user might tick
       // done — but not for ones already complete in Asana (nothing to complete).
       completeInAsana: !!t.gid && !t.completedInAsana,
@@ -129,6 +138,19 @@ export function DailyReviewModal({
   const weekLabel = useMemo(() => {
     if (!data) return '';
     return `${format(parseISO(data.weekStart), 'MMM d')} – ${format(parseISO(data.weekEnd), 'MMM d')}`;
+  }, [data]);
+
+  // Step-1 subtitle. When the review is catching up across missed working days
+  // it says so — and reassures that weekends and days off don't count — rather
+  // than the generic prompt. A long absence (the 7-day cap bit) reads as a fresh
+  // start over the recent window instead of a backlog to feel guilty about.
+  const reviewSubtitle = useMemo(() => {
+    const r = data?.review;
+    if (r?.clamped) return 'Welcome back — reviewing the last 7 days.';
+    if (r && r.missedWorkingDays >= 1 && r.sinceIso) {
+      return `Catching up since ${format(parseISO(r.sinceIso), 'EEE d MMM')} — no rush, weekends and days off don’t count.`;
+    }
+    return 'What got done since your last review?';
   }, [data]);
 
   const reviewBlocks = useMemo(() => data?.reviewBlocks ?? [], [data]);
@@ -279,7 +301,7 @@ export function DailyReviewModal({
               {data && (
                 <p className="text-xs text-gray-400">
                   {step === 1
-                    ? 'What got done since your last review?'
+                    ? reviewSubtitle
                     : `${data.endOfWeek ? 'Carry what didn’t into next week' : 'Reschedule what didn’t'} · ${weekLabel}`}
                 </p>
               )}
@@ -325,6 +347,12 @@ export function DailyReviewModal({
                   <ReviewRow
                     key={block.googleEventId}
                     block={block}
+                    // A block dated before this week's Monday is a catch-up from a
+                    // prior week: badged, and its "what were you doing instead"
+                    // replacement UI is withheld (that path rewrites the current
+                    // week's calendar; a prior-week block is history to record, not
+                    // reschedule).
+                    priorWeek={block.date < data.weekStart}
                     marks={marks[block.googleEventId] ?? []}
                     onSetOutcome={(idx, outcome) => setTaskOutcome(block.googleEventId, idx, outcome)}
                     onToggleAsana={(idx, v) => setTaskCompleteAsana(block.googleEventId, idx, v)}
@@ -486,6 +514,7 @@ function OutcomeToggle({
 // wholly not done offers the "what were you doing instead?" panel.
 function ReviewRow({
   block,
+  priorWeek,
   marks,
   onSetOutcome,
   onToggleAsana,
@@ -495,6 +524,9 @@ function ReviewRow({
   workspaceOptions,
 }: {
   block: ReplanReviewBlock;
+  // The block belongs to a week before this one (a catch-up). Badged, and its
+  // replacement UI is withheld.
+  priorWeek: boolean;
   marks: ReviewTaskMark[];
   onSetOutcome: (idx: number, outcome: ReviewOutcome) => void;
   onToggleAsana: (idx: number, v: boolean) => void;
@@ -506,7 +538,10 @@ function ReviewRow({
 }) {
   const color = categoryColor(block.category);
   const grouped = block.tasks.length > 1;
-  const notDone = isBlockNotDone(block, marks);
+  // A prior-week block never offers the replacement panel: answering it deletes
+  // and recreates the event in the current week's slot, which would corrupt a
+  // past week. Its date is already shown (slotLabelMs), so it stays reviewable.
+  const notDone = !priorWeek && isBlockNotDone(block, marks);
 
   return (
     <li className="rounded-lg border border-gray-200 bg-white p-3">
@@ -525,6 +560,11 @@ function ReviewRow({
             {block.source === 'calendar' && (
               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500">
                 From your calendar
+              </span>
+            )}
+            {priorWeek && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-100 text-indigo-600">
+                Last week
               </span>
             )}
           </div>

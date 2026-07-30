@@ -54,6 +54,8 @@ jest.mock('@/lib/user-data-storage', () => ({
   setWeeklyTaskOutcomes: jest.fn(),
 }));
 
+import { addDays, format, startOfWeek } from 'date-fns';
+
 import { POST } from '@/app/api/scheduling/replan/confirm/route';
 import { createCalendarEvent, deleteCalendarEvent, updateCalendarEvent, ensureValidCredentials } from '@/lib/google-calendar';
 import { getEnabledGoogleIntegrations, getGoogleIntegrationById, getIntegrationById } from '@/lib/integration-storage';
@@ -311,6 +313,59 @@ describe('replan confirm — leave unscheduled', () => {
     ]);
     // Folded into deferResults so the row shows a status icon in the UI.
     expect(out.deferResults).toEqual([{ taskIds: [], googleEventId: 'evt-thu', success: true }]);
+  });
+});
+
+describe('replan confirm — weekly outcome attributed to the block\'s own week', () => {
+  // Dates relative to the real "now" (the route keys the current week off
+  // new Date()), so the test is stable whenever it runs.
+  const thisMonday = startOfWeek(new Date(), { weekStartsOn: 1 });
+  const thisMondayStr = format(thisMonday, 'yyyy-MM-dd');
+  const lastMondayStr = format(addDays(thisMonday, -7), 'yyyy-MM-dd');
+  const priorDate = format(addDays(thisMonday, -4), 'yyyy-MM-dd'); // last Thursday
+  const curDate = format(addDays(thisMonday, 1), 'yyyy-MM-dd'); // this Tuesday
+
+  it('writes a prior-week block\'s done outcome to the prior week and the current one to this week', async () => {
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([
+      { id: 's-prior', asanaTaskId: 'g-prior', googleEventId: 'evt-prior', scheduledDate: priorDate },
+      { id: 's-cur', asanaTaskId: 'g-cur', googleEventId: 'evt-cur', scheduledDate: curDate },
+    ]);
+
+    await confirm({ done: ['evt-prior', 'evt-cur'] });
+
+    const calls = (setWeeklyTaskOutcomes as jest.Mock).mock.calls;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const priorCall = calls.find((c: any[]) => c[0] === lastMondayStr);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const curCall = calls.find((c: any[]) => c[0] === thisMondayStr);
+    expect(priorCall?.[1]).toEqual([{ taskId: 'g-prior', outcome: 'done' }]);
+    expect(curCall?.[1]).toEqual([{ taskId: 'g-cur', outcome: 'done' }]);
+  });
+
+  it('routes a started outcome for a prior-week block into the prior week', async () => {
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([
+      { id: 's-prior', asanaTaskId: 'g-prior', googleEventId: 'evt-prior', scheduledDate: priorDate },
+    ]);
+
+    await confirm({ started: [{ googleEventId: 'evt-prior', taskIds: ['g-prior'] }] });
+
+    const calls = (setWeeklyTaskOutcomes as jest.Mock).mock.calls;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const priorCall = calls.find((c: any[]) => c[0] === lastMondayStr);
+    expect(priorCall?.[1]).toEqual([{ taskId: 'g-prior', outcome: 'started' }]);
+  });
+
+  it('keeps the single current-week write when nothing crosses the boundary', async () => {
+    (getScheduledAsanaTasks as jest.Mock).mockResolvedValue([
+      { id: 's-cur', asanaTaskId: 'g-cur', googleEventId: 'evt-cur', scheduledDate: curDate },
+    ]);
+
+    await confirm({ done: ['evt-cur'] });
+
+    const calls = (setWeeklyTaskOutcomes as jest.Mock).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe(thisMondayStr);
+    expect(calls[0][1]).toEqual([{ taskId: 'g-cur', outcome: 'done' }]);
   });
 });
 
