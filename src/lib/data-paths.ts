@@ -13,8 +13,18 @@ import path from 'path';
 function resolveDataDir(): string {
   const current = path.join(homedir(), '.claude', 'data', 'portal');
   const legacy = path.join(homedir(), '.claude', 'data', 'calendar');
-  if (fs.existsSync(current)) return current;
-  if (fs.existsSync(legacy)) return legacy;
+  // This runs at module load, and tests that mock `fs` leave existsSync
+  // undefined — a throw here would stop the module importing at all. Treat an
+  // unusable fs as "no legacy directory" and take the current path.
+  const exists = (dir: string): boolean => {
+    try {
+      return fs.existsSync(dir);
+    } catch {
+      return false;
+    }
+  };
+  if (exists(current)) return current;
+  if (exists(legacy)) return legacy;
   return current;
 }
 

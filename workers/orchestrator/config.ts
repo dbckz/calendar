@@ -15,8 +15,17 @@ const repoRoot = process.env.CALENDAR_APP_DIR || process.cwd();
 const DATA_DIR = (() => {
   const current = path.join(homedir(), '.claude', 'data', 'portal');
   const legacy = path.join(homedir(), '.claude', 'data', 'calendar');
-  if (existsSync(current)) return current;
-  if (existsSync(legacy)) return legacy;
+  // Runs at module load; a test that mocks node:fs leaves existsSync undefined,
+  // and a throw here would stop the module importing at all.
+  const exists = (dir: string): boolean => {
+    try {
+      return existsSync(dir);
+    } catch {
+      return false;
+    }
+  };
+  if (exists(current)) return current;
+  if (exists(legacy)) return legacy;
   return current;
 })();
 
