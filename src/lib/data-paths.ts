@@ -1,11 +1,24 @@
-// Shared data directory paths for persistent storage
-// Uses ~/.claude/data/calendar/ to survive builds and deployments
+// Shared data directory paths for persistent storage.
+// Lives outside the project (~/.claude/data/portal/) so it survives builds and
+// deployments.
 
+import fs from 'fs';
 import { homedir } from 'os';
 import path from 'path';
 
-// Primary data directory - outside project to persist across builds
-export const DATA_DIR = path.join(homedir(), '.claude', 'data', 'calendar');
+// The directory was called `calendar` before the app was renamed to the portal.
+// Prefer the new name, but fall back to the old one when only that exists —
+// this repo runs on two machines, and one of them may not have been migrated
+// yet. Starting against an empty directory would look exactly like data loss.
+function resolveDataDir(): string {
+  const current = path.join(homedir(), '.claude', 'data', 'portal');
+  const legacy = path.join(homedir(), '.claude', 'data', 'calendar');
+  if (fs.existsSync(current)) return current;
+  if (fs.existsSync(legacy)) return legacy;
+  return current;
+}
+
+export const DATA_DIR = resolveDataDir();
 
 // Individual data files
 export const USER_DATA_FILE = path.join(DATA_DIR, 'user-data.json');

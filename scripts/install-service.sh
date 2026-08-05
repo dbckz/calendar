@@ -4,11 +4,11 @@
 # Generates the plist with paths for the current user/machine
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PLIST_NAME="com.davebuckley.calendar"
+PLIST_NAME="com.davebuckley.portal"
 PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
 LOG_DIR="$HOME/.claude/logs"
 
-mkdir -p "$LOG_DIR" "$HOME/.claude/data/calendar" "$APP_DIR/.data"
+mkdir -p "$LOG_DIR" "$HOME/.claude/data/portal" "$APP_DIR/.data"
 
 launchctl unload "$PLIST_PATH" 2>/dev/null
 

@@ -1,5 +1,5 @@
 // Server-side storage for integration credentials
-// Uses file-based storage in ~/.claude/data/calendar/ for persistence across builds
+// Uses file-based storage in ~/.claude/data/portal/ for persistence across builds
 
 import { promises as fs } from 'fs';
 import {

@@ -54,7 +54,7 @@ EOF
 else
     ok ".env.local already exists"
 fi
-mkdir -p "$HOME/.claude/data/calendar" "$HOME/.claude/logs" "$APP_DIR/.data"
+mkdir -p "$HOME/.claude/data/portal" "$HOME/.claude/logs" "$APP_DIR/.data"
 ok "Created data and log directories"
 
 # 4. Bootstrap caddy-apps if missing, then register
@@ -109,8 +109,8 @@ step 6 "Installing launchd service..."
 "$APP_DIR/scripts/install-service.sh"
 ok "Service installed and running"
 info "Logs: ~/.claude/logs/calendar.log"
-info "Stop:  launchctl stop com.davebuckley.calendar"
-info "Start: launchctl start com.davebuckley.calendar"
+info "Stop:  launchctl stop com.davebuckley.portal"
+info "Start: launchctl start com.davebuckley.portal"
 
 echo ""
 echo "========================================="

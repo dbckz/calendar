@@ -1,6 +1,6 @@
 # Personal Portal
 
-(Still `dbckz/calendar` on GitHub — the repo rename is deferred.)
+(Still `dbckz/personal-portal` on GitHub — the repo rename is deferred.)
 
 A personal portal organised into life areas: **Work** (the original command
 center and weekly planner), **Exercise**, **Music**, and a cross-cutting
@@ -79,7 +79,7 @@ bookmarks keep working. A read-only mobile view is served for the phone.
   the heavily-tested core (`gather` → `engine` → `replan`/`reset`/`confirm`).
 - **Integrations** (`src/lib/`) — `google-calendar.ts`, `google-tasks.ts`,
   `asana.ts`, with OAuth handled under `src/app/api/auth`.
-- **JSON file storage** — persistent data lives in `~/.claude/data/calendar/`
+- **JSON file storage** — persistent data lives in `~/.claude/data/portal/`
   (see `src/lib/data-paths.ts`): `user-data.json` (tasks, metadata, delegation
   queue), `integrations.json` (OAuth tokens), `workflow-config.json` (quotas,
   scheduling config), `time-tracking.json`, plus `orchestrator-status.json` and
@@ -120,15 +120,12 @@ The orchestrator worker can be run once by hand: `npm run orchestrator:run`.
 
 ## Production
 
-The app runs as a launchd service (`com.davebuckley.calendar`) behind Caddy at
+The app runs as a launchd service (`com.davebuckley.portal`) behind Caddy at
 `https://portal.localhost` (and, for old bookmarks, `https://calendar.localhost`).
-The launchd label and the `~/.claude/data/calendar/` data directory keep their
-original names deliberately: renaming them would break the restart command and
-orphan the stored data for no benefit. After pushing changes, rebuild and
-restart:
+After pushing changes, rebuild and restart:
 
 ```bash
-npm run build && launchctl stop com.davebuckley.calendar && launchctl start com.davebuckley.calendar
+npm run build && launchctl stop com.davebuckley.portal && launchctl start com.davebuckley.portal
 ```
 
 ## iPhone read-only app
@@ -153,6 +150,6 @@ Share → Add to Home Screen to launch it like an app.
 
 ## Data & backup
 
-Persistent data lives in `~/.claude/data/calendar/` (see above). Files are
+Persistent data lives in `~/.claude/data/portal/` (see above). Files are
 registered for the daily app-data backup via the `.backup` manifest in this
 repo; the backup script discovers manifests automatically.

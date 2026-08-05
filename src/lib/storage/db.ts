@@ -1,6 +1,6 @@
 // SQLite-backed persistence for user data.
 //
-// Replaces the single ~/.claude/data/calendar/user-data.json blob (~161 KB,
+// Replaces the single ~/.claude/data/portal/user-data.json blob (~161 KB,
 // rewritten in full on every mutation) with an atomic, crash-safe store. The
 // motivation: a crash mid-write to the JSON file truncated it and lost
 // everything. SQLite writes are transactional, so a crash leaves the last

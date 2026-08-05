@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 // The launchd wrapper and the `orchestrator:run` npm script both invoke this
@@ -10,7 +10,15 @@ const repoRoot = process.env.CALENDAR_APP_DIR || process.cwd();
 
 // Mirror src/lib/data-paths.ts. The worker deliberately does NOT import app
 // code (avoids pulling in server modules that touch integrations.json).
-const DATA_DIR = path.join(homedir(), '.claude', 'data', 'calendar');
+// Prefer the post-rename directory, falling back to the legacy `calendar` one on
+// a machine that has not been migrated yet.
+const DATA_DIR = (() => {
+  const current = path.join(homedir(), '.claude', 'data', 'portal');
+  const legacy = path.join(homedir(), '.claude', 'data', 'calendar');
+  if (existsSync(current)) return current;
+  if (existsSync(legacy)) return legacy;
+  return current;
+})();
 
 // Tool allowlist for the headless `claude -p` agent runner. MCP entries MUST use
 // the `mcp__<server>__*` glob form — Claude Code silently skips a bare

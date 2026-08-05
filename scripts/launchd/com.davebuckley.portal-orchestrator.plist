@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Reference template for the calendar orchestrator launchd agent.
+  Reference template for the portal orchestrator launchd agent.
   The __APP_DIR__ and __LOG_DIR__ placeholders are substituted by
   scripts/install-orchestrator.sh, which writes the resolved plist to
-  ~/Library/LaunchAgents/com.davebuckley.calendar-orchestrator.plist.
+  ~/Library/LaunchAgents/com.davebuckley.portal-orchestrator.plist.
   Do not load this template directly.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.davebuckley.calendar-orchestrator</string>
+    <string>com.davebuckley.portal-orchestrator</string>
 
     <key>ProgramArguments</key>
     <array>

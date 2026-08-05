@@ -8,12 +8,12 @@
 set -e
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PLIST_NAME="com.davebuckley.calendar-orchestrator"
+PLIST_NAME="com.davebuckley.portal-orchestrator"
 TEMPLATE="$APP_DIR/scripts/launchd/$PLIST_NAME.plist"
 PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
 LOG_DIR="$HOME/.claude/logs"
 
-mkdir -p "$LOG_DIR" "$HOME/.claude/data/calendar" "$HOME/Library/LaunchAgents"
+mkdir -p "$LOG_DIR" "$HOME/.claude/data/portal" "$HOME/Library/LaunchAgents"
 
 if [ ! -f "$TEMPLATE" ]; then
     echo "ERROR: plist template not found at $TEMPLATE" >&2

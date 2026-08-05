@@ -31,7 +31,7 @@ export function DelegationSection({ entry, onDelegate }: { entry?: DelegationQue
   // from the agent workspace the run used — otherwise Claude reports
   // "No conversation found with session ID".
   const resumeCmd = result?.sessionId
-    ? `cd ~/.claude/data/calendar/agent-workspace && claude --resume ${result.sessionId}`
+    ? `cd ~/.claude/data/portal/agent-workspace && claude --resume ${result.sessionId}`
     : null;
 
   return (
