@@ -28,7 +28,13 @@ import type { GoalNudge } from '@/lib/goal-progress';
 import type { ExerciseProgression } from '@/lib/exercise-progression';
 import type { ExerciseTarget } from '@/lib/exercise-targets';
 import type { DelegationStats } from '@/lib/delegation-stats';
+import type { ProjectScan } from '@/lib/projects/scan';
+import type { ProjectSummary } from '@/lib/projects/summarise';
 import type { CalendarReminderCandidate } from '@/lib/scheduling/calendar-reminders';
+
+export interface ProjectWithSummary extends ProjectScan {
+  summary: ProjectSummary | null;
+}
 
 export interface QuotaSummaryRow {
   category: string;
@@ -1304,6 +1310,17 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ proposals, googleIntegrationId, ...(weekStart ? { weekStart } : {}) }),
     });
+  },
+
+  // Side-project repos with recent activity and a one-line summary each.
+  async getProjects(options: { includeDormant?: boolean; refresh?: boolean } = {}): Promise<{
+    projects: ProjectWithSummary[];
+    dormantCount: number;
+  }> {
+    const params = new URLSearchParams();
+    if (options.includeDormant) params.set('includeDormant', '1');
+    if (options.refresh) params.set('refresh', '1');
+    return fetchWithRetry(`/api/projects?${params.toString()}`);
   },
 
   // Delegation run stats, computed from the orchestrator's own run traces.

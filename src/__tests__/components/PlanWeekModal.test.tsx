@@ -21,6 +21,11 @@ jest.mock('@/lib/api', () => ({
     completeAsanaTaskInWizard: jest.fn(),
     proposeWeeklyPlan: jest.fn(),
     confirmWeeklyPlan: jest.fn(),
+    // The priorities step shows recently-touched projects as context. Advisory,
+    // so an empty list is the normal quiet case.
+    getProjects: jest.fn().mockResolvedValue({ projects: [], dormantCount: 0 }),
+    getReminders: jest.fn().mockResolvedValue({ reminders: [] }),
+    getCalendarReminders: jest.fn().mockResolvedValue({ candidates: [] }),
   },
 }));
 

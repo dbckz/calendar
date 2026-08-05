@@ -40,6 +40,7 @@ export const LIFE_SECTIONS: LifeSection[] = [
       { id: 'calendar', label: 'Daily Calendar', icon: 'Calendar' },
       { id: 'rituals', label: 'Rituals', icon: 'Repeat' },
       { id: 'reminders', label: 'Reminders', icon: 'Bell' },
+      { id: 'projects', label: 'Projects', icon: 'FolderGit2' },
       { id: 'analysis', label: 'Analysis', icon: 'BarChart3' },
     ],
   },

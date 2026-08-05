@@ -7,7 +7,6 @@
 - Retrospective → planning feedback loop: surface quota-adjustment suggestions from retro data (e.g. repeatedly missing a category quota suggests lowering it, or protecting the slot).
 - Plan-my-week wizard: scheduling time for L&D.
 - Plan-my-week wizard: scheduling time for reading.
-- During planning, get Claude to list out what I've been working on with it over the past week. And also review projects in /Users/dave/working_dir/github/dbckz to understand what's been active. Add corresponding tasks / projects if they don't exist
 - Schedule a "new bookies" slot each week
 - Calibrated quota suggestions in the plan wizard: show per-category historical completion rates (from weeklyStats) next to quotas and suggest evidence-based quotas — parked until a few weeks of accurate data exist (2026-07-25)
 - Estimate-vs-actual per task: record blocked duration vs actual outcome (finished/started/untouched from reviews) per task type so the planner can size blocks from evidence — parked until more data (2026-07-25)
@@ -42,6 +41,12 @@ are implemented. What's left:
   - The target recommender assumes a note's absence means "no reason to move",
     so it holds. Logging an effort rating explicitly (rather than only in prose)
     would make it decisive more often.
+- Projects tab (Work → Projects) scans `working_dir/github/dbckz` only. The
+  `openmined/` and `openclaw/` trees are excluded deliberately — day-job work
+  with its own tracking. Revisit if that turns out to be the wrong call.
+- Projects is desktop-only. The mobile shell already carries five tabs, and a
+  read-only repo list is weak justification for a sixth; the parity rule in
+  CLAUDE.md is deliberately not applied here.
 - Reflection sessions have no reminder — nothing prompts a month-end reflection
   the way the weekly review is prompted. The "due" badge on the button is the
   only signal.

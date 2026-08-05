@@ -4,6 +4,7 @@ import { Dispatch, SetStateAction } from 'react';
 import { Check, AlertTriangle } from 'lucide-react';
 
 import { categoryColor } from './helpers';
+import { ActiveProjectsPanel } from './ActiveProjectsPanel';
 import { ProjectCombobox } from './ProjectCombobox';
 import type { MatchMeta, MatchRow } from './types';
 
@@ -44,6 +45,8 @@ export function PrioritiesStep({
   if (matchRows === null) {
     return (
       <div>
+        {/* Context for deciding what matters: what actually moved last week. */}
+        <ActiveProjectsPanel />
         <p className="text-sm text-gray-600 mb-3">
           What matters most this week? These get matched against your Asana tasks (or created as
           new ones) and scheduled first.
