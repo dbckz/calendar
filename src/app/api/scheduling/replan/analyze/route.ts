@@ -389,6 +389,7 @@ export async function POST(request: NextRequest) {
       kindleNotes: 'Kindle notes',
       grooming: 'Backlog grooming',
       retro: 'Retrospective',
+      delegationReview: 'Delegation review',
       break: 'Break',
     } as const;
     for (const r of ritualBlocks) {
@@ -396,7 +397,7 @@ export async function POST(request: NextRequest) {
       appEventIds.add(r.googleEventId);
       const kind = ritualKindForTitle(r.title);
       // Only lunch / exercise / break split work runs; emails + the WORK rituals
-      // (kindle / grooming / retro) count as work.
+      // (kindle / grooming / retro / delegation review) count as work.
       const isBreak = isBreakTitle(r.title);
       const { startMs, endMs } = intervalFor(r.googleEventId, r.date, r.start, r.durationMinutes);
       blocks.push({

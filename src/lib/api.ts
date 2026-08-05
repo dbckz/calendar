@@ -27,6 +27,8 @@ import type {
 import type { GoalNudge } from '@/lib/goal-progress';
 import type { ExerciseProgression } from '@/lib/exercise-progression';
 import type { ExerciseTarget } from '@/lib/exercise-targets';
+import type { DelegationStats } from '@/lib/delegation-stats';
+import type { CalendarReminderCandidate } from '@/lib/scheduling/calendar-reminders';
 
 export interface QuotaSummaryRow {
   category: string;
@@ -1304,8 +1306,23 @@ export const api = {
     });
   },
 
+  // Delegation run stats, computed from the orchestrator's own run traces.
+  async getDelegationStats(): Promise<{ stats: DelegationStats }> {
+    return fetchWithRetry<{ stats: DelegationStats }>('/api/orchestrator/stats');
+  },
+
   async getAttributionRules(): Promise<{ rules: EventAttributionRule[] }> {
     return fetchWithRetry<{ rules: EventAttributionRule[] }>('/api/attribution-rules');
+  },
+
+  // Standing reminders parked on the calendar for a week (daily recurring
+  // events that nag rather than occupy time).
+  async getCalendarReminders(weekStart?: string): Promise<{ candidates: CalendarReminderCandidate[] }> {
+    const params = new URLSearchParams();
+    if (weekStart) params.set('weekStart', weekStart);
+    return fetchWithRetry<{ candidates: CalendarReminderCandidate[] }>(
+      `/api/scheduling/calendar-reminders?${params.toString()}`
+    );
   },
 
   async getWeekState(): Promise<WeekStateResponse> {
@@ -1662,7 +1679,9 @@ export const api = {
   async updateExerciseEntry(
     sessionId: string,
     entryId: string,
-    patch: Partial<Pick<ExerciseEntry, 'done' | 'sets' | 'reps' | 'holdSeconds' | 'weightKg' | 'notes'>>
+    patch: Partial<
+      Pick<ExerciseEntry, 'name' | 'done' | 'sets' | 'reps' | 'holdSeconds' | 'weightKg' | 'notes'>
+    >
   ): Promise<{ session: ExerciseSession }> {
     return fetchWithRetry(
       `/api/exercise/${sessionId}/entries/${entryId}`,

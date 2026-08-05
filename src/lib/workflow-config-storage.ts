@@ -80,6 +80,7 @@ export interface RitualCalendars {
   kindleNotes?: string;
   grooming?: string;
   retro?: string;
+  delegationReview?: string;
 }
 
 // Parse+validate per-kind ritual calendars from untrusted JSON. Keep only the

@@ -70,7 +70,17 @@ export interface ReplanBlock {
   // window (or its category's afternoon window for the WORK rituals). A future
   // 'break' that conflicts is DELETED instead of moved — a break has no fixed
   // home. `isBreak` (lunch / exercise / break) splits work runs.
-  ritualKind?: 'lunch' | 'exercise' | 'emails' | 'kindleNotes' | 'grooming' | 'retro' | 'break';
+  // Mirrors RitualKind in scheduling/rituals.ts; kept structural here so this
+  // module stays free of a dependency on the placement logic.
+  ritualKind?:
+    | 'lunch'
+    | 'exercise'
+    | 'emails'
+    | 'kindleNotes'
+    | 'grooming'
+    | 'retro'
+    | 'delegationReview'
+    | 'break';
   isBreak?: boolean;
   // A CATEGORY CONTAINER: one block holding several tasks of a category (a
   // "Writing/Deep Work" block with three writing tasks in it). The container is

@@ -17,7 +17,10 @@ export const STEP_LABELS: Record<Exclude<Step, 'done'>, string> = {
 // reminder or convert it into an Asana task, and — when converting — the
 // destination workspace/project/type/due and the editable name & notes.
 export interface ReminderTriageRow {
-  id: string; // Google Task id
+  // Google Task id, or `cal:<title>` for one derived from a recurring calendar
+  // event. The prefix matters: a calendar-derived row has no Google Task behind
+  // it, so it must never be sent to the Tasks API.
+  id: string;
   name: string; // editable task name (prefilled from the reminder text)
   notes: string; // editable notes (prefilled from the reminder's notes)
   action: 'keep' | 'convert' | 'done' | 'delete';
@@ -25,6 +28,14 @@ export interface ReminderTriageRow {
   projectGid: string; // '' = no project
   taskType: string; // '' = no type / not applicable for this workspace
   dueOn: string; // yyyy-MM-dd, '' = no due date
+  // Where the row came from. 'calendar' rows are standing reminders parked on
+  // the calendar as a daily recurring event; they can only be kept or converted
+  // (there is no reminder to complete or delete), and the source event is left
+  // alone either way.
+  source?: 'google-tasks' | 'calendar';
+  // For a calendar row: how many days of the week it appears on, shown so the
+  // pattern that makes it a nag is visible.
+  occurrences?: number;
 }
 
 // A single untyped task, resolved with its integration's writable Type labels.

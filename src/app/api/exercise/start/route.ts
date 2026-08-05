@@ -31,6 +31,8 @@ export async function POST(request: NextRequest) {
       ...(plan?.label ? { label: plan.label } : {}),
       ...(plan?.components ? { components: plan.components } : {}),
       exercises: targets.map(toEntry),
+      // The explicit link back to the plan this session is being done against.
+      ...(plan ? { plannedSessionId: plan.id } : {}),
       planned: false,
       // Logged from the start: the session is being done now, and every tick
       // during it should land in the record immediately.

@@ -57,6 +57,7 @@ export interface CreateSessionInput {
   targetDistanceKm?: number;
   source?: ExerciseSource;
   importKey?: string;
+  plannedSessionId?: string;
 }
 
 export async function createSession(
@@ -95,6 +96,7 @@ export async function createSession(
     ...(input.targetDistanceKm ? { targetDistanceKm: input.targetDistanceKm } : {}),
     source: input.source ?? 'manual',
     ...(input.importKey ? { importKey: input.importKey } : {}),
+    ...(input.plannedSessionId ? { plannedSessionId: input.plannedSessionId } : {}),
     planned,
     // An unplanned session is by definition something already done.
     completed: input.completed ?? !planned,

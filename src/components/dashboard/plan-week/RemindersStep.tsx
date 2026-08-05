@@ -1,7 +1,7 @@
 'use client';
 
 import { Dispatch, SetStateAction, memo, useCallback, useMemo } from 'react';
-import { AlertTriangle, ArrowRightToLine, Bell, Check, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowRightToLine, Bell, CalendarClock, Check, Trash2 } from 'lucide-react';
 
 import type { AsanaProject } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
@@ -62,11 +62,24 @@ const ReminderRow = memo(function ReminderRow({
   onUpdate,
 }: ReminderRowProps) {
   const converting = row.action === 'convert';
+  // A calendar-derived row has no Google Task behind it, so "mark done" and
+  // "delete" have nothing to act on — the recurring event stays either way.
+  const fromCalendar = row.source === 'calendar';
   return (
-    <div className="rounded-lg border border-gray-200 p-3">
+    <div className={`rounded-lg border p-3 ${fromCalendar ? 'border-blue-200 bg-blue-50/40' : 'border-gray-200'}`}>
       <div className="flex items-start gap-2">
-        <Bell className="w-4 h-4 mt-1 flex-shrink-0 text-gray-400" />
+        {fromCalendar ? (
+          <CalendarClock className="w-4 h-4 mt-1 flex-shrink-0 text-blue-500" />
+        ) : (
+          <Bell className="w-4 h-4 mt-1 flex-shrink-0 text-gray-400" />
+        )}
         <div className="flex-1 min-w-0">
+          {fromCalendar && (
+            <p className="mb-1 text-xs text-blue-800">
+              On your calendar {row.occurrences ?? 0} days this week. Converting it creates the task
+              and leaves the recurring event alone.
+            </p>
+          )}
           {/* Action choice */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
             <label className="flex items-center gap-1.5 text-sm text-gray-700">
@@ -77,7 +90,7 @@ const ReminderRow = memo(function ReminderRow({
                 onChange={() => onUpdate(row.id, { action: 'keep' })}
                 className="w-3.5 h-3.5 text-gray-500 focus:ring-gray-400"
               />
-              Keep as reminder
+              {fromCalendar ? 'Leave on the calendar' : 'Keep as reminder'}
             </label>
             <label className="flex items-center gap-1.5 text-sm text-gray-700">
               <input
@@ -90,28 +103,32 @@ const ReminderRow = memo(function ReminderRow({
               <ArrowRightToLine className="w-3.5 h-3.5 text-orange-500" />
               Convert to Asana task
             </label>
-            <label className="flex items-center gap-1.5 text-sm text-gray-700">
-              <input
-                type="radio"
-                name={`action-${row.id}`}
-                checked={row.action === 'done'}
-                onChange={() => onUpdate(row.id, { action: 'done' })}
-                className="w-3.5 h-3.5 text-green-600 focus:ring-green-500"
-              />
-              <Check className="w-3.5 h-3.5 text-green-600" />
-              Mark done
-            </label>
-            <label className="flex items-center gap-1.5 text-sm text-gray-700">
-              <input
-                type="radio"
-                name={`action-${row.id}`}
-                checked={row.action === 'delete'}
-                onChange={() => onUpdate(row.id, { action: 'delete' })}
-                className="w-3.5 h-3.5 text-red-600 focus:ring-red-500"
-              />
-              <Trash2 className="w-3.5 h-3.5 text-red-600" />
-              Delete
-            </label>
+            {!fromCalendar && (
+              <>
+                <label className="flex items-center gap-1.5 text-sm text-gray-700">
+                  <input
+                    type="radio"
+                    name={`action-${row.id}`}
+                    checked={row.action === 'done'}
+                    onChange={() => onUpdate(row.id, { action: 'done' })}
+                    className="w-3.5 h-3.5 text-green-600 focus:ring-green-500"
+                  />
+                  <Check className="w-3.5 h-3.5 text-green-600" />
+                  Mark done
+                </label>
+                <label className="flex items-center gap-1.5 text-sm text-gray-700">
+                  <input
+                    type="radio"
+                    name={`action-${row.id}`}
+                    checked={row.action === 'delete'}
+                    onChange={() => onUpdate(row.id, { action: 'delete' })}
+                    className="w-3.5 h-3.5 text-red-600 focus:ring-red-500"
+                  />
+                  <Trash2 className="w-3.5 h-3.5 text-red-600" />
+                  Delete
+                </label>
+              </>
+            )}
           </div>
 
           {!converting && (

@@ -26,6 +26,7 @@ import {
 import type { ProposedBlock } from '@/lib/scheduling/types';
 import { TaskPeekModal } from './plan-week/TaskPeekModal';
 import type { AsanaProject, CalendarEvent, Reminder } from '@/types';
+import type { CalendarReminderCandidate } from '@/lib/scheduling/calendar-reminders';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
 import {
   isProjectInTriageCatalogue,
@@ -115,8 +116,13 @@ export function PlanWeekModal({
   // loaded / Google Tasks not connected. The reminders-triage step is included
   // only when there's at least one reminder AND an Asana workspace to file into.
   const [reminderList, setReminderList] = useState<Reminder[] | null>(null);
+  // Standing reminders parked on the calendar as daily recurring events. They
+  // are triaged in the same step as the Google Tasks reminders, because the
+  // decision is identical: is this a real task, and where does it belong?
+  const [calendarReminders, setCalendarReminders] = useState<CalendarReminderCandidate[]>([]);
   const hasRemindersStep =
-    (reminderList?.length ?? 0) > 0 && (asanaIntegrations?.length ?? 0) > 0;
+    ((reminderList?.length ?? 0) > 0 || calendarReminders.length > 0) &&
+    (asanaIntegrations?.length ?? 0) > 0;
 
   // The type step is prepended only when there are untyped tasks to classify; the
   // reminders step is inserted after priorities only when there are reminders.
@@ -254,11 +260,17 @@ export function PlanWeekModal({
     setIsConvertingReminders(false);
     // Fetch reminders once to decide whether to show the triage step. A failure
     // (e.g. Google Tasks not connected) silently omits the step.
+    setCalendarReminders([]);
     if (asanaIntegrations && asanaIntegrations.length > 0) {
       api
         .getReminders()
         .then(({ reminders }) => setReminderList(reminders.filter(r => !r.completed)))
         .catch(() => setReminderList([]));
+      // Advisory: a failure here just means no calendar-derived rows.
+      api
+        .getCalendarReminders(weekStart)
+        .then(({ candidates }) => setCalendarReminders(candidates))
+        .catch(() => setCalendarReminders([]));
     } else {
       setReminderList([]);
     }
@@ -390,6 +402,26 @@ export function PlanWeekModal({
   // row per reminder (default "keep"; convert-destination pre-filled from the
   // suggestion). Projects are fetched alongside for the destination dropdowns. A
   // classifier failure still yields usable rows (first workspace, blank details).
+  // Turn calendar candidates into triage rows. They start as 'keep' — the
+  // default must never be to silently create tasks from calendar events — and
+  // carry the occurrence count so the nagging pattern is visible in the step.
+  const calendarRows = useCallback(
+    (candidates: CalendarReminderCandidate[], defaultIntegrationId: string): ReminderTriageRow[] =>
+      candidates.map(c => ({
+        id: `cal:${c.title}`,
+        name: c.title,
+        notes: '',
+        action: 'keep' as const,
+        integrationId: defaultIntegrationId,
+        projectGid: '',
+        taskType: '',
+        dueOn: '',
+        source: 'calendar' as const,
+        occurrences: c.occurrences,
+      })),
+    []
+  );
+
   const runReminderSuggest = useCallback(async () => {
     if (!reminderList || !asanaIntegrations || asanaIntegrations.length === 0) return;
     // Capture the current open-instance so writes from a run whose modal has
@@ -464,7 +496,7 @@ export function PlanWeekModal({
       if (isStale()) return;
 
       setReminderRows(
-        reminderList.map(r => {
+        (reminderList.map(r => {
           const s = byId.get(r.id);
           const validWorkspace = !!s && asanaIntegrations.some(i => i.id === s.integrationId);
           const integrationId = validWorkspace ? s!.integrationId : defaultIntegrationId;
@@ -486,14 +518,15 @@ export function PlanWeekModal({
             projectGid: validProject ? s!.projectGid : '',
             taskType: validType ? s!.taskType : '',
             dueOn: r.due ?? '',
+            source: 'google-tasks' as const,
           };
-        })
+        }) as ReminderTriageRow[]).concat(calendarRows(calendarReminders, defaultIntegrationId))
       );
     } catch (err) {
       if (isStale()) return;
       // Degrade gracefully: no suggestions, but every reminder is still editable.
       setReminderRows(
-        reminderList.map(r => ({
+        (reminderList.map(r => ({
           id: r.id,
           name: r.text,
           notes: r.notes ?? '',
@@ -502,7 +535,8 @@ export function PlanWeekModal({
           projectGid: '',
           taskType: '',
           dueOn: r.due ?? '',
-        }))
+          source: 'google-tasks' as const,
+        })) as ReminderTriageRow[]).concat(calendarRows(calendarReminders, defaultIntegrationId))
       );
       setRemindersError(err instanceof Error ? err.message : 'Failed to suggest destinations');
     } finally {
@@ -511,7 +545,13 @@ export function PlanWeekModal({
         setRemindersProgress(null);
       }
     }
-  }, [reminderList, asanaIntegrations, typeFieldInfoByIntegration]);
+  }, [
+    reminderList,
+    calendarReminders,
+    calendarRows,
+    asanaIntegrations,
+    typeFieldInfoByIntegration,
+  ]);
 
   // --- Data fetching per step ---
 
@@ -968,8 +1008,10 @@ export function PlanWeekModal({
   const applyReminderActions = useCallback(async (): Promise<{ succeeded: number; failed: number }> => {
     const rows = reminderRows ?? [];
     const conversions = rows.filter(r => r.action === 'convert' && r.name.trim());
-    const dones = rows.filter(r => r.action === 'done');
-    const deletes = rows.filter(r => r.action === 'delete');
+    // done/delete act on a Google Task, so they can only ever apply to rows
+    // that have one.
+    const dones = rows.filter(r => r.action === 'done' && r.source !== 'calendar');
+    const deletes = rows.filter(r => r.action === 'delete' && r.source !== 'calendar');
 
     // Learn from his triage: record the keep/convert decisions (the classifier's
     // two classes) per reminder title so it follows his precedent next time. Done
@@ -1002,8 +1044,11 @@ export function PlanWeekModal({
             ...(row.projectGid ? { projectGid: row.projectGid } : {}),
             ...(info && optionGid ? { customFields: { [info.fieldGid]: optionGid } } : {}),
           });
-          // Only remove the reminder once its task exists.
-          await api.deleteReminder(row.id);
+          // Only remove the reminder once its task exists — and only when there
+          // IS one. A calendar-derived row has no Google Task behind it; the
+          // recurring event is left in place deliberately, so converting it
+          // creates the task without touching the calendar.
+          if (row.source !== 'calendar') await api.deleteReminder(row.id);
         }),
         ...dones.map(row => api.updateReminder(row.id, { completed: true })),
         ...deletes.map(row => api.deleteReminder(row.id)),

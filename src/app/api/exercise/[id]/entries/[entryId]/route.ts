@@ -16,6 +16,9 @@ export async function PATCH(
     const body = await request.json();
 
     const session = await updateSessionEntry(id, entryId, {
+      // Renaming matters: an exercise filed under the wrong name is a separate
+      // history, so correcting it merges the two.
+      ...(typeof body.name === 'string' && body.name.trim() ? { name: body.name.trim() } : {}),
       ...(body.done !== undefined ? { done: !!body.done } : {}),
       ...(body.sets !== undefined ? { sets: Number(body.sets) } : {}),
       ...(body.reps !== undefined ? { reps: Number(body.reps) } : {}),

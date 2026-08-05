@@ -43,6 +43,10 @@ export const EMAILS_TITLE = '📧 Emails';
 export const KINDLE_TITLE = '📚 Kindle notes';
 export const GROOMING_TITLE = '🧹 Backlog grooming';
 export const RETRO_TITLE = '🔄 Retrospective';
+// Reviewing what the delegation agents produced. WEEKLY x2 like Kindle notes:
+// the "For review" inbox fills up between runs, and a twice-weekly sweep keeps
+// it from becoming a backlog of its own.
+export const DELEGATION_REVIEW_TITLE = '🤖 Delegation review';
 // Explicit break events placed after each ~2h work run (see breaks.ts). Tracked
 // in the ritualBlocks store like the daily rituals so reconcile / reset / replan
 // sweeps cover them.
@@ -54,6 +58,7 @@ export const RITUAL_TITLES: readonly string[] = [
   KINDLE_TITLE,
   GROOMING_TITLE,
   RETRO_TITLE,
+  DELEGATION_REVIEW_TITLE,
   BREAK_TITLE,
 ];
 
@@ -66,6 +71,7 @@ export type RitualKind =
   | 'kindleNotes'
   | 'grooming'
   | 'retro'
+  | 'delegationReview'
   | 'break';
 
 // Ritual cadence. Daily rituals are placed on (and deduped per) each working day;
@@ -74,11 +80,17 @@ export type RitualKind =
 export type RitualCadence = 'daily' | 'weekly';
 export function ritualCadenceForTitle(title: string): RitualCadence {
   const t = title.trim();
-  return t === GROOMING_TITLE || t === RETRO_TITLE || t === KINDLE_TITLE ? 'weekly' : 'daily';
+  return t === GROOMING_TITLE ||
+    t === RETRO_TITLE ||
+    t === KINDLE_TITLE ||
+    t === DELEGATION_REVIEW_TITLE
+    ? 'weekly'
+    : 'daily';
 }
 
 // How many times a WEEKLY ritual is placed across the week (on distinct days).
 export const KINDLE_WEEKLY_COUNT = 2;
+export const DELEGATION_REVIEW_WEEKLY_COUNT = 2;
 
 // Lunch + exercise + break are breaks (split work runs); emails counts as work.
 // A calendar event titled exactly like any of them is treated as a break by the
@@ -171,6 +183,7 @@ export function ritualKindForTitle(title: string): RitualKind {
   if (t === KINDLE_TITLE) return 'kindleNotes';
   if (t === GROOMING_TITLE) return 'grooming';
   if (t === RETRO_TITLE) return 'retro';
+  if (t === DELEGATION_REVIEW_TITLE) return 'delegationReview';
   return 'emails';
 }
 
@@ -209,6 +222,7 @@ const EXERCISE_DURATION_MINUTES = 60;
 const KINDLE_DURATION_MINUTES = 30;
 const GROOMING_DURATION_MINUTES = 60;
 const RETRO_DURATION_MINUTES = 60;
+const DELEGATION_REVIEW_DURATION_MINUTES = 30;
 // WORK rituals prefer the afternoon (from this hour) before spilling earlier.
 const WORK_RITUAL_AFTERNOON_HOUR = 12;
 
@@ -585,6 +599,43 @@ export function proposeRitualBlocks(input: ProposeRitualsInput): ProposedBlock[]
       });
       busy.push({ start: slot.startMs, end: slot.endMs }); // work — forms runs
       kindleToPlace -= 1;
+    }
+  }
+
+  // Delegation review (work) — WEEKLY x2, 30 min: catch up on what the agents
+  // produced. Same top-up shape as Kindle notes, so a mid-week re-run adds only
+  // what is missing rather than a second pair.
+  {
+    let reviewExisting = 0;
+    for (const set of Object.values(existingRitualTitlesByDate)) {
+      if (set.has(DELEGATION_REVIEW_TITLE)) reviewExisting += 1;
+    }
+    let reviewToPlace = Math.max(0, DELEGATION_REVIEW_WEEKLY_COUNT - reviewExisting);
+    for (const day of workingDays) {
+      if (reviewToPlace <= 0) break;
+      const present = existingRitualTitlesByDate[day.dateStr] ?? new Set<string>();
+      if (present.has(DELEGATION_REVIEW_TITLE)) continue; // day already has one
+      const slot = findSlot(
+        afternoonWorkWindows([day], workingHoursEnd),
+        DELEGATION_REVIEW_DURATION_MINUTES,
+        workRun,
+        busy,
+        nowMs
+      );
+      if (!slot) continue;
+      const start = timeStr(slot.startMs);
+      proposals.push({
+        id: `${day.dateStr}-${start}-ritual-delegation-review`,
+        category: 'Delegation review',
+        kind: 'ritual',
+        title: DELEGATION_REVIEW_TITLE,
+        date: day.dateStr,
+        start,
+        durationMinutes: DELEGATION_REVIEW_DURATION_MINUTES,
+        reason: 'Review delegated agent output (twice weekly).',
+      });
+      busy.push({ start: slot.startMs, end: slot.endMs }); // work — forms runs
+      reviewToPlace -= 1;
     }
   }
 

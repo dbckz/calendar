@@ -225,6 +225,11 @@ export interface ExerciseSession {
   source?: ExerciseSource;
   // Stable key for de-duplicating repeat imports (source + its natural id).
   importKey?: string;
+  // On a LOGGED session: the planned session it was done against. Set when a
+  // session is started from the plan, so "did I do what I planned?" is answered
+  // by an explicit link rather than inferred from two records sharing a date.
+  // Absent on sessions logged without a plan, and on imported history.
+  plannedSessionId?: string;
   createdAt: string;
   updatedAt: string;
 }

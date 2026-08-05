@@ -5,6 +5,7 @@ import { DelegationQueueEntry, OrchestratorStatus } from '@/types';
 import { api } from '@/lib/api';
 import type { AgentPacingConfig } from '@/lib/workflow-config-storage';
 import { estimateQueueEtas } from '@/lib/delegation-eta';
+import type { DelegationStats } from '@/lib/delegation-stats';
 import { Bot, CheckCircle2, XCircle, Loader2, Clock, PauseCircle } from 'lucide-react';
 
 interface DelegationWidgetProps {
@@ -34,6 +35,16 @@ function relativeTime(iso: string | null | undefined): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.round(hours / 24);
   return `${days}d ago`;
+}
+
+// Wall-clock run length, at the granularity worth reading: seconds under a
+// minute, whole minutes above it.
+function formatDuration(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 function isFuture(iso: string | null | undefined): boolean {
@@ -99,6 +110,20 @@ export function DelegationWidget({
     };
   }, []);
 
+  // Run stats, from the orchestrator's own traces. Loaded once — they move only
+  // when a run finishes, and the widget already refreshes on that.
+  const [stats, setStats] = useState<DelegationStats | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getDelegationStats()
+      .then(res => !cancelled && setStats(res.stats))
+      .catch(err => console.error('Failed to load delegation stats:', err));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const list = useMemo(() => Object.values(delegationByGid), [delegationByGid]);
   const running = useMemo(() => list.filter(e => e.state === 'running'), [list]);
   // Match the pacer's claim order exactly: priority asc, then enqueuedAt asc.
@@ -152,6 +177,37 @@ export function DelegationWidget({
         <Bot className="w-4 h-4 text-indigo-600" />
         <h2 className="text-base font-semibold text-gray-900">Delegation</h2>
       </div>
+
+      {stats && stats.runs > 0 && (
+        <div
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2 text-xs text-gray-500 flex-shrink-0"
+          title={`Across ${stats.runs} completed runs, from the orchestrator's own traces`}
+        >
+          <span>
+            <span className="font-semibold text-gray-700">
+              {Math.round((stats.successRate ?? 0) * 100)}%
+            </span>{' '}
+            success
+          </span>
+          {stats.medianDurationMs !== null && (
+            <span>
+              <span className="font-semibold text-gray-700">
+                {formatDuration(stats.medianDurationMs)}
+              </span>{' '}
+              typical
+            </span>
+          )}
+          {stats.averageCostUsd !== null && (
+            <span>
+              <span className="font-semibold text-gray-700">
+                ${stats.averageCostUsd.toFixed(2)}
+              </span>{' '}
+              per run
+            </span>
+          )}
+          <span className="text-gray-400">({stats.runs} runs)</span>
+        </div>
+      )}
 
       {pausedUntil && (
         <div className="flex items-center gap-1.5 mb-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 flex-shrink-0">

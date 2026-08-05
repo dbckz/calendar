@@ -20,6 +20,8 @@ import {
   GROOMING_TITLE,
   RETRO_TITLE,
   BREAK_TITLE,
+  DELEGATION_REVIEW_TITLE,
+  DELEGATION_REVIEW_WEEKLY_COUNT,
 } from '@/lib/scheduling/rituals';
 import { proposePrepBlocks } from '@/lib/scheduling/prep';
 import type { BusyInterval } from '@/lib/scheduling/types';
@@ -473,5 +475,41 @@ describe('placeWeekRituals — prep/propose determinism', () => {
     const exEndMs = new Date(2026, 6, 13, 16, 0).getTime();
     // Prep must not overlap the reserved 15:00–16:00 exercise slot.
     expect(prepStartMs < exEndMs && prepEndMs > exStartMs).toBe(false);
+  });
+});
+
+describe('delegation review ritual', () => {
+  // A wide working week, so slot availability never masks the placement rules.
+  const wide = makeConfig({
+    workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+    workingHours: { start: '08:30', end: '19:00' },
+  });
+
+  const place = (weekEvents: Parameters<typeof placeWeekRituals>[0]['weekEvents'] = []) =>
+    placeWeekRituals({
+      config: wide,
+      weekEvents,
+      busyIntervals: [],
+      weekStart: WEEK_START,
+      now: WEEK_START,
+    });
+
+  it('resolves to its own kind and a weekly cadence', () => {
+    expect(ritualKindForTitle(DELEGATION_REVIEW_TITLE)).toBe('delegationReview');
+    expect(ritualCadenceForTitle(DELEGATION_REVIEW_TITLE)).toBe('weekly');
+  });
+
+  it('is placed twice a week, on distinct days, at 30 minutes', () => {
+    const review = place().filter(b => b.title === DELEGATION_REVIEW_TITLE);
+
+    expect(review).toHaveLength(DELEGATION_REVIEW_WEEKLY_COUNT);
+    expect(new Set(review.map(r => r.date)).size).toBe(review.length);
+    expect(review.every(r => r.durationMinutes === 30)).toBe(true);
+  });
+
+  it('counts as work, not as a break', () => {
+    // It forms part of a work run rather than splitting one.
+    expect(isBreakTitle(DELEGATION_REVIEW_TITLE)).toBe(false);
+    expect(isRitualTitle(DELEGATION_REVIEW_TITLE)).toBe(true);
   });
 });

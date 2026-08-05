@@ -147,3 +147,32 @@ describe('analyseExercise', () => {
     expect(analysis.suggestions.some(s => /marked hard/.test(s))).toBe(false);
   });
 });
+
+describe('adherence with an explicit plan link', () => {
+  it('counts a session linked to its plan, whatever date it carries', () => {
+    const plan = session({ date: '2026-07-06', planned: true, completed: false });
+    const analysis = analyseExercise(
+      [
+        plan,
+        // Logged the morning after, but explicitly against that plan.
+        { ...session({ date: '2026-07-07' }), plannedSessionId: plan.id },
+      ],
+      '2026-07-01',
+      '2026-07-28'
+    );
+    expect(analysis.planAdherence).toBe(1);
+  });
+
+  it('still matches on date for imported history that was never linked', () => {
+    const analysis = analyseExercise(
+      [
+        session({ date: '2026-07-06', planned: true, completed: false }),
+        session({ date: '2026-07-06' }),
+        session({ date: '2026-07-08', planned: true, completed: false }),
+      ],
+      '2026-07-01',
+      '2026-07-28'
+    );
+    expect(analysis.planAdherence).toBe(0.5);
+  });
+});

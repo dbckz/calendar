@@ -44,7 +44,7 @@ export function analyseExercise(
     totalMinutes,
     totalDistanceKm: round1(totalDistanceKm),
     sessionsPerWeek: round1(done.length / weeks),
-    planAdherence: adherenceByDate(planned, done),
+    planAdherence: adherenceByPlan(planned, done),
     currentStreakWeeks: currentStreakWeeks(byWeek, to),
     byType,
     byWeek,
@@ -65,18 +65,28 @@ function hardSessionShare(done: ExerciseSession[]): number | null {
 }
 
 // A planned session and the session actually logged are separate records — the
-// plan comes from a calendar event, the log from what was done — so adherence is
-// measured by DATE: did a planned day end up with a session logged against it?
-// Counting `planned && completed` would read 0% however much training happened.
-function adherenceByDate(
+// plan comes from a calendar event, the log from what was done.
+//
+// A session started from the plan carries `plannedSessionId`, which is the
+// reliable answer. Falling back to a date match covers imported history, where
+// the two sides were never linked: counting `planned && completed` would read 0%
+// however much training happened.
+function adherenceByPlan(
   planned: ExerciseSession[],
   done: ExerciseSession[]
 ): number | null {
-  const plannedDates = new Set(planned.map(s => s.date));
-  if (plannedDates.size === 0) return null;
+  if (planned.length === 0) return null;
+
+  const linkedPlanIds = new Set(done.map(s => s.plannedSessionId).filter(Boolean));
   const doneDates = new Set(done.map(s => s.date));
-  const met = [...plannedDates].filter(d => doneDates.has(d)).length;
-  return met / plannedDates.size;
+
+  const wasMet = (plan: ExerciseSession) =>
+    linkedPlanIds.has(plan.id) || doneDates.has(plan.date);
+
+  // Counted in distinct DAYS, so two plans on one day aren't double-counted.
+  const plannedDays = new Set(planned.map(s => s.date)).size;
+  const metDays = new Set(planned.filter(wasMet).map(p => p.date)).size;
+  return metDays / plannedDays;
 }
 
 function summariseByType(done: ExerciseSession[]): ExerciseTypeSummary[] {
