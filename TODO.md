@@ -1,4 +1,3 @@
-- Explore: for sprint planning, could i have a chat interface in the app, that uses claude on the backend, and allows me to plan by chatting with AI?
 - Future week-planning additions (parked 2026-07-21, waiting for bandwidth — most fit the existing rituals/quota machinery).
   Still parked (these three are surfaced as a reminder box on the Plan-my-week wizard's tasks step):
   - Daily walk ritual, 45m–1h, paired with podcast listening (break-type, like exercise)
@@ -11,9 +10,55 @@
 - Plan-my-week wizard: scheduling time for reading.
 - During planning, get Claude to list out what I've been working on with it over the past week. And also review projects in /Users/dave/working_dir/github/dbckz to understand what's been active. Add corresponding tasks / projects if they don't exist
 - During planning, if there's any daily reminders in my calendar, potentially convert them to tasks and schedule that week
-- Add cross-tab sync using BroadcastChannel API so changes in one browser tab are reflected in other tabs in near real-time (broadcast mutations, other tabs refetch)
 - Schedule a "new bookies" slot each week
-- Get time tracking working: "Time Worked Today" currently sums the full scheduled durations of today's Asana-attributed events regardless of the clock, so it shows a day's workload at 5am. Clamp to elapsed time (count only the already-past portion of each event) so the widget and the time-tracking.json longitudinal record reflect time actually worked.
 - As part of weekly plan, set aside 30 mins a day to review the delegated tasks list
 - Calibrated quota suggestions in the plan wizard: show per-category historical completion rates (from weeklyStats) next to quotas and suggest evidence-based quotas — parked until a few weeks of accurate data exist (2026-07-25)
 - Estimate-vs-actual per task: record blocked duration vs actual outcome (finished/started/untouched from reviews) per task type so the planner can size blocks from evidence — parked until more data (2026-07-25)
+
+## Follow-ups from the life-areas / goals build (2026-08-04)
+
+Sections, the Exercise and Music areas, monthly & quarterly goals, the
+reflection/planning sessions and all six tracking mechanisms are implemented.
+What's left:
+
+- Music section: define what it should actually contain beyond goals. It is a
+  goals-only shell until those specifics land.
+- Repo rename: the app is `portal.localhost` and package `personal-portal`, but
+  the GitHub repo, the local folder, the launchd label
+  (`com.davebuckley.calendar`) and the data dir (`~/.claude/data/calendar/`) are
+  all still "calendar". `calendar.localhost` is kept as an alias deliberately.
+- Goal evidence sources: only Asana *projects* are pickable in the goal editor.
+  Asana tags are supported by the backend (`asana-tag`) but have no picker, and
+  the calendar-category field is free text rather than a list of the categories
+  actually in use.
+- Mobile: Goals and Exercise are on the phone view as read-only tabs. The Music
+  section and the reflection/planning sessions are desktop-only by design —
+  worth revisiting only if a read-only music view earns its place.
+- Exercise: the training log and the calendar plan are both imported, and
+  logging with per-exercise detail works. Still open:
+  - The spreadsheet is a one-off import via pasted content. If it stays in use,
+    either keep importing by hand or widen the Google scope to read it directly.
+  - Planned and logged sessions for the same day are separate records, linked
+    only by date (which is how adherence is measured). Explicitly linking them
+    would let a plan show what was actually done against it.
+  - Timed calendar events ("🏋️ Gym", "🏃 Track @Southwark Park") are ignored by
+    the sync; only the all-day plan is read. They would give real session
+    durations, which are currently blank for imported sessions.
+  - Exercise-name equivalences live in an ALIASES map in
+    `src/lib/exercise-progression.ts`. There is deliberately no rule that
+    strips equipment words — equipment is usually the distinction (dumbbell vs
+    cable, bar vs cable pulldown). Add confirmed equivalences one line at a
+    time. Currently: Paloff press ± "with cable", Treadmill = Treadmill run,
+    Rear delt machine = Reverse pec deck machine.
+  - The 11 Jul row named "Run" says "9.5 for 10 mins on treadmill" in its volume
+    cell, so it is really a treadmill run filed under the outdoor name. Left as
+    logged rather than reclassified by guessing at the text.
+  - The target recommender assumes a note's absence means "no reason to move",
+    so it holds. Logging an effort rating explicitly (rather than only in prose)
+    would make it decisive more often.
+  - `EXERCISE_CALENDAR_ID` env var switches which calendar the plan is written
+    to; there's a dedicated (currently empty) "Exercise" sub-calendar if the
+    all-day events should move off the main personal calendar.
+- Reflection sessions have no reminder — nothing prompts a month-end reflection
+  the way the weekly review is prompted. The "due" badge on the button is the
+  only signal.

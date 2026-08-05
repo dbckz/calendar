@@ -11,6 +11,7 @@ import type {
   UnplaceableTaskRow,
 } from '@/lib/api';
 import { categoryColor, timeRange, roughDuration } from './helpers';
+import { GoalCheckInPanel } from '@/components/goals/GoalCheckInPanel';
 import type { EditableProposal } from './types';
 
 interface ReviewStepProps {
@@ -110,6 +111,13 @@ export function ReviewStep({
 
   return (
     <>
+      {/* Goal alignment: the month's goals alongside the week being planned, so
+          a goal that never gets time booked against it is visible here rather
+          than only in hindsight. */}
+      <div className="mb-4">
+        <GoalCheckInPanel mode="alignment" />
+      </div>
+
       {unplacedMustDo.length > 0 && (
         <div className="mb-4 flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 p-3">
           <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-red-500" />

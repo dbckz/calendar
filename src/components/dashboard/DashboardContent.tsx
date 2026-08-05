@@ -22,6 +22,8 @@ import { ReplanWeekModal } from './ReplanWeekModal';
 import { DailyReviewModal } from './DailyReviewModal';
 import { TaskSearchModal } from './TaskSearchModal';
 import { AiClaimsModal } from './AiClaimsModal';
+import { GoalNudgeCard } from './GoalNudgeCard';
+import type { GoalNudge } from '@/lib/goal-progress';
 
 interface Integration {
   id: string;
@@ -66,6 +68,10 @@ interface DashboardContentProps {
   taskDialogOpen?: boolean;
   // Double-clicking the Today heading switches to the Daily Calendar tab.
   onExpandToCalendar?: () => void;
+  // Mid-period goal nudges, lifted to page.tsx so the Goals section's badge and
+  // this card read from one fetch.
+  goalNudges?: GoalNudge[];
+  onOpenGoals?: () => void;
 }
 
 // Fixed, viewport-height three-column layout — nothing scrolls the page itself;
@@ -93,6 +99,8 @@ export function DashboardContent({
   onStaleModalOpenChange,
   taskDialogOpen,
   onExpandToCalendar,
+  goalNudges = [],
+  onOpenGoals,
 }: DashboardContentProps) {
   const data = capacityData;
   const isLoading = capacityLoading;
@@ -362,6 +370,14 @@ export function DashboardContent({
           </div>
         </div>
       </div>
+
+      {/* Goals past halfway through their period with nothing to show. Renders
+          nothing when there is nothing to flag, so it costs no height most days. */}
+      {goalNudges.length > 0 && onOpenGoals && (
+        <div className="mb-4 flex-shrink-0">
+          <GoalNudgeCard nudges={goalNudges} onOpenGoals={onOpenGoals} />
+        </div>
+      )}
 
       {/* Fixed 3-column grid filling the remaining height. min-w-0 on every grid
           item lets columns shrink to their track instead of being forced wider by

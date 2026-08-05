@@ -77,7 +77,7 @@ export function Header({ selectedDate, onDateChange, onRefresh, isLoading, color
                 })}
               </div>
             ) : (
-              <h1 className={`text-xl font-semibold ${colorScheme?.headerText || 'text-gray-900'}`}>Dave&apos;s Daily Planner</h1>
+              <h1 className={`text-xl font-semibold ${colorScheme?.headerText || 'text-gray-900'}`}>Dave&apos;s Portal</h1>
             )}
           </div>
 

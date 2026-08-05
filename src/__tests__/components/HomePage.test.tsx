@@ -22,6 +22,9 @@ jest.mock('@/lib/api', () => ({
     removeGoogleEventAttribution: jest.fn().mockResolvedValue(undefined),
     getCustomTaskTypes: jest.fn().mockResolvedValue({ customTypes: [] }),
     getTaskTemplates: jest.fn().mockResolvedValue({ templates: [] }),
+    // The section bar badges the Goals section from this; no nudges is the
+    // normal state, and the card renders nothing.
+    getGoalNudges: jest.fn().mockResolvedValue({ nudges: [] }),
   },
 }));
 

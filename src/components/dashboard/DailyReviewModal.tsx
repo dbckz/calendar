@@ -26,6 +26,7 @@ import {
 } from '@/lib/scheduling/daily-review';
 import { categoryColor, slotLabelMs, titleLabel } from './replanFormat';
 import { ReplanSections, replanHasWork } from './ReplanSections';
+import { GoalCheckInPanel } from '@/components/goals/GoalCheckInPanel';
 import { useReplanActions } from './useReplanActions';
 
 interface DailyReviewModalProps {
@@ -370,6 +371,14 @@ export function DailyReviewModal({
             <>
               {(reviewMessageLoading || reviewMessage) && (
                 <ReviewMessageCard message={reviewMessage} loading={reviewMessageLoading} />
+              )}
+              {/* The end-of-week review is the one ritual that reliably happens,
+                  so the monthly/quarterly goal check-in rides along with it
+                  rather than needing a habit of its own. */}
+              {data.endOfWeek && (
+                <div className="mb-4">
+                  <GoalCheckInPanel mode="check-in" />
+                </div>
               )}
               {nothingToReplan ? (
                 <div className="flex flex-col items-center justify-center py-16 gap-2 text-center">

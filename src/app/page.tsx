@@ -2,8 +2,20 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { format } from 'date-fns';
-import { Calendar, Repeat, LayoutDashboard, Bell, BarChart3 } from 'lucide-react';
 import { Header } from '@/components/Header';
+import { SectionBar } from '@/components/SectionBar';
+import { resolveIcon } from '@/components/section-icons';
+import { ExerciseSection } from '@/components/sections/ExerciseSection';
+import { GoalsSection } from '@/components/sections/GoalsSection';
+import { MusicSection } from '@/components/sections/MusicSection';
+import {
+  DEFAULT_SECTION_ID,
+  defaultSubTab,
+  getSection,
+  hasSubTab,
+  isValidSectionId,
+} from '@/lib/life-sections';
+import { useGoalNudges } from '@/hooks/useGoalNudges';
 import { TaskDetailDialog } from '@/components/AsanaSidebar';
 import { DelegateModal } from '@/components/DelegateModal';
 import { AddTaskModal } from '@/components/AddTaskModal';
@@ -92,21 +104,93 @@ const COLOR_SCHEMES = [
   },
 ];
 
-export default function Home() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'calendar' | 'rituals' | 'reminders' | 'analysis'>(() => {
-    if (typeof window !== 'undefined') {
-      if (window.location.hash === '#rituals') return 'rituals';
-      if (window.location.hash === '#reminders') return 'reminders';
-      if (window.location.hash === '#calendar') return 'calendar';
-      if (window.location.hash === '#analysis') return 'analysis';
-    }
-    return 'dashboard';
-  });
+type WorkTab = 'dashboard' | 'calendar' | 'rituals' | 'reminders' | 'analysis';
 
-  const handleTabChange = useCallback((tab: string) => {
-    const t = tab as 'dashboard' | 'calendar' | 'rituals' | 'reminders' | 'analysis';
-    setActiveTab(t);
-    window.location.hash = t === 'dashboard' ? '' : t;
+const WORK_TABS: WorkTab[] = ['dashboard', 'calendar', 'rituals', 'reminders', 'analysis'];
+
+// The hash now carries both levels of the hierarchy, '#exercise/history'. The
+// old single-level form ('#rituals') still resolves — those are work sub-tabs,
+// and existing bookmarks shouldn't break.
+function parseHash(hash: string): { section: string; subTab: string } {
+  const raw = hash.replace(/^#/, '');
+  if (!raw) return { section: DEFAULT_SECTION_ID, subTab: 'dashboard' };
+
+  const [first, second] = raw.split('/');
+  if (WORK_TABS.includes(first as WorkTab) && !second) {
+    return { section: 'work', subTab: first };
+  }
+  if (!isValidSectionId(first)) return { section: DEFAULT_SECTION_ID, subTab: 'dashboard' };
+  const subTab = second && hasSubTab(first, second) ? second : defaultSubTab(first);
+  return { section: first, subTab };
+}
+
+export default function Home() {
+  const initialRoute = typeof window !== 'undefined'
+    ? parseHash(window.location.hash)
+    : { section: DEFAULT_SECTION_ID, subTab: 'dashboard' };
+
+  const [activeSection, setActiveSection] = useState(initialRoute.section);
+  const [activeTab, setActiveTab] = useState<WorkTab>(
+    initialRoute.section === 'work' ? (initialRoute.subTab as WorkTab) : 'dashboard'
+  );
+  // Sub-tab per non-work section, so switching away and back returns to where
+  // you were rather than resetting to the first tab.
+  const [subTabBySection, setSubTabBySection] = useState<Record<string, string>>(() =>
+    initialRoute.section === 'work' ? {} : { [initialRoute.section]: initialRoute.subTab }
+  );
+
+  const { nudges: goalNudges, refresh: refreshGoalNudges } = useGoalNudges();
+
+  const writeHash = useCallback((section: string, subTab: string) => {
+    // The Command Center is the app's home, so it stays on a bare URL.
+    window.location.hash = section === 'work' && subTab === 'dashboard' ? '' : `${section}/${subTab}`;
+  }, []);
+
+  const activeSubTab =
+    activeSection === 'work' ? activeTab : subTabBySection[activeSection] ?? defaultSubTab(activeSection);
+
+  const handleTabChange = useCallback(
+    (tab: string) => {
+      if (activeSection === 'work') {
+        setActiveTab(tab as WorkTab);
+      } else {
+        setSubTabBySection(prev => ({ ...prev, [activeSection]: tab }));
+      }
+      writeHash(activeSection, tab);
+    },
+    [activeSection, writeHash]
+  );
+
+  const handleSectionChange = useCallback(
+    (sectionId: string) => {
+      setActiveSection(sectionId);
+      const subTab =
+        sectionId === 'work' ? activeTab : subTabBySection[sectionId] ?? defaultSubTab(sectionId);
+      writeHash(sectionId, subTab);
+    },
+    [activeTab, subTabBySection, writeHash]
+  );
+
+  // The nudge card's "Open goals" jumps straight to the cross-cutting view.
+  const goToGoals = useCallback(() => {
+    handleSectionChange('goals');
+  }, [handleSectionChange]);
+
+  // Follow the hash when it changes outside our own writes — pasting a
+  // '#exercise/history' link into an already-open tab, or using the browser's
+  // back button, should actually move.
+  useEffect(() => {
+    const onHashChange = () => {
+      const route = parseHash(window.location.hash);
+      setActiveSection(route.section);
+      if (route.section === 'work') {
+        setActiveTab(route.subTab as WorkTab);
+      } else {
+        setSubTabBySection(prev => ({ ...prev, [route.section]: route.subTab }));
+      }
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
   // The day-rollover hour (from workflow config); local times before it count as
@@ -1026,13 +1110,17 @@ export default function Home() {
     [clearAsanaFilters, DBC_INTEGRATION_ID]
   );
 
-  const tabs = [
-    { id: 'dashboard' as const, label: 'Command Center', icon: LayoutDashboard },
-    { id: 'calendar' as const, label: 'Daily Calendar', icon: Calendar },
-    { id: 'rituals' as const, label: 'Rituals', icon: Repeat },
-    { id: 'reminders' as const, label: 'Reminders', icon: Bell },
-    { id: 'analysis' as const, label: 'Analysis', icon: BarChart3 },
-  ];
+  // Sub-tabs come from the section registry, so a new life area needs no change
+  // here — only an entry in lib/life-sections.ts.
+  const tabs = useMemo(
+    () =>
+      (getSection(activeSection)?.subTabs ?? []).map(tab => ({
+        id: tab.id,
+        label: tab.label,
+        icon: resolveIcon(tab.icon),
+      })),
+    [activeSection]
+  );
 
   // Double-clicking the dashboard's Today heading blows the day up into the
   // calendar view — the same destination as the nav tab.
@@ -1137,20 +1225,38 @@ export default function Home() {
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
+      <SectionBar
+        activeSection={activeSection}
+        onSectionChange={handleSectionChange}
+        nudgeCount={goalNudges.length}
+      />
+
       <Header
         selectedDate={selectedDate}
         onDateChange={setSelectedDate}
         onRefresh={handleRefresh}
         isLoading={isLoading}
         colorScheme={colorScheme}
-        activeTab={activeTab}
+        activeTab={activeSubTab}
         tabs={tabs}
         onTabChange={handleTabChange}
         notificationEvents={googleEvents}
-        showDateNav={activeTab === 'calendar'}
+        showDateNav={activeSection === 'work' && activeTab === 'calendar'}
       />
 
-      {activeTab === 'dashboard' ? (
+      {activeSection === 'exercise' ? (
+        <div className="flex-1 overflow-y-auto bg-gray-50">
+          <ExerciseSection subTab={activeSubTab} />
+        </div>
+      ) : activeSection === 'music' ? (
+        <div className="flex-1 overflow-y-auto bg-gray-50">
+          <MusicSection />
+        </div>
+      ) : activeSection === 'goals' ? (
+        <div className="flex-1 overflow-y-auto bg-gray-50">
+          <GoalsSection subTab={activeSubTab} onGoalsChanged={refreshGoalNudges} />
+        </div>
+      ) : activeTab === 'dashboard' ? (
         <div className="flex-1 overflow-hidden min-h-0 bg-gray-50">
           <DashboardContent
             todayEvents={todayTimedEvents}
@@ -1174,6 +1280,8 @@ export default function Home() {
             staleModalOpen={staleModalOpen}
             onStaleModalOpenChange={setStaleModalOpen}
             onExpandToCalendar={goToCalendarTab}
+            goalNudges={goalNudges}
+            onOpenGoals={goToGoals}
             taskDialogOpen={Boolean(dashboardDialogTask)}
           />
           {delegateTask && delegateTask.integrationId && (

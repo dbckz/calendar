@@ -12,6 +12,21 @@ import type {
 } from '@/lib/scheduling/daily-review';
 import type { AiClaim } from '@/lib/ai-verdicts';
 import type { WorkflowConfig } from '@/lib/workflow-config-storage';
+import type {
+  ExerciseAnalysis,
+  ExerciseEntry,
+  ExerciseSession,
+  Goal,
+  GoalCheckIn,
+  GoalCheckInStatus,
+  GoalPeriodKind,
+  GoalStatus,
+  GoalWithProgress,
+  Scorecard,
+} from '@/types/life';
+import type { GoalNudge } from '@/lib/goal-progress';
+import type { ExerciseProgression } from '@/lib/exercise-progression';
+import type { ExerciseTarget } from '@/lib/exercise-targets';
 
 export interface QuotaSummaryRow {
   category: string;
@@ -1481,6 +1496,243 @@ export const api = {
         body: JSON.stringify(weekStart ? { weekStart } : {}),
       },
       { maxRetries: 0 }
+    );
+  },
+
+  // --- Goals (monthly / quarterly, across every life section) ---------------
+
+  // `withProgress` resolves evidence sources and pacing; leave it off for
+  // pickers that only need titles.
+  async getGoals(query: {
+    sectionId?: string;
+    periodKind?: GoalPeriodKind;
+    periodKey?: string;
+    status?: GoalStatus;
+    withProgress?: boolean;
+  } = {}): Promise<{ goals: Goal[]; items?: GoalWithProgress[] }> {
+    const params = new URLSearchParams();
+    if (query.sectionId) params.set('sectionId', query.sectionId);
+    if (query.periodKind) params.set('periodKind', query.periodKind);
+    if (query.periodKey) params.set('periodKey', query.periodKey);
+    if (query.status) params.set('status', query.status);
+    if (query.withProgress) params.set('withProgress', '1');
+    return fetchWithRetry<{ goals: Goal[]; items?: GoalWithProgress[] }>(
+      `/api/goals?${params.toString()}`
+    );
+  },
+
+  async createGoal(input: {
+    sectionId: string;
+    periodKind: GoalPeriodKind;
+    periodKey: string;
+    title: string;
+    detail?: string;
+    parentGoalId?: string;
+    target?: { value: number; unit?: string };
+    evidence?: Goal['evidence'];
+  }): Promise<{ goal: Goal }> {
+    return fetchWithRetry<{ goal: Goal }>(
+      '/api/goals',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  async updateGoal(id: string, patch: Partial<Goal>): Promise<{ goal: Goal }> {
+    return fetchWithRetry<{ goal: Goal }>(
+      `/api/goals/${id}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  async deleteGoal(id: string): Promise<{ success: boolean }> {
+    return fetchWithRetry<{ success: boolean }>(
+      `/api/goals/${id}`,
+      { method: 'DELETE' },
+      { maxRetries: 0 }
+    );
+  },
+
+  async checkInGoal(
+    id: string,
+    input: { status: GoalCheckInStatus; note?: string; value?: number; source?: GoalCheckIn['source'] }
+  ): Promise<{ goal: Goal }> {
+    return fetchWithRetry<{ goal: Goal }>(
+      `/api/goals/${id}/check-in`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  async getScorecard(periodKind: GoalPeriodKind, periodKey?: string, sectionId?: string): Promise<{ scorecard: Scorecard }> {
+    const params = new URLSearchParams({ periodKind });
+    if (periodKey) params.set('periodKey', periodKey);
+    if (sectionId) params.set('sectionId', sectionId);
+    return fetchWithRetry<{ scorecard: Scorecard }>(`/api/goals/scorecard?${params.toString()}`);
+  },
+
+  async getGoalNudges(): Promise<{ nudges: GoalNudge[] }> {
+    return fetchWithRetry<{ nudges: GoalNudge[] }>('/api/goals/nudges');
+  },
+
+  // --- Exercise ------------------------------------------------------------
+
+  async getExerciseSessions(from?: string, to?: string): Promise<{ sessions: ExerciseSession[] }> {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    return fetchWithRetry<{ sessions: ExerciseSession[] }>(`/api/exercise?${params.toString()}`);
+  },
+
+  // Duration is optional: a logged strength session is described by its
+  // exercises, not by a stopwatch. `exercises` arrive without ids — storage
+  // assigns them.
+  async createExerciseSession(
+    input: Omit<Partial<ExerciseSession>, 'exercises'> & {
+      date: string;
+      type: string;
+      exercises?: Array<Omit<ExerciseEntry, 'id'>>;
+    }
+  ): Promise<{ session: ExerciseSession }> {
+    return fetchWithRetry<{ session: ExerciseSession }>(
+      '/api/exercise',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  async updateExerciseSession(
+    id: string,
+    patch: Partial<ExerciseSession>
+  ): Promise<{ session: ExerciseSession }> {
+    return fetchWithRetry<{ session: ExerciseSession }>(
+      `/api/exercise/${id}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  async deleteExerciseSession(id: string): Promise<{ success: boolean }> {
+    return fetchWithRetry<{ success: boolean }>(
+      `/api/exercise/${id}`,
+      { method: 'DELETE' },
+      { maxRetries: 0 }
+    );
+  },
+
+  // The gym button: open today's session, pre-filled with what to aim for.
+  // Safe to call again — it resumes rather than starting a second session.
+  async startExerciseSession(date?: string): Promise<{
+    session: ExerciseSession;
+    resumed: boolean;
+    plan?: string | null;
+  }> {
+    return fetchWithRetry(
+      '/api/exercise/start',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(date ? { date } : {}),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  async updateExerciseEntry(
+    sessionId: string,
+    entryId: string,
+    patch: Partial<Pick<ExerciseEntry, 'done' | 'sets' | 'reps' | 'holdSeconds' | 'weightKg' | 'notes'>>
+  ): Promise<{ session: ExerciseSession }> {
+    return fetchWithRetry(
+      `/api/exercise/${sessionId}/entries/${entryId}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  async addExerciseEntry(
+    sessionId: string,
+    input: { name: string; volumeText?: string; loadText?: string; notes?: string }
+  ): Promise<{ session: ExerciseSession; entry: ExerciseEntry }> {
+    return fetchWithRetry(
+      `/api/exercise/${sessionId}/entries`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  async removeExerciseEntry(sessionId: string, entryId: string): Promise<{ session: ExerciseSession }> {
+    return fetchWithRetry(
+      `/api/exercise/${sessionId}/entries/${entryId}`,
+      { method: 'DELETE' },
+      { maxRetries: 0 }
+    );
+  },
+
+  // What to aim for in a session, from the last time each exercise was trained.
+  async getExerciseTargets(date?: string): Promise<{
+    date: string;
+    plan?: { label?: string; components: string[] };
+    targets: ExerciseTarget[];
+  }> {
+    const params = new URLSearchParams();
+    if (date) params.set('date', date);
+    return fetchWithRetry(`/api/exercise/targets?${params.toString()}`);
+  },
+
+  async getExerciseProgressions(): Promise<{ progressions: ExerciseProgression[] }> {
+    return fetchWithRetry<{ progressions: ExerciseProgression[] }>('/api/exercise/progression');
+  },
+
+  // Pull planned sessions from the personal Google calendar's all-day events.
+  async syncExerciseCalendar(): Promise<{
+    scanned: number;
+    created: number;
+    updated: number;
+    removed: number;
+  }> {
+    return fetchWithRetry(
+      '/api/exercise/sync-calendar',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+      { maxRetries: 0 }
+    );
+  },
+
+  async getExerciseAnalysis(from?: string, to?: string): Promise<{ analysis: ExerciseAnalysis }> {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    return fetchWithRetry<{ analysis: ExerciseAnalysis }>(
+      `/api/exercise/analysis?${params.toString()}`
     );
   },
 };

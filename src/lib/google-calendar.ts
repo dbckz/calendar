@@ -338,3 +338,66 @@ function getGoogleColor(colorId: string): string {
   };
   return colors[colorId] || '#4285f4';
 }
+
+// Events across a date RANGE, returned close to Google's own shape.
+//
+// getCalendarEvents above is per-day and maps into the app's CalendarEvent,
+// which drops the all-day/timed distinction that the exercise-plan sync depends
+// on (a planned session is precisely an all-day event). This keeps `start.date`
+// vs `start.dateTime` intact and pages through the whole range.
+export interface RawCalendarEvent {
+  id: string;
+  summary: string;
+  description?: string;
+  // Exactly one of these is set: `date` (yyyy-MM-dd) for an all-day event,
+  // `dateTime` (ISO) for a timed one.
+  startDate?: string;
+  startDateTime?: string;
+  endDate?: string;
+}
+
+export async function listEventsInRange(
+  credentials: GoogleCalendarCredentials,
+  clientId: string,
+  clientSecret: string,
+  timeMin: Date,
+  timeMax: Date,
+  calendarId: string = 'primary'
+): Promise<RawCalendarEvent[]> {
+  const oauth2Client = createAuthenticatedClient(credentials, clientId, clientSecret);
+  const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+  const out: RawCalendarEvent[] = [];
+  let pageToken: string | undefined;
+
+  // Bounded page walk: a year of a busy personal calendar fits well inside
+  // this, and an unbounded loop on a paging bug would hammer the API.
+  for (let page = 0; page < 20; page++) {
+    const response = await calendar.events.list({
+      calendarId,
+      timeMin: timeMin.toISOString(),
+      timeMax: timeMax.toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 250,
+      pageToken,
+    });
+
+    for (const event of response.data.items ?? []) {
+      if (!event.id) continue;
+      out.push({
+        id: event.id,
+        summary: event.summary ?? '',
+        ...(event.description ? { description: event.description } : {}),
+        ...(event.start?.date ? { startDate: event.start.date } : {}),
+        ...(event.start?.dateTime ? { startDateTime: event.start.dateTime } : {}),
+        ...(event.end?.date ? { endDate: event.end.date } : {}),
+      });
+    }
+
+    pageToken = response.data.nextPageToken ?? undefined;
+    if (!pageToken) break;
+  }
+
+  return out;
+}

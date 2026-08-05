@@ -74,7 +74,7 @@ export function MobileHeader({
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className={`text-xs font-medium uppercase tracking-wide ${colorScheme.subText}`}>{subtitle}</p>
-            <h1 className="truncate text-xl font-semibold">Dave&apos;s Calendar</h1>
+            <h1 className="truncate text-xl font-semibold">Dave&apos;s Portal</h1>
           </div>
           <div className="flex flex-shrink-0 items-center gap-2">
             <NotificationBell

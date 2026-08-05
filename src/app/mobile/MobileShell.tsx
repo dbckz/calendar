@@ -18,12 +18,16 @@ import { useToast } from '@/hooks/useToast';
 import { DelegateModal } from '@/components/DelegateModal';
 import { CalendarEvent, DelegationQueueEntry, SettingsResponse } from '@/types';
 import { MOBILE_COLOR_SCHEMES, MobileHeader } from './components/MobileHeader';
-import { MobileTab, MobileTabBar } from './components/MobileTabBar';
+import { MOBILE_TABS, MobileTab, MobileTabBar } from './components/MobileTabBar';
 import { EventDetailSheet } from './components/EventDetailSheet';
 import { MobileTaskDetailSheet } from './components/MobileTaskDetailSheet';
 import { CommandCenterTab } from './tabs/CommandCenterTab';
 import { DayTab } from './tabs/DayTab';
 import { RemindersTab } from './tabs/RemindersTab';
+import { ExerciseTab } from './tabs/ExerciseTab';
+import { GoalsTab } from './tabs/GoalsTab';
+import { useGoalNudges } from '@/hooks/useGoalNudges';
+import { useExerciseOverview, useGoalsOverview } from '@/hooks/useLifeAreas';
 
 const TAB_STORAGE_KEY = 'mobile-active-tab';
 
@@ -31,6 +35,8 @@ const TAB_SUBTITLES: Record<MobileTab, string> = {
   home: 'Command Center',
   day: 'Daily Planner',
   reminders: 'Reminders',
+  goals: 'Goals',
+  exercise: 'Exercise',
 };
 
 export function MobileShell() {
@@ -41,8 +47,10 @@ export function MobileShell() {
   const [activeTab, setActiveTab] = useState<MobileTab>('home');
   useEffect(() => {
     const stored = window.localStorage.getItem(TAB_STORAGE_KEY);
-    if (stored === 'home' || stored === 'day' || stored === 'reminders') {
-      setActiveTab(stored);
+    // Validated against the live tab list, so a tab removed in a later version
+    // can't leave the shell rendering nothing.
+    if (stored && (MOBILE_TABS as string[]).includes(stored)) {
+      setActiveTab(stored as MobileTab);
     }
   }, []);
   const changeTab = useCallback((tab: MobileTab) => {
@@ -82,6 +90,11 @@ export function MobileShell() {
   const { metadataByGid, saveMetadata } = useTaskMetadata();
   const { delegationByGid, refresh: refreshDelegation } = useDelegationQueue();
   const { data: capacityData, isLoading: capacityLoading, refetch: refetchCapacity } = useDashboard();
+  // Life-area feeds. Both are lazy: goal evidence can cost an Asana round trip
+  // per goal, so nothing is fetched until the tab is opened.
+  const { nudges: goalNudges } = useGoalNudges();
+  const goalsOverview = useGoalsOverview(activeTab === 'goals');
+  const exerciseOverview = useExerciseOverview(activeTab === 'exercise');
 
   const loadSettings = useCallback(async () => {
     try {
@@ -219,10 +232,23 @@ export function MobileShell() {
       await Promise.all([fetchAllEvents(), loadSettings(), remindersStore.refetch()]);
       refreshDelegation();
       refetchCapacity();
+      // Only the life-area feed being looked at — refreshing the other would
+      // fetch data that isn't on screen, and goal evidence isn't free.
+      if (activeTab === 'goals') goalsOverview.refresh();
+      if (activeTab === 'exercise') exerciseOverview.refresh();
     } finally {
       setIsRefreshing(false);
     }
-  }, [fetchAllEvents, loadSettings, remindersStore, refreshDelegation, refetchCapacity]);
+  }, [
+    fetchAllEvents,
+    loadSettings,
+    remindersStore,
+    refreshDelegation,
+    refetchCapacity,
+    activeTab,
+    goalsOverview,
+    exerciseOverview,
+  ]);
 
   // A Day-tab event opens the task sheet when it's backed by an Asana task in
   // the store; otherwise the read-only event sheet.
@@ -356,6 +382,28 @@ export function MobileShell() {
           />
         )}
 
+        {activeTab === 'goals' && (
+          <GoalsTab
+            monthItems={goalsOverview.monthItems}
+            quarterItems={goalsOverview.quarterItems}
+            nudges={goalNudges}
+            isLoading={goalsOverview.isLoading}
+            error={goalsOverview.error}
+          />
+        )}
+
+        {activeTab === 'exercise' && (
+          <ExerciseTab
+            planned={exerciseOverview.planned}
+            recent={exerciseOverview.recent}
+            analysis={exerciseOverview.analysis}
+            targets={exerciseOverview.targets}
+            onSessionChanged={exerciseOverview.refresh}
+            isLoading={exerciseOverview.isLoading}
+            error={exerciseOverview.error}
+          />
+        )}
+
         {activeTab === 'reminders' && (
           <RemindersTab
             reminders={remindersStore.reminders}
@@ -372,6 +420,7 @@ export function MobileShell() {
         activeTab={activeTab}
         onTabChange={changeTab}
         reminderCount={activeReminderCount}
+        goalNudgeCount={goalNudges.length}
       />
 
       {selectedEvent && (

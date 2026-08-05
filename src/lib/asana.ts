@@ -815,3 +815,54 @@ export async function createTag(
   const data = await response.json();
   return mapTag(data.data as AsanaTagApi);
 }
+
+// Count tasks in a project (or carrying a tag) completed inside a window.
+// Powers auto-derived goal evidence — see lib/goal-evidence.ts — so a goal like
+// "ship 6 policy briefs" updates itself from Asana instead of a self-report.
+//
+// `completed_since` is the only server-side date filter Asana offers here, so
+// the upper bound is applied client-side against completed_at.
+export async function countCompletedTasks(
+  accessToken: string,
+  source: { projectGid?: string; tagGid?: string },
+  fromIso: string,
+  toIso: string
+): Promise<number> {
+  const scope = source.projectGid
+    ? `project=${source.projectGid}`
+    : source.tagGid
+      ? `tag=${source.tagGid}`
+      : null;
+  if (!scope) throw new Error('countCompletedTasks needs a projectGid or a tagGid');
+
+  const url =
+    `${ASANA_API_BASE}/tasks?${scope}&completed_since=${encodeURIComponent(fromIso)}` +
+    `&opt_fields=completed,completed_at&limit=100`;
+
+  let next: string | null = url;
+  let count = 0;
+  // Guard against an unbounded page walk if a project is enormous; 20 pages of
+  // 100 is far more completed work than any one goal window should contain.
+  for (let page = 0; next && page < 20; page++) {
+    const response: Response = await fetch(next, {
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+    });
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error('Asana completed-task count error:', response.status, errorBody);
+      throw new Error(`Failed to count completed tasks: ${response.status}`);
+    }
+    const data: {
+      data: Array<{ completed?: boolean; completed_at?: string | null }>;
+      next_page?: { uri: string } | null;
+    } = await response.json();
+
+    for (const task of data.data) {
+      if (!task.completed || !task.completed_at) continue;
+      if (task.completed_at >= fromIso && task.completed_at < toIso) count++;
+    }
+    next = data.next_page?.uri ?? null;
+  }
+
+  return count;
+}
