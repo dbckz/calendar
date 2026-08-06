@@ -46,7 +46,9 @@ export async function POST(request: NextRequest) {
         // labelled from its content rather than assumed.
         type: sessionType(session.exercises),
         ...(session.label ? { label: session.label } : {}),
-        exercises: session.exercises,
+        // A sheet row is a record of exercises actually done, so each entry is
+        // marked done — that's what the "exercises done" count reads.
+        exercises: session.exercises.map(e => ({ ...e, done: true })),
         planned: false,
         completed: true,
         source: 'sheet',

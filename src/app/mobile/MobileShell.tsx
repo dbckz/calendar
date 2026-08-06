@@ -397,7 +397,6 @@ export function MobileShell() {
             planned={exerciseOverview.planned}
             recent={exerciseOverview.recent}
             analysis={exerciseOverview.analysis}
-            targets={exerciseOverview.targets}
             onSessionChanged={exerciseOverview.refresh}
             isLoading={exerciseOverview.isLoading}
             error={exerciseOverview.error}

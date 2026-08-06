@@ -20,7 +20,12 @@ export async function GET(request: NextRequest) {
 
     const sessions = await getAllSessions();
     const plan = sessions.find(s => s.date === date && s.planned);
-    const targets = buildSessionTargets(buildProgressions(sessions), plan?.components ?? []);
+    // Exclude the target date so "last time" is the previous workout, not a
+    // session already logged today.
+    const targets = buildSessionTargets(
+      buildProgressions(sessions, { before: date }),
+      plan?.components ?? []
+    );
 
     return NextResponse.json({
       date,

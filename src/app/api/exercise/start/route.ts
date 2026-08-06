@@ -23,7 +23,12 @@ export async function POST(request: NextRequest) {
     if (inProgress) return NextResponse.json({ session: inProgress, resumed: true });
 
     const plan = sessions.find(s => s.date === date && s.planned);
-    const targets = buildSessionTargets(buildProgressions(sessions), plan?.components ?? []);
+    // Exclude today so the seeded entries aim at progressing from the PREVIOUS
+    // workout, not from a session logged earlier today.
+    const targets = buildSessionTargets(
+      buildProgressions(sessions, { before: date }),
+      plan?.components ?? []
+    );
 
     const session = await createSession({
       date,

@@ -59,12 +59,23 @@ export function exerciseKey(name: string): string {
   return ALIASES[base] ?? base;
 }
 
-export function buildProgressions(sessions: ExerciseSession[]): ExerciseProgression[] {
+// `before`, when given, restricts progression to sessions dated strictly before
+// it. The Today view and the start route pass the day being planned so that
+// "last time" means the PREVIOUS workout, not the session being logged right
+// now — otherwise today's just-created session becomes its own `latest`. Left
+// unset elsewhere (the Progress tab, analysis), so their semantics are
+// unchanged.
+export function buildProgressions(
+  sessions: ExerciseSession[],
+  options: { before?: string } = {}
+): ExerciseProgression[] {
   const byKey = new Map<string, ExerciseProgression>();
 
   // Oldest first, so `first` and `latest` mean what they say.
   const ordered = [...sessions]
-    .filter(s => s.completed && s.exercises?.length)
+    .filter(
+      s => s.completed && s.exercises?.length && (!options.before || s.date < options.before)
+    )
     .sort((a, b) => a.date.localeCompare(b.date));
 
   for (const session of ordered) {

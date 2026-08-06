@@ -97,6 +97,22 @@ export interface ExerciseTarget {
   rationale: string;
 }
 
+// How a target (or a logged row's actuals) reads on screen, e.g. "3 × 8 · 40kg".
+// Empty when neither volume nor load is known. Shared by the Plan tab's targets
+// and both Today checklists so an aim and what was logged always look alike.
+export function describeVolumeLoad(t: {
+  sets?: number;
+  reps?: number;
+  holdSeconds?: number;
+  weightKg?: number;
+}): string {
+  let volume = '';
+  if (t.sets && t.reps) volume = `${t.sets} × ${t.reps}`;
+  else if (t.sets && t.holdSeconds) volume = `${t.sets} × ${t.holdSeconds}s`;
+  const load = t.weightKg !== undefined ? `${t.weightKg}kg` : '';
+  return [volume, load].filter(Boolean).join(' · ');
+}
+
 // Round to something you can actually load. Machine stacks and dumbbells move in
 // steps; half a kilo is the finest worth suggesting.
 function roundLoad(kg: number): number {

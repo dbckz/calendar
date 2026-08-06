@@ -9,6 +9,7 @@ import { parseLoad, parseVolume } from '@/lib/exercise-parse';
 import type { ExerciseAnalysis, ExerciseIntensity, ExerciseSession } from '@/types/life';
 import { SectionGoals } from '@/components/goals/SectionGoals';
 import { ExerciseEntryList } from './exercise/ExerciseEntryList';
+import { ExerciseToday } from './exercise/ExerciseToday';
 import { ProgressionTab } from './exercise/ProgressionTab';
 import { TodayTargets } from './exercise/TodayTargets';
 
@@ -25,6 +26,7 @@ export function ExerciseSection({ subTab }: ExerciseSectionProps) {
       />
     );
   }
+  if (subTab === 'today') return <ExerciseToday />;
   if (subTab === 'analysis') return <ExerciseAnalysisTab />;
   if (subTab === 'progress') return <ProgressionTab />;
   // 'plan' and 'history' are the same log viewed forwards and backwards, so
@@ -151,8 +153,6 @@ function ExerciseLog({ mode }: { mode: 'plan' | 'history' }) {
         </div>
       </div>
 
-      {mode === 'plan' && <TodayTargets />}
-
       {formOpen && (
         <SessionForm
           mode={mode}
@@ -164,6 +164,8 @@ function ExerciseLog({ mode }: { mode: 'plan' | 'history' }) {
           onError={setError}
         />
       )}
+
+      {mode === 'plan' && <TodayTargets />}
 
       {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
       {syncNote && <p className="mb-3 text-sm text-gray-500">{syncNote}</p>}
@@ -352,6 +354,7 @@ function SessionForm({
             value={type}
             onChange={e => setType(e.target.value)}
             placeholder="run, gym, climbing"
+            autoFocus
             className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md"
           />
         </label>
@@ -500,7 +503,7 @@ function ExerciseAnalysisTab() {
   if (isLoading) return <p className="max-w-3xl mx-auto p-6 text-sm text-gray-500">Analysing…</p>;
   if (!analysis) return <p className="max-w-3xl mx-auto p-6 text-sm text-gray-500">No analysis available.</p>;
 
-  const peakMinutes = Math.max(1, ...analysis.byWeek.map(w => w.minutes));
+  const peakSessions = Math.max(1, ...analysis.byWeek.map(w => w.sessions));
 
   return (
     <div className="max-w-3xl mx-auto p-6">
@@ -510,8 +513,8 @@ function ExerciseAnalysisTab() {
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         <Stat label="Sessions" value={String(analysis.totalSessions)} />
+        <Stat label="Exercises done" value={String(analysis.totalExercisesDone)} />
         <Stat label="Per week" value={String(analysis.sessionsPerWeek)} />
-        <Stat label="Hours" value={String(Math.round(analysis.totalMinutes / 6) / 10)} />
         <Stat
           label="Plan adherence"
           value={analysis.planAdherence === null ? '—' : `${Math.round(analysis.planAdherence * 100)}%`}
@@ -528,7 +531,7 @@ function ExerciseAnalysisTab() {
       {analysis.byWeek.length > 0 && (
         <section className="mb-6">
           <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-500 mb-2">
-            Weekly minutes
+            Sessions per week
           </h3>
           <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-1.5">
             {analysis.byWeek.map(week => (
@@ -539,11 +542,11 @@ function ExerciseAnalysisTab() {
                 <div className="flex-1 h-3 rounded-full bg-gray-100 overflow-hidden">
                   <div
                     className="h-full bg-blue-500 rounded-full"
-                    style={{ width: `${(week.minutes / peakMinutes) * 100}%` }}
+                    style={{ width: `${(week.sessions / peakSessions) * 100}%` }}
                   />
                 </div>
                 <span className="w-16 shrink-0 text-right text-xs text-gray-600 tabular-nums">
-                  {week.minutes} min
+                  {week.sessions} session{week.sessions === 1 ? '' : 's'}
                 </span>
               </div>
             ))}
@@ -560,7 +563,7 @@ function ExerciseAnalysisTab() {
                 <tr>
                   <th className="px-4 py-2 font-semibold">Type</th>
                   <th className="px-4 py-2 font-semibold">Sessions</th>
-                  <th className="px-4 py-2 font-semibold">Minutes</th>
+                  <th className="px-4 py-2 font-semibold">Exercises</th>
                   <th className="px-4 py-2 font-semibold">Distance</th>
                 </tr>
               </thead>
@@ -569,7 +572,7 @@ function ExerciseAnalysisTab() {
                   <tr key={row.type}>
                     <td className="px-4 py-2 font-medium text-gray-900">{row.type}</td>
                     <td className="px-4 py-2 text-gray-600 tabular-nums">{row.sessions}</td>
-                    <td className="px-4 py-2 text-gray-600 tabular-nums">{row.minutes}</td>
+                    <td className="px-4 py-2 text-gray-600 tabular-nums">{row.exercisesDone}</td>
                     <td className="px-4 py-2 text-gray-600 tabular-nums">
                       {row.distanceKm ? `${row.distanceKm} km` : '—'}
                     </td>

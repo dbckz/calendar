@@ -49,9 +49,41 @@ describe('analyseExercise', () => {
     );
 
     expect(analysis.totalSessions).toBe(2);
-    expect(analysis.totalMinutes).toBe(90);
     expect(analysis.totalDistanceKm).toBe(10);
     expect(analysis.planAdherence).toBe(0);
+  });
+
+  it('counts only exercises ticked done', () => {
+    const analysis = analyseExercise(
+      [
+        // A gym-flow session: two of three exercises ticked off.
+        session({
+          date: '2026-07-06',
+          type: 'gym',
+          exercises: [
+            { id: 'a', name: 'Squat', done: true },
+            { id: 'b', name: 'Bench', done: true },
+            { id: 'c', name: 'Row', done: false },
+          ],
+        }),
+        // Entries with no done flag don't count. Sheet imports are backfilled to
+        // done:true, so anything still unticked is genuinely not done.
+        session({
+          date: '2026-07-08',
+          type: 'gym',
+          exercises: [
+            { id: 'd', name: 'Deadlift' },
+            { id: 'e', name: 'Pull-up' },
+          ],
+        }),
+      ],
+      '2026-07-01',
+      '2026-07-28'
+    );
+
+    expect(analysis.totalExercisesDone).toBe(2);
+    const gym = analysis.byType.find(t => t.type === 'gym');
+    expect(gym?.exercisesDone).toBe(2);
   });
 
   it('measures adherence by date, since plans and logs are separate records', () => {

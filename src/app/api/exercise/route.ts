@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
     const session = await createSession({
       date: body.date,
       type: body.type ?? '',
-      durationMinutes: Number(body.durationMinutes),
+      durationMinutes: body.durationMinutes === undefined ? undefined : Number(body.durationMinutes),
       distanceKm: body.distanceKm === undefined ? undefined : Number(body.distanceKm),
       intensity: body.intensity,
       notes: body.notes,

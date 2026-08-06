@@ -26,7 +26,7 @@ export function analyseExercise(
   const done = inRange.filter(s => s.completed);
   const planned = inRange.filter(s => s.planned);
 
-  const totalMinutes = done.reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0);
+  const totalExercisesDone = done.reduce((sum, s) => sum + exercisesDone(s), 0);
   const totalDistanceKm = done.reduce((sum, s) => sum + (s.distanceKm ?? 0), 0);
 
   // Windows shorter than a week still divide by one week, so a three-day window
@@ -41,7 +41,7 @@ export function analyseExercise(
     from,
     to,
     totalSessions: done.length,
-    totalMinutes,
+    totalExercisesDone,
     totalDistanceKm: round1(totalDistanceKm),
     sessionsPerWeek: round1(done.length / weeks),
     planAdherence: adherenceByPlan(planned, done),
@@ -53,6 +53,13 @@ export function analyseExercise(
 
   analysis.suggestions = buildSuggestions(analysis, hardSessionShare(done));
   return analysis;
+}
+
+// Exercises ticked done in a session. Strictly done===true: sheet-imported
+// sessions carry done:true on every entry (they record what was actually done),
+// so anything still unticked is genuinely not done and doesn't count.
+function exercisesDone(session: ExerciseSession): number {
+  return (session.exercises ?? []).filter(e => e.done).length;
 }
 
 // Share of completed sessions marked 'hard', out of those where intensity was
@@ -93,9 +100,9 @@ function summariseByType(done: ExerciseSession[]): ExerciseTypeSummary[] {
   const map = new Map<string, ExerciseTypeSummary>();
   for (const s of done) {
     const key = s.type.toLowerCase();
-    const row = map.get(key) ?? { type: s.type, sessions: 0, minutes: 0, distanceKm: 0 };
+    const row = map.get(key) ?? { type: s.type, sessions: 0, exercisesDone: 0, distanceKm: 0 };
     row.sessions += 1;
-    row.minutes += s.durationMinutes ?? 0;
+    row.exercisesDone += exercisesDone(s);
     row.distanceKm += s.distanceKm ?? 0;
     map.set(key, row);
   }
@@ -107,13 +114,13 @@ function summariseByType(done: ExerciseSession[]): ExerciseTypeSummary[] {
 function summariseByWeek(done: ExerciseSession[], planned: ExerciseSession[]): ExerciseWeekSummary[] {
   const map = new Map<string, ExerciseWeekSummary>();
   const row = (weekStart: string) =>
-    map.get(weekStart) ?? { weekStart, sessions: 0, minutes: 0, distanceKm: 0, plannedSessions: 0 };
+    map.get(weekStart) ?? { weekStart, sessions: 0, exercisesDone: 0, distanceKm: 0, plannedSessions: 0 };
 
   for (const s of done) {
     const key = weekStartKey(s.date);
     const r = row(key);
     r.sessions += 1;
-    r.minutes += s.durationMinutes ?? 0;
+    r.exercisesDone += exercisesDone(s);
     r.distanceKm += s.distanceKm ?? 0;
     map.set(key, r);
   }
@@ -206,11 +213,12 @@ function buildSuggestions(a: ExerciseAnalysis, hardShare: number | null): string
   return out;
 }
 
-// Three consecutive weeks moving the same way, using minutes.
+// Three consecutive weeks moving the same way, counted in sessions — the
+// count-based signal that replaced weekly minutes.
 function recentTrend(byWeek: ExerciseWeekSummary[]): 'rising' | 'declining' | 'flat' {
   const recent = byWeek.slice(-3);
   if (recent.length < 3) return 'flat';
-  const [a, b, c] = recent.map(w => w.minutes);
+  const [a, b, c] = recent.map(w => w.sessions);
   if (a > b && b > c) return 'declining';
   if (a < b && b < c) return 'rising';
   return 'flat';

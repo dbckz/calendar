@@ -1,85 +1,51 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useState } from 'react';
+import { format, parseISO } from 'date-fns';
 import { Check, Loader2, Plus, Trash2, X } from 'lucide-react';
 
-import { api } from '@/lib/api';
-import type { ExerciseEntry, ExerciseSession } from '@/types/life';
+import { useTodaySession, type FieldPatch, type TodayRow } from '@/hooks/useTodaySession';
+import { describeVolumeLoad } from '@/lib/exercise-targets';
+import { ActionBadge } from '@/components/sections/exercise/action-badge';
 
-// The in-the-gym view: today's session, one exercise per row, with the weight
-// and reps to aim for already filled in.
-//
-// Design constraints come from where it is used — standing in a gym, one-handed,
-// on a phone that may lose signal:
-//   * every action saves on its own, immediately (no "save session" button to
-//     forget, nothing lost if the app is closed mid-workout)
-//   * updates are optimistic, so a tick responds instantly and reconciles after
-//   * tap targets are large; the common case (did it as prescribed) is one tap
-export function GymSession({
-  session,
-  onChange,
-}: {
-  session: ExerciseSession;
-  onChange: (session: ExerciseSession) => void;
-}) {
-  // Memoised because the optimistic patch callback depends on it; a fresh []
-  // each render would rebuild that callback on every tick.
-  const entries = useMemo(() => session.exercises ?? [], [session.exercises]);
-  const doneCount = entries.filter(e => e.done).length;
-
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+// The in-the-gym checklist on mobile: today's workout, one tickable row per
+// exercise, each carrying its guidance (what to aim for and why, from last
+// time). No "start" tap — the session is created lazily on the first write
+// (see useTodaySession). Every action saves on its own, optimistically, because
+// this is used one-handed on a connection that drops.
+export function TodayChecklist({ onSessionChanged }: { onSessionChanged?: () => void }) {
+  const {
+    plan,
+    rows,
+    doneCount,
+    totalCount,
+    isLoading,
+    error,
+    busyKey,
+    toggleDone,
+    commitField,
+    commitNote,
+    addExercise,
+    removeRow,
+  } = useTodaySession(undefined, onSessionChanged);
+  const [openKey, setOpenKey] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
 
-  const patchEntry = useCallback(
-    async (entryId: string, patch: Partial<ExerciseEntry>) => {
-      setBusyId(entryId);
-      setError(null);
-      // Optimistic: the tick has to feel instant between sets.
-      onChange({
-        ...session,
-        exercises: entries.map(e => (e.id === entryId ? { ...e, ...patch } : e)),
-      });
-      try {
-        const res = await api.updateExerciseEntry(session.id, entryId, patch);
-        onChange(res.session);
-      } catch (err) {
-        console.error('Failed to update exercise entry:', err);
-        setError('Could not save that — check your connection.');
-        onChange(session); // roll back to what the server last confirmed
-      } finally {
-        setBusyId(null);
-      }
-    },
-    [session, entries, onChange]
-  );
-
-  const removeEntry = useCallback(
-    async (entryId: string) => {
-      setBusyId(entryId);
-      try {
-        const res = await api.removeExerciseEntry(session.id, entryId);
-        onChange(res.session);
-      } catch (err) {
-        console.error('Failed to remove exercise entry:', err);
-        setError('Could not remove that exercise.');
-      } finally {
-        setBusyId(null);
-      }
-    },
-    [session.id, onChange]
-  );
+  if (isLoading) {
+    return <p className="py-6 text-center text-sm text-gray-500">Loading today’s workout…</p>;
+  }
 
   return (
     <section className="space-y-3">
       <div className="flex items-baseline justify-between gap-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">
-          {session.label || 'Today'}
+          {plan?.label || plan?.components.join(' + ') || 'Today'}
         </h2>
-        <span className="text-sm tabular-nums text-gray-500">
-          {doneCount}/{entries.length} done
-        </span>
+        {totalCount > 0 && (
+          <span className="text-sm tabular-nums text-gray-500">
+            {doneCount}/{totalCount} done
+          </span>
+        )}
       </div>
 
       {error && (
@@ -88,26 +54,33 @@ export function GymSession({
         </div>
       )}
 
+      {rows.length === 0 && !adding && (
+        <p className="text-sm text-gray-500">No planned exercises for today. Add what you do below.</p>
+      )}
+
       <div className="space-y-2">
-        {entries.map(entry => (
-          <EntryRow
-            key={entry.id}
-            entry={entry}
-            busy={busyId === entry.id}
-            open={openId === entry.id}
-            onToggleOpen={() => setOpenId(openId === entry.id ? null : entry.id)}
-            onPatch={patch => patchEntry(entry.id, patch)}
-            onRemove={() => removeEntry(entry.id)}
+        {rows.map(row => (
+          <RowCard
+            key={row.key}
+            row={row}
+            busy={busyKey === row.key}
+            open={openKey === row.key}
+            onToggleOpen={() => setOpenKey(openKey === row.key ? null : row.key)}
+            onToggleDone={() => toggleDone(row)}
+            onCommitField={patch => commitField(row, patch)}
+            onCommitNote={note => commitNote(row, note)}
+            onRemove={() => removeRow(row)}
           />
         ))}
       </div>
 
       {adding ? (
-        <AddEntryForm
-          sessionId={session.id}
-          onAdded={onChange}
+        <AddExerciseForm
+          onAdd={async input => {
+            await addExercise(input);
+            setAdding(false);
+          }}
           onClose={() => setAdding(false)}
-          onError={setError}
         />
       ) : (
         <button
@@ -123,42 +96,47 @@ export function GymSession({
   );
 }
 
-function EntryRow({
-  entry,
+function RowCard({
+  row,
   busy,
   open,
   onToggleOpen,
-  onPatch,
+  onToggleDone,
+  onCommitField,
+  onCommitNote,
   onRemove,
 }: {
-  entry: ExerciseEntry;
+  row: TodayRow;
   busy: boolean;
   open: boolean;
   onToggleOpen: () => void;
-  onPatch: (patch: Partial<ExerciseEntry>) => void;
+  onToggleDone: () => void;
+  onCommitField: (patch: FieldPatch) => void;
+  onCommitNote: (note: string) => void;
   onRemove: () => void;
 }) {
-  const [note, setNote] = useState(entry.notes ?? '');
+  const [note, setNote] = useState(row.notes ?? '');
+  const current = describeVolumeLoad(row);
 
   return (
     <div
       className={`rounded-lg border bg-white shadow-sm transition-colors ${
-        entry.done ? 'border-emerald-200 bg-emerald-50/40' : 'border-gray-200'
+        row.done ? 'border-emerald-200 bg-emerald-50/40' : 'border-gray-200'
       }`}
     >
       <div className="flex items-stretch">
         {/* The common case is one tap: it went as prescribed. */}
         <button
           type="button"
-          onClick={() => onPatch({ done: !entry.done })}
+          onClick={onToggleDone}
           disabled={busy}
-          aria-pressed={!!entry.done}
-          aria-label={entry.done ? `Mark ${entry.name} not done` : `Mark ${entry.name} done`}
+          aria-pressed={row.done}
+          aria-label={row.done ? `Mark ${row.name} not done` : `Mark ${row.name} done`}
           className="flex w-14 flex-shrink-0 items-center justify-center"
         >
           <span
             className={`flex h-8 w-8 items-center justify-center rounded-full border-2 transition-colors ${
-              entry.done
+              row.done
                 ? 'border-emerald-600 bg-emerald-600 text-white'
                 : 'border-gray-300 text-transparent'
             }`}
@@ -177,56 +155,61 @@ function EntryRow({
           aria-expanded={open}
           className="min-w-0 flex-1 py-3 pr-3 text-left"
         >
-          <p
-            className={`text-sm font-medium ${
-              entry.done ? 'text-gray-500 line-through' : 'text-gray-900'
-            }`}
-          >
-            {entry.name}
-          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p
+              className={`text-sm font-medium ${
+                row.done ? 'text-gray-500 line-through' : 'text-gray-900'
+              }`}
+            >
+              {row.name}
+            </p>
+            {row.action && <ActionBadge action={row.action} />}
+          </div>
           <p className="mt-0.5 text-xs tabular-nums text-gray-600">
-            {describeEntry(entry)}
-            {entry.targetText && entry.targetText !== describeEntry(entry) && (
-              <span className="text-gray-400"> · target {entry.targetText}</span>
+            {current || row.targetText || '—'}
+            {row.targetText && row.targetText !== current && (
+              <span className="text-gray-400"> · target {row.targetText}</span>
             )}
           </p>
-          {entry.notes && !open && <p className="mt-0.5 text-xs text-gray-500">{entry.notes}</p>}
+          {row.rationale && <p className="mt-0.5 text-xs text-gray-500">{row.rationale}</p>}
+          {row.last && (
+            <p className="mt-0.5 text-[11px] text-gray-400">
+              Last: {format(parseISO(row.last.date), 'd MMM')}
+              {row.last.sets && row.last.reps ? ` · ${row.last.sets}×${row.last.reps}` : ''}
+              {row.last.weightKg !== undefined ? ` · ${row.last.weightKg}kg` : ''}
+            </p>
+          )}
+          {row.notes && !open && <p className="mt-0.5 text-xs text-gray-500">{row.notes}</p>}
         </button>
       </div>
 
       {open && (
         <div className="border-t border-gray-100 p-3">
           <div className="flex flex-wrap gap-2">
-            <NumberField
-              label="Sets"
-              value={entry.sets}
-              onCommit={v => onPatch({ sets: v })}
-            />
-            {entry.holdSeconds !== undefined ? (
+            <NumberField label="Sets" value={row.sets} onCommit={v => onCommitField({ sets: v })} />
+            {row.holdSeconds !== undefined ? (
               <NumberField
                 label="Secs"
-                value={entry.holdSeconds}
-                onCommit={v => onPatch({ holdSeconds: v })}
+                value={row.holdSeconds}
+                onCommit={v => onCommitField({ holdSeconds: v })}
               />
             ) : (
-              <NumberField label="Reps" value={entry.reps} onCommit={v => onPatch({ reps: v })} />
+              <NumberField label="Reps" value={row.reps} onCommit={v => onCommitField({ reps: v })} />
             )}
             <NumberField
               label="kg"
-              value={entry.weightKg}
+              value={row.weightKg}
               step={0.5}
-              onCommit={v => onPatch({ weightKg: v })}
+              onCommit={v => onCommitField({ weightKg: v })}
             />
           </div>
 
           <label className="mt-3 block">
-            <span className="mb-1 block text-xs font-semibold text-gray-600">
-              How did it feel?
-            </span>
+            <span className="mb-1 block text-xs font-semibold text-gray-600">How did it feel?</span>
             <input
               value={note}
               onChange={e => setNote(e.target.value)}
-              onBlur={() => note !== (entry.notes ?? '') && onPatch({ notes: note })}
+              onBlur={() => note !== (row.notes ?? '') && onCommitNote(note)}
               placeholder="Could have done 2 more…"
               className="h-11 w-full rounded-md border border-gray-300 px-3 text-sm"
             />
@@ -284,36 +267,27 @@ function NumberField({
   );
 }
 
-function AddEntryForm({
-  sessionId,
-  onAdded,
+function AddExerciseForm({
+  onAdd,
   onClose,
-  onError,
 }: {
-  sessionId: string;
-  onAdded: (session: ExerciseSession) => void;
+  onAdd: (input: { name: string; volume?: string; load?: string }) => Promise<void>;
   onClose: () => void;
-  onError: (message: string) => void;
 }) {
   const [name, setName] = useState('');
   const [volume, setVolume] = useState('');
   const [load, setLoad] = useState('');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const save = async () => {
     if (!name.trim()) return;
     setSaving(true);
+    setError(null);
     try {
-      const res = await api.addExerciseEntry(sessionId, {
-        name: name.trim(),
-        volumeText: volume.trim(),
-        loadText: load.trim(),
-      });
-      onAdded(res.session);
-      onClose();
-    } catch (err) {
-      console.error('Failed to add exercise:', err);
-      onError('Could not add that exercise.');
+      await onAdd({ name: name.trim(), volume: volume.trim(), load: load.trim() });
+    } catch {
+      setError('Could not add that exercise.');
     } finally {
       setSaving(false);
     }
@@ -356,18 +330,7 @@ function AddEntryForm({
       >
         {saving ? 'Adding…' : 'Add'}
       </button>
+      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
     </div>
   );
-}
-
-// Shared with the desktop list, but inlined here to keep the phone bundle from
-// pulling in the whole desktop section.
-function describeEntry(entry: ExerciseEntry): string {
-  const parts: string[] = [];
-  if (entry.sets && entry.reps) parts.push(`${entry.sets} × ${entry.reps}`);
-  else if (entry.sets && entry.holdSeconds) parts.push(`${entry.sets} × ${entry.holdSeconds}s`);
-  if (entry.perSide && parts.length > 0) parts[parts.length - 1] += ' each side';
-  if (entry.weightKg !== undefined) parts.push(`${entry.weightKg}kg`);
-  else if (entry.bodyweight) parts.push('bodyweight');
-  return parts.join(' · ') || [entry.volumeText, entry.loadText].filter(Boolean).join(' · ');
 }

@@ -6,7 +6,6 @@ import { format, subDays } from 'date-fns';
 import { api } from '@/lib/api';
 import { periodKeyFor } from '@/lib/goal-periods';
 import type { ExerciseAnalysis, ExerciseSession, GoalWithProgress } from '@/types/life';
-import type { ExerciseTarget } from '@/lib/exercise-targets';
 
 // Read-only feeds for the life-area views: the current month's and quarter's
 // goals with their pacing, and the exercise log with its analysis.
@@ -72,32 +71,28 @@ export function useExerciseOverview(enabled: boolean): {
   planned: ExerciseSession[];
   recent: ExerciseSession[];
   analysis: ExerciseAnalysis | null;
-  targets: ExerciseTarget[];
   isLoading: boolean;
   error: string | null;
   refresh: () => void;
 } {
   const [sessions, setSessions] = useState<ExerciseSession[]>([]);
   const [analysis, setAnalysis] = useState<ExerciseAnalysis | null>(null);
-  // What to aim for today — the single most useful thing to have on a phone
-  // while standing in the gym.
-  const [targets, setTargets] = useState<ExerciseTarget[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false);
 
+  // Today's targets aren't fetched here: the Today checklist owns them (see
+  // useTodaySession), so this feed is just the read-only summary below it.
   const refresh = useCallback(async () => {
     if (!hasLoaded) setIsLoading(true);
     setError(null);
     try {
-      const [sessionsRes, analysisRes, targetsRes] = await Promise.all([
+      const [sessionsRes, analysisRes] = await Promise.all([
         api.getExerciseSessions(format(subDays(new Date(), HISTORY_DAYS), 'yyyy-MM-dd')),
         api.getExerciseAnalysis().catch(() => null),
-        api.getExerciseTargets().catch(() => null),
       ]);
       setSessions(sessionsRes.sessions);
       setAnalysis(analysisRes?.analysis ?? null);
-      setTargets(targetsRes?.targets ?? []);
       setHasLoaded(true);
     } catch (err) {
       console.error('Failed to load exercise overview:', err);
@@ -120,5 +115,5 @@ export function useExerciseOverview(enabled: boolean): {
     .sort((a, b) => b.date.localeCompare(a.date))
     .slice(0, RECENT_LIMIT);
 
-  return { planned, recent, analysis, targets, isLoading, error, refresh };
+  return { planned, recent, analysis, isLoading, error, refresh };
 }

@@ -1,0 +1,344 @@
+'use client';
+
+import { useState } from 'react';
+import { format, parseISO } from 'date-fns';
+import { Check, ChevronDown, ChevronRight, Loader2, Plus, Trash2, X } from 'lucide-react';
+
+import { useTodaySession, type FieldPatch, type TodayRow } from '@/hooks/useTodaySession';
+import { describeVolumeLoad } from '@/lib/exercise-targets';
+import { ActionBadge } from './action-badge';
+
+// The desktop "Today" tab: today's workout as an interactive checklist. Every
+// row carries the guidance (what to aim for and why, from last time) alongside
+// the controls to log it. No "start" step — the session is created lazily on
+// the first tick (see useTodaySession).
+export function ExerciseToday() {
+  const {
+    plan,
+    rows,
+    doneCount,
+    totalCount,
+    isLoading,
+    error,
+    busyKey,
+    toggleDone,
+    commitField,
+    commitNote,
+    addExercise,
+    removeRow,
+  } = useTodaySession();
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  if (isLoading) {
+    return <p className="max-w-3xl mx-auto p-6 text-sm text-gray-500">Loading today’s workout…</p>;
+  }
+
+  return (
+    <div className="max-w-3xl mx-auto p-6">
+      <div className="mb-4 flex items-baseline justify-between gap-3">
+        <div>
+          <h2 className="font-semibold text-gray-900">Today</h2>
+          <p className="text-sm text-gray-500">
+            {plan?.label || plan?.components.join(' + ') || format(new Date(), 'EEEE d MMM')}
+          </p>
+        </div>
+        {totalCount > 0 && (
+          <span className="text-sm tabular-nums text-gray-500">
+            {doneCount}/{totalCount} done
+          </span>
+        )}
+      </div>
+
+      {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
+
+      {rows.length === 0 && !adding && (
+        <p className="mb-3 text-sm text-gray-500">
+          No planned exercises for today. Add what you do below.
+        </p>
+      )}
+
+      <div className="space-y-2">
+        {rows.map(row => (
+          <RowCard
+            key={row.key}
+            row={row}
+            busy={busyKey === row.key}
+            open={openKey === row.key}
+            onToggleOpen={() => setOpenKey(openKey === row.key ? null : row.key)}
+            onToggleDone={() => toggleDone(row)}
+            onCommitField={patch => commitField(row, patch)}
+            onCommitNote={note => commitNote(row, note)}
+            onRemove={() => removeRow(row)}
+          />
+        ))}
+      </div>
+
+      <div className="mt-2">
+        {adding ? (
+          <AddExerciseForm
+            onAdd={async input => {
+              await addExercise(input);
+              setAdding(false);
+            }}
+            onClose={() => setAdding(false)}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
+          >
+            <Plus className="w-4 h-4" />
+            Add an exercise
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RowCard({
+  row,
+  busy,
+  open,
+  onToggleOpen,
+  onToggleDone,
+  onCommitField,
+  onCommitNote,
+  onRemove,
+}: {
+  row: TodayRow;
+  busy: boolean;
+  open: boolean;
+  onToggleOpen: () => void;
+  onToggleDone: () => void;
+  onCommitField: (patch: FieldPatch) => void;
+  onCommitNote: (note: string) => void;
+  onRemove: () => void;
+}) {
+  const [note, setNote] = useState(row.notes ?? '');
+  const current = describeVolumeLoad(row);
+
+  return (
+    <div
+      className={`rounded-lg border transition-colors ${
+        row.done ? 'border-emerald-200 bg-emerald-50/40' : 'border-gray-200 bg-white'
+      }`}
+    >
+      <div className="flex items-stretch">
+        {/* One click is the common case: it went as prescribed. */}
+        <button
+          type="button"
+          onClick={onToggleDone}
+          disabled={busy}
+          aria-pressed={row.done}
+          aria-label={row.done ? `Mark ${row.name} not done` : `Mark ${row.name} done`}
+          className="flex w-12 flex-shrink-0 items-center justify-center"
+        >
+          <span
+            className={`flex h-7 w-7 items-center justify-center rounded-full border-2 transition-colors ${
+              row.done
+                ? 'border-emerald-600 bg-emerald-600 text-white'
+                : 'border-gray-300 text-transparent'
+            }`}
+          >
+            {busy ? (
+              <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+            ) : (
+              <Check className="h-4 w-4" />
+            )}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onToggleOpen}
+          aria-expanded={open}
+          className="min-w-0 flex-1 py-3 pr-3 text-left"
+        >
+          <div className="flex items-center gap-2">
+            {open ? (
+              <ChevronDown className="h-4 w-4 shrink-0 text-gray-400" />
+            ) : (
+              <ChevronRight className="h-4 w-4 shrink-0 text-gray-400" />
+            )}
+            <span
+              className={`text-sm font-medium ${
+                row.done ? 'text-gray-500 line-through' : 'text-gray-900'
+              }`}
+            >
+              {row.name}
+            </span>
+            {row.action && <ActionBadge action={row.action} />}
+          </div>
+
+          <p className="mt-0.5 pl-6 text-xs tabular-nums text-gray-600">
+            {current || row.targetText || '—'}
+            {row.targetText && row.targetText !== current && (
+              <span className="text-gray-400"> · target {row.targetText}</span>
+            )}
+          </p>
+          {row.rationale && <p className="mt-0.5 pl-6 text-xs text-gray-500">{row.rationale}</p>}
+          {row.last && (
+            <p className="mt-0.5 pl-6 text-[11px] text-gray-400">
+              Last: {format(parseISO(row.last.date), 'd MMM')}
+              {row.last.sets && row.last.reps ? ` · ${row.last.sets}×${row.last.reps}` : ''}
+              {row.last.weightKg !== undefined ? ` · ${row.last.weightKg}kg` : ''}
+            </p>
+          )}
+          {row.notes && !open && <p className="mt-0.5 pl-6 text-xs text-gray-500">{row.notes}</p>}
+        </button>
+      </div>
+
+      {open && (
+        <div className="border-t border-gray-100 p-3">
+          <div className="flex flex-wrap gap-2">
+            <NumberField label="Sets" value={row.sets} onCommit={v => onCommitField({ sets: v })} />
+            {row.holdSeconds !== undefined ? (
+              <NumberField
+                label="Secs"
+                value={row.holdSeconds}
+                onCommit={v => onCommitField({ holdSeconds: v })}
+              />
+            ) : (
+              <NumberField label="Reps" value={row.reps} onCommit={v => onCommitField({ reps: v })} />
+            )}
+            <NumberField
+              label="kg"
+              value={row.weightKg}
+              step={0.5}
+              onCommit={v => onCommitField({ weightKg: v })}
+            />
+          </div>
+
+          <label className="mt-3 block">
+            <span className="mb-1 block text-xs font-semibold text-gray-600">How did it feel?</span>
+            <input
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              onBlur={() => note !== (row.notes ?? '') && onCommitNote(note)}
+              placeholder="Could have done 2 more…"
+              className="h-10 w-full rounded-md border border-gray-300 px-3 text-sm"
+            />
+          </label>
+          <p className="mt-1 text-[11px] text-gray-400">
+            This note sets next session&apos;s target, so &ldquo;could have done 2 more&rdquo; is
+            worth writing.
+          </p>
+
+          <button
+            type="button"
+            onClick={onRemove}
+            className="mt-3 flex items-center gap-1.5 text-xs font-medium text-gray-400 hover:text-red-600"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Remove from this session
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Commits on blur rather than on every keystroke, so a half-typed "3" in a
+// weight field never gets saved as the weight.
+function NumberField({
+  label,
+  value,
+  step = 1,
+  onCommit,
+}: {
+  label: string;
+  value?: number;
+  step?: number;
+  onCommit: (value: number) => void;
+}) {
+  const [text, setText] = useState(value === undefined ? '' : String(value));
+
+  return (
+    <label className="flex-1 min-w-20">
+      <span className="mb-1 block text-xs font-semibold text-gray-600">{label}</span>
+      <input
+        type="number"
+        inputMode="decimal"
+        step={step}
+        value={text}
+        onChange={e => setText(e.target.value)}
+        onBlur={() => {
+          const parsed = Number(text);
+          if (text.trim() !== '' && Number.isFinite(parsed) && parsed !== value) onCommit(parsed);
+        }}
+        className="h-10 w-full rounded-md border border-gray-300 px-2 text-center text-sm tabular-nums"
+      />
+    </label>
+  );
+}
+
+function AddExerciseForm({
+  onAdd,
+  onClose,
+}: {
+  onAdd: (input: { name: string; volume?: string; load?: string }) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [volume, setVolume] = useState('');
+  const [load, setLoad] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    if (!name.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onAdd({ name: name.trim(), volume: volume.trim(), load: load.trim() });
+    } catch {
+      setError('Could not add that exercise.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs font-semibold text-gray-600">New exercise</span>
+        <button type="button" onClick={onClose} aria-label="Cancel" className="p-1 text-gray-400">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder="Exercise"
+          className="h-10 flex-1 min-w-40 rounded-md border border-gray-300 px-3 text-sm"
+          autoFocus
+        />
+        <input
+          value={volume}
+          onChange={e => setVolume(e.target.value)}
+          placeholder="3*8"
+          className="h-10 w-24 rounded-md border border-gray-300 px-3 text-sm"
+        />
+        <input
+          value={load}
+          onChange={e => setLoad(e.target.value)}
+          placeholder="27kg"
+          className="h-10 w-24 rounded-md border border-gray-300 px-3 text-sm"
+        />
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving || !name.trim()}
+          className="h-10 rounded-md bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50"
+        >
+          {saving ? 'Adding…' : 'Add'}
+        </button>
+      </div>
+      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+    </div>
+  );
+}

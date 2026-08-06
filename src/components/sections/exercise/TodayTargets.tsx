@@ -2,18 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { format, parseISO } from 'date-fns';
-import { ArrowUp, Equal, TrendingDown, Sparkles } from 'lucide-react';
 
 import { api } from '@/lib/api';
-import type { ExerciseTarget, TargetAction } from '@/lib/exercise-targets';
-
-const ACTION_STYLE: Record<TargetAction, { label: string; className: string; Icon: typeof ArrowUp }> = {
-  increase: { label: 'Go up', className: 'text-emerald-700 bg-emerald-50', Icon: ArrowUp },
-  'add-reps': { label: 'Add reps', className: 'text-emerald-700 bg-emerald-50', Icon: ArrowUp },
-  hold: { label: 'Repeat', className: 'text-blue-700 bg-blue-50', Icon: Equal },
-  reduce: { label: 'Ease off', className: 'text-amber-700 bg-amber-50', Icon: TrendingDown },
-  'no-history': { label: 'New', className: 'text-gray-600 bg-gray-100', Icon: Sparkles },
-};
+import { describeVolumeLoad, type ExerciseTarget } from '@/lib/exercise-targets';
+import { ActionBadge } from './action-badge';
 
 // What to aim for today, from the last time each exercise was trained.
 //
@@ -61,52 +53,37 @@ export function TodayTargets({ date }: { date?: string }) {
       </p>
 
       <ul className="divide-y divide-gray-100">
-        {targets.map(target => {
-          const style = ACTION_STYLE[target.action];
-          const Icon = style.Icon;
-          return (
-            <li key={target.key} className="py-2.5">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-gray-900">{target.name}</p>
-                  <p className="mt-0.5 text-xs text-gray-500">{target.rationale}</p>
-                  {target.last && (
-                    <p className="mt-0.5 text-[11px] text-gray-400">
-                      Last: {format(parseISO(target.last.date), 'd MMM')}
-                      {target.last.sets && target.last.reps
-                        ? ` · ${target.last.sets}×${target.last.reps}`
-                        : ''}
-                      {target.last.weightKg !== undefined ? ` · ${target.last.weightKg}kg` : ''}
-                    </p>
-                  )}
-                </div>
-
-                <div className="flex flex-shrink-0 flex-col items-end gap-1">
-                  <span
-                    className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold ${style.className}`}
-                  >
-                    <Icon className="h-3 w-3" />
-                    {style.label}
-                  </span>
-                  <span className="text-sm font-semibold tabular-nums text-gray-900">
-                    {describeTarget(target)}
-                  </span>
-                </div>
+        {targets.map(target => (
+          <li key={target.key} className="py-2.5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-900">{target.name}</p>
+                <p className="mt-0.5 text-xs text-gray-500">{target.rationale}</p>
+                {target.last && (
+                  <p className="mt-0.5 text-[11px] text-gray-400">
+                    Last: {format(parseISO(target.last.date), 'd MMM')}
+                    {target.last.sets && target.last.reps
+                      ? ` · ${target.last.sets}×${target.last.reps}`
+                      : ''}
+                    {target.last.weightKg !== undefined ? ` · ${target.last.weightKg}kg` : ''}
+                  </p>
+                )}
               </div>
-            </li>
-          );
-        })}
+
+              <div className="flex flex-shrink-0 flex-col items-end gap-1">
+                <ActionBadge action={target.action} />
+                <span className="text-sm font-semibold tabular-nums text-gray-900">
+                  {describeTarget(target)}
+                </span>
+              </div>
+            </div>
+          </li>
+        ))}
       </ul>
     </section>
   );
 }
 
 function describeTarget(target: ExerciseTarget): string {
-  const volume = target.sets && target.reps
-    ? `${target.sets} × ${target.reps}`
-    : target.sets && target.holdSeconds
-      ? `${target.sets} × ${target.holdSeconds}s`
-      : '';
-  const load = target.weightKg !== undefined ? `${target.weightKg}kg` : '';
-  return [volume, load].filter(Boolean).join(' · ') || '—';
+  return describeVolumeLoad(target) || '—';
 }

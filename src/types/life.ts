@@ -253,14 +253,16 @@ export interface ParsedPlannedSession {
 export interface ExerciseTypeSummary {
   type: string;
   sessions: number;
-  minutes: number;
+  // Exercises ticked done across the sessions of this type. Replaces a minutes
+  // total, which was always zero for gym sessions logged exercise-by-exercise.
+  exercisesDone: number;
   distanceKm: number;
 }
 
 export interface ExerciseWeekSummary {
   weekStart: string; // yyyy-MM-dd Monday
   sessions: number;
-  minutes: number;
+  exercisesDone: number;
   distanceKm: number;
   plannedSessions: number;
 }
@@ -270,7 +272,9 @@ export interface ExerciseAnalysis {
   from: string;
   to: string;
   totalSessions: number;
-  totalMinutes: number;
+  // Exercises ticked done across every completed session in the window — the
+  // count-based measure of volume that replaced session minutes.
+  totalExercisesDone: number;
   totalDistanceKm: number;
   // Sessions per week averaged over the window.
   sessionsPerWeek: number;
