@@ -145,10 +145,16 @@ export interface PrepMeetingRow {
 
 export interface PrepCandidatesResponse {
   meetings: PrepMeetingRow[];
-  unplaced: Array<{ key: string; title: string }>;
+  // Each unplaced meeting carries a short human reason (e.g. "meeting is today —
+  // no free slot left before it starts"), rendered after the title.
+  unplaced: Array<{ key: string; title: string; reason: string }>;
   // Working days (yyyy-MM-dd) of the remaining week, for the per-meeting prep-day
   // dropdown. Absent on older responses.
   workingDays?: string[];
+  // Early-next-week working days (yyyy-MM-dd) offered as prep-day picks for
+  // next-week meetings, so their dropdown can include "Day before"/"Day of".
+  // Absent on older responses.
+  nextWeekWorkingDays?: string[];
 }
 
 export interface WeekCandidate {

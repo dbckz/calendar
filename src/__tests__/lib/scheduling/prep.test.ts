@@ -37,6 +37,7 @@ function run(input: {
   meetings: PrepMeeting[];
   scheduling?: Partial<WorkflowConfig['scheduling']>;
   busyIntervals?: BusyInterval[];
+  nextWeekWorkingDays?: string[];
 }) {
   return proposePrepBlocks({
     meetings: input.meetings,
@@ -44,6 +45,7 @@ function run(input: {
     busyIntervals: input.busyIntervals ?? [],
     weekStart: WEEK_START,
     now: WEEK_START,
+    ...(input.nextWeekWorkingDays ? { nextWeekWorkingDays: input.nextWeekWorkingDays } : {}),
   });
 }
 
@@ -302,6 +304,79 @@ describe('proposePrepBlocks', () => {
     });
     expect(placed).toHaveLength(0);
     expect(unplaced).toHaveLength(1);
+  });
+
+  it('places a next-week meeting on its own day when picked (preferredDate outside this week), before the meeting', () => {
+    // Meeting next Monday 11:00. User picks the "Day of" (next Monday itself) — a
+    // day outside THIS week's working days. Prep must land that day, after the
+    // morning exclusion (earliest 10:30) and before the 11:00 meeting start.
+    const startMs = new Date(2026, 6, 20, 11, 0).getTime(); // next Mon 11:00
+    const { placed, unplaced } = run({
+      meetings: [meeting({ startMs, preferLatest: true, preferredDate: '2026-07-20' })],
+      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+      nextWeekWorkingDays: ['2026-07-20', '2026-07-21'],
+    });
+    expect(unplaced).toHaveLength(0);
+    expect(placed).toHaveLength(1);
+    expect(placed[0].date).toBe('2026-07-20'); // next Monday, the picked day
+    expect(placed[0].start).toBe('10:30'); // after the exclusion, before 11:00
+  });
+
+  it('falls back from a next-week pick through earlier days into this week (never a later day)', () => {
+    // Meeting next Tuesday; user picks next Monday, but next Monday is full. Prep
+    // walks back to THIS week's Friday (never forward to next Tuesday).
+    const startMs = new Date(2026, 6, 21, 14, 0).getTime(); // next Tue 14:00
+    const nextMondayFull: BusyInterval = {
+      start: new Date(2026, 6, 20, 9, 0),
+      end: new Date(2026, 6, 20, 17, 0),
+    };
+    const { placed, unplaced } = run({
+      meetings: [meeting({ startMs, preferLatest: true, preferredDate: '2026-07-20' })],
+      scheduling: { workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] },
+      busyIntervals: [nextMondayFull],
+      nextWeekWorkingDays: ['2026-07-20', '2026-07-21'],
+    });
+    expect(unplaced).toHaveLength(0);
+    expect(placed).toHaveLength(1);
+    expect(placed[0].date).toBe('2026-07-17'); // this week's Friday
+  });
+
+  it('default placement walks back beyond the day-before when it and the day-of are full', () => {
+    // Friday meeting; Thursday (day before) and Friday (day of) are both fully
+    // busy. Placement walks further back to Wednesday rather than going unplaced.
+    const startMs = new Date(2026, 6, 17, 14, 0).getTime(); // Fri 14:00
+    const busy: BusyInterval[] = [
+      { start: new Date(2026, 6, 16, 9, 0), end: new Date(2026, 6, 16, 17, 0) }, // Thu full
+      { start: new Date(2026, 6, 17, 9, 0), end: new Date(2026, 6, 17, 17, 0) }, // Fri full
+    ];
+    const { placed, unplaced } = run({ meetings: [meeting({ startMs })], busyIntervals: busy });
+    expect(unplaced).toHaveLength(0);
+    expect(placed).toHaveLength(1);
+    expect(placed[0].date).toBe('2026-07-15'); // Wednesday
+    expect(placed[0].start).toBe('12:00'); // afternoon-first
+  });
+
+  it('gives a "meeting is today" reason when a same-day meeting has no slot before it', () => {
+    // Monday meeting at 09:00 (today, now = Monday): no prior day and no room.
+    const startMs = new Date(2026, 6, 13, 9, 0).getTime();
+    const { unplaced } = run({ meetings: [meeting({ startMs })] });
+    expect(unplaced).toHaveLength(1);
+    expect(unplaced[0].reason).toBe('meeting is today — no free slot left before it starts');
+  });
+
+  it('names the days tried when a non-today meeting fits nowhere', () => {
+    // Wednesday meeting; Mon/Tue/Wed all fully busy, so the day-before, day-of and
+    // walk-back all fail. The reason lists the working days tried, chronologically.
+    const startMs = new Date(2026, 6, 15, 14, 0).getTime(); // Wed 14:00
+    const busy: BusyInterval[] = [
+      { start: new Date(2026, 6, 13, 9, 0), end: new Date(2026, 6, 13, 17, 0) }, // Mon full
+      { start: new Date(2026, 6, 14, 9, 0), end: new Date(2026, 6, 14, 17, 0) }, // Tue full
+      { start: new Date(2026, 6, 15, 9, 0), end: new Date(2026, 6, 15, 17, 0) }, // Wed full
+    ];
+    const { placed, unplaced } = run({ meetings: [meeting({ startMs })], busyIntervals: busy });
+    expect(placed).toHaveLength(0);
+    expect(unplaced).toHaveLength(1);
+    expect(unplaced[0].reason).toBe('no free slot on Mon, Tue, Wed before the meeting');
   });
 
 });

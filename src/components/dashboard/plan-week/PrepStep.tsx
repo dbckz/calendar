@@ -40,15 +40,20 @@ export function PrepStep({
   const suggested = prepData.meetings.filter(m => m.needsPrep && m.block);
   const others = prepData.meetings.filter(m => !m.needsPrep);
   const workingDays = prepData.workingDays ?? [];
+  const nextWeekWorkingDays = prepData.nextWeekWorkingDays ?? [];
 
-  // Per-meeting prep-day options: every working day from now up to and
-  // including the meeting's day. Labels: the meeting day is "Day of", the day
-  // immediately before is "Day before", the rest are "EEE d" (e.g. "Mon 20").
-  const dayOptionsFor = (meetingDate: string): Array<{ value: string; label: string }> => {
+  // Per-meeting prep-day options: every working day from now up to and including
+  // the meeting's day. For an early-next-week meeting the pool also includes the
+  // offered next-week working days, so its own day ("Day of") and the day before
+  // are pickable rather than only this week's tail. Labels: the meeting day is
+  // "Day of", the day immediately before is "Day before", the rest are "EEE d".
+  const dayOptionsFor = (m: (typeof prepData.meetings)[number]): Array<{ value: string; label: string }> => {
+    const meetingDate = m.date;
     const md = parseISO(meetingDate);
     const dayBefore = format(new Date(md.getFullYear(), md.getMonth(), md.getDate() - 1), 'yyyy-MM-dd');
-    return workingDays
-      .filter(d => d <= meetingDate)
+    const pool = [...workingDays, ...(m.nextWeek ? nextWeekWorkingDays : [])].filter(d => d <= meetingDate);
+    return [...new Set(pool)]
+      .sort()
       .map(d => ({
         value: d,
         label:
@@ -113,7 +118,7 @@ export function PrepStep({
                   />
                   <RowSelect
                     value={prepDays[m.eventId] ?? b.date}
-                    options={dayOptionsFor(m.date)}
+                    options={dayOptionsFor(m)}
                     onChange={v => changePrepDay(m.eventId, v)}
                     disabled={prepBusy || isLoading}
                     ariaLabel={`Prep day for ${m.title}`}
@@ -136,7 +141,9 @@ export function PrepStep({
           <p className="text-xs font-medium text-amber-800 mb-1">Couldn&apos;t fit prep for:</p>
           <ul className="text-xs text-amber-700 space-y-0.5">
             {prepData.unplaced.map(u => (
-              <li key={u.key}>{u.title}</li>
+              <li key={u.key}>
+                <span className="font-medium">{u.title}</span> · {u.reason}
+              </li>
             ))}
           </ul>
         </div>
