@@ -99,8 +99,9 @@ export function TypeStep({
       </div>
 
       <p className="text-xs text-gray-400">
-        {keptCount} of {typeRows.length} will be written to Asana; the rest stay untyped. Skip to
-        continue without typing.
+        {keptCount} of {typeRows.length} will be saved; the rest stay untyped. Types for workspaces
+        without a Type field are stored in the app, not written back to Asana. Skip to continue
+        without typing.
       </p>
     </div>
   );

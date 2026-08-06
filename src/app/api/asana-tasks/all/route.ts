@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getIncompleteTasks, asanaTaskToCalendarEvent, refreshAsanaToken } from '@/lib/asana';
 import { getEnabledAsanaIntegrations, updateIntegration } from '@/lib/integration-storage';
+import { getLocalTaskTypes, overlayLocalType } from '@/lib/local-task-types';
 import { CalendarEvent, AsanaIntegration } from '@/types';
 
 export async function GET() {
@@ -38,15 +39,24 @@ export async function GET() {
       }
     });
 
+    // Overlay locally-stored Types (for integrations with no writable Asana Type
+    // field, e.g. DBC) as a synthesized Type custom field, so downstream readers
+    // and the sidebar's Type grouping see them like any Asana Type.
+    const localTypes = await getLocalTaskTypes();
+    const withLocalTypes =
+      Object.keys(localTypes).length === 0
+        ? allEvents
+        : allEvents.map(e => ({ ...e, customFields: overlayLocalType(e.id, e.customFields, localTypes) }));
+
     // Sort by due date (tasks without due date go to the end)
-    allEvents.sort((a, b) => {
+    withLocalTypes.sort((a, b) => {
       if (!a.dueOn && !b.dueOn) return 0;
       if (!a.dueOn) return 1;
       if (!b.dueOn) return -1;
       return a.dueOn.localeCompare(b.dueOn);
     });
 
-    return NextResponse.json(allEvents);
+    return NextResponse.json(withLocalTypes);
   } catch (error) {
     console.error('Error fetching all Asana tasks:', error);
     return NextResponse.json(

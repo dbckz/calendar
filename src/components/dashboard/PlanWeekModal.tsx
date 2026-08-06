@@ -32,10 +32,12 @@ import {
   isProjectInTriageCatalogue,
   DEFAULT_TRIAGE_PROJECT_FILTER,
 } from '@/lib/triage-project-filter';
+import { typeChoicesFor } from '@/lib/type-choices';
 
 import {
   type Step,
   STEP_LABELS,
+  PRIORITIES_MATCH_LABEL,
   type UntypedTask,
   type TypeRow,
   type EditableProposal,
@@ -94,17 +96,20 @@ export function PlanWeekModal({
     const out: UntypedTask[] = [];
     for (const t of asanaTasks) {
       if (t.completed || !t.integrationId) continue;
-      const info = typeFieldInfoByIntegration.get(t.integrationId);
-      if (!info || info.enumOptions.size === 0) continue;
       const typeValue = t.customFields?.find(cf => cf.name.toLowerCase() === 'type')?.displayValue;
-      if (typeValue) continue; // already typed
+      if (typeValue) continue; // already typed (Asana Type, or an overlaid local Type)
+      // One rule for the labels we can write and where (Asana field vs local
+      // store). No labels available anywhere → the task can't be typed, so skip it.
+      const { labels, writeTarget } = typeChoicesFor(t.integrationId, typeFieldInfoByIntegration);
+      if (labels.length === 0) continue;
       out.push({
         gid: t.id,
         integrationId: t.integrationId,
         title: t.title,
         description: t.description,
         integrationName: t.integrationName,
-        allowedTypes: Array.from(info.enumOptions.keys()).sort(),
+        allowedTypes: labels,
+        writeTarget,
       });
     }
     return out;
@@ -124,16 +129,20 @@ export function PlanWeekModal({
     ((reminderList?.length ?? 0) > 0 || calendarReminders.length > 0) &&
     (asanaIntegrations?.length ?? 0) > 0;
 
-  // The type step is prepended only when there are untyped tasks to classify; the
-  // reminders step is inserted after priorities only when there are reminders.
-  const stepOrder = useMemo<Exclude<Step, 'done'>[]>(
+  // One entry per SCREEN the user actually pages through, for the header step
+  // dots. This differs from the step list because the 'priorities' step is two
+  // screens (input then match-review). The type screen is prepended only when
+  // there are untyped tasks to classify; the reminders screen is inserted after
+  // priorities only when there are reminders.
+  const screenOrder = useMemo<Array<{ key: string; title: string }>>(
     () => [
-      ...(hasTypeStep ? (['type'] as const) : []),
-      'priorities',
-      ...(hasRemindersStep ? (['reminders'] as const) : []),
-      'prep',
-      'tasks',
-      'review',
+      ...(hasTypeStep ? [{ key: 'type', title: STEP_LABELS.type }] : []),
+      { key: 'priorities-input', title: STEP_LABELS.priorities },
+      { key: 'priorities-review', title: PRIORITIES_MATCH_LABEL },
+      ...(hasRemindersStep ? [{ key: 'reminders', title: STEP_LABELS.reminders }] : []),
+      { key: 'prep', title: STEP_LABELS.prep },
+      { key: 'tasks', title: STEP_LABELS.tasks },
+      { key: 'review', title: STEP_LABELS.review },
     ],
     [hasTypeStep, hasRemindersStep]
   );
@@ -364,8 +373,14 @@ export function PlanWeekModal({
     setIsApplyingTypes(true);
     setError(null);
     try {
-      const outcomes = await Promise.allSettled(
-        toWrite.map(r => {
+      // Asana-target rows write to the task's Asana Type field; local-target rows
+      // (integrations with no writable Asana Type, e.g. DBC) save to the app-local
+      // Type store in one batch. Both paths share the partial-failure handling.
+      const asanaRows = toWrite.filter(r => r.writeTarget !== 'local');
+      const localRows = toWrite.filter(r => r.writeTarget === 'local');
+
+      const asanaOutcomes = await Promise.allSettled(
+        asanaRows.map(r => {
           const info = typeFieldInfoByIntegration.get(r.integrationId);
           const optionGid = info?.enumOptions.get(r.chosen);
           if (!info || !optionGid) {
@@ -376,6 +391,16 @@ export function PlanWeekModal({
           });
         })
       );
+
+      let localFailed = 0;
+      if (localRows.length > 0) {
+        try {
+          await api.setLocalTaskTypes(Object.fromEntries(localRows.map(r => [r.gid, r.chosen])));
+        } catch {
+          localFailed = localRows.length; // the batch write is all-or-nothing
+        }
+      }
+
       // Learn from what he actually decided: record each written label against its
       // task title so the Type classifier follows his precedent next time. An
       // override (chosen ≠ suggested) is the stronger signal. Best-effort — never
@@ -384,7 +409,7 @@ export function PlanWeekModal({
         toWrite.map(r => ({ title: r.title, type: r.chosen, override: r.chosen !== r.suggested }))
       ).catch(() => {});
 
-      const failed = outcomes.filter(o => o.status === 'rejected').length;
+      const failed = asanaOutcomes.filter(o => o.status === 'rejected').length + localFailed;
       onApplied?.(); // refresh so applied types show up in the allocation categories
       if (failed > 0) {
         setError(`${failed} of ${toWrite.length} type update${toWrite.length === 1 ? '' : 's'} failed — retry, or Skip to continue.`);
@@ -452,7 +477,7 @@ export function PlanWeekModal({
         projects: projects
           .filter(p => p.integrationId === intg.id && isProjectInTriageCatalogue(p, triageFilter))
           .map(p => ({ gid: p.gid, name: p.name })),
-        types: Array.from(typeFieldInfoByIntegration?.get(intg.id)?.enumOptions.keys() ?? []).sort(),
+        types: typeChoicesFor(intg.id, typeFieldInfoByIntegration).labels,
       }));
 
       // Classify in chunks so a long list (~37 reminders) shows real progress
@@ -505,7 +530,7 @@ export function PlanWeekModal({
           const validType =
             !!s &&
             !!s.taskType &&
-            (typeFieldInfoByIntegration?.get(integrationId)?.enumOptions.has(s.taskType) ?? false);
+            typeChoicesFor(integrationId, typeFieldInfoByIntegration).labels.includes(s.taskType);
           // Default to the AI's action, but only trust "convert" when it resolved
           // to a real workspace; otherwise keep it as a reminder.
           const action = validWorkspace && s!.action === 'convert' ? ('convert' as const) : ('keep' as const);
@@ -1036,13 +1061,25 @@ export function PlanWeekModal({
     try {
       const outcomes = await Promise.allSettled([
         ...conversions.map(async row => {
-          const info = typeFieldInfoByIntegration?.get(row.integrationId);
-          const optionGid = row.taskType ? info?.enumOptions.get(row.taskType) : undefined;
+          // Route the chosen Type to the right place: an Asana-writable workspace
+          // gets a customFields write; a local-only one (e.g. DBC) has the label
+          // set server-side against the new task's gid (see createAsanaTask).
+          const typeOptions: { customFields?: Record<string, string>; localType?: string } = {};
+          if (row.taskType) {
+            const { writeTarget } = typeChoicesFor(row.integrationId, typeFieldInfoByIntegration);
+            if (writeTarget === 'local') {
+              typeOptions.localType = row.taskType;
+            } else {
+              const info = typeFieldInfoByIntegration?.get(row.integrationId);
+              const optionGid = info?.enumOptions.get(row.taskType);
+              if (info && optionGid) typeOptions.customFields = { [info.fieldGid]: optionGid };
+            }
+          }
           await api.createAsanaTask(row.integrationId, row.name.trim(), {
             ...(row.notes.trim() ? { notes: row.notes.trim() } : {}),
             ...(row.dueOn ? { dueOn: row.dueOn } : {}),
             ...(row.projectGid ? { projectGid: row.projectGid } : {}),
-            ...(info && optionGid ? { customFields: { [info.fieldGid]: optionGid } } : {}),
+            ...typeOptions,
           });
           // Only remove the reminder once its task exists — and only when there
           // IS one. A calendar-derived row has no Google Task behind it; the
@@ -1176,7 +1213,12 @@ export function PlanWeekModal({
 
   if (!isOpen) return null;
 
-  const activeIndex = step === 'done' ? stepOrder.length : stepOrder.indexOf(step);
+  // Map the current step (and, for priorities, its input/review phase) onto the
+  // screen the active dot should mark. 'done' fills every dot (index = length).
+  const activeScreenKey =
+    step === 'priorities' ? (matchRows === null ? 'priorities-input' : 'priorities-review') : step;
+  const activeIndex =
+    step === 'done' ? screenOrder.length : screenOrder.findIndex(s => s.key === activeScreenKey);
   const canBack =
     (step === 'priorities' && matchRows !== null) ||
     step === 'reminders' ||
@@ -1220,8 +1262,8 @@ export function PlanWeekModal({
           <div className="flex items-center gap-4">
             {/* Step dots */}
             <div className="hidden sm:flex items-center gap-1.5">
-              {stepOrder.map((s, i) => (
-                <div key={s} className="flex items-center gap-1.5" title={STEP_LABELS[s]}>
+              {screenOrder.map((s, i) => (
+                <div key={s.key} className="flex items-center gap-1.5" title={s.title}>
                   <span
                     className={`w-2 h-2 rounded-full transition-colors ${
                       i < activeIndex

@@ -5,12 +5,14 @@ import { CalendarEvent, CalendarEventResponse, ScheduledAsanaTask, AsanaProject,
 import { api, parseCalendarEvents, ApiRequestError } from '@/lib/api';
 import { isToday, isPast, isThisWeek, parseISO, compareAsc } from 'date-fns';
 import { readAsanaTasksCache, writeAsanaTasksCache } from '@/lib/cache';
+import { LOCAL_TYPE_FIELD_GID } from '@/lib/local-task-types-shared';
 
 interface CreateAsanaTaskOptions {
   notes?: string;
   dueOn?: string;
   projectGid?: string;
   customFields?: Record<string, string>; // fieldGid -> enumOptionGid
+  localType?: string; // Type label for a local-only workspace (e.g. DBC), set server-side
 }
 
 interface UpdateAsanaTaskOptions {
@@ -313,7 +315,10 @@ export function useAsanaTasks(): UseAsanaTasksReturn {
       if (!task.integrationId) continue;
 
       const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
-      if (typeField) {
+      // A synthesized local-type field (gid 'local-type') carries a Type label but
+      // does NOT make the integration Asana-writable — skip it here so a DBC task
+      // never makes DBC look like it has a writable Type field.
+      if (typeField && typeField.gid !== LOCAL_TYPE_FIELD_GID) {
         if (!infoMap.has(task.integrationId)) {
           infoMap.set(task.integrationId, {
             fieldGid: typeField.gid,

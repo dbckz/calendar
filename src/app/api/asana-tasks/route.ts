@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getTasksForDate, asanaTaskToCalendarEvent, refreshAsanaToken, createTask, CreateTaskParams } from '@/lib/asana';
 import { getEnabledAsanaIntegrations, updateIntegration, getIntegrationById } from '@/lib/integration-storage';
+import { setLocalTaskTypes } from '@/lib/local-task-types';
 import { CalendarEvent, AsanaIntegration } from '@/types';
 
 export async function GET(request: NextRequest) {
@@ -86,7 +87,7 @@ async function fetchTasksFromIntegration(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { integrationId, name, notes, dueOn, projectGid, customFields, tagGids } = body;
+    const { integrationId, name, notes, dueOn, projectGid, customFields, tagGids, localType } = body;
 
     if (!integrationId) {
       return NextResponse.json({ error: 'integrationId is required' }, { status: 400 });
@@ -155,6 +156,17 @@ export async function POST(request: NextRequest) {
       asanaIntegration.workspaceId,
       taskParams
     );
+
+    // For a workspace with no writable Asana Type field (e.g. DBC), the chosen
+    // Type is remembered in the app-local store, keyed by the new task's gid.
+    // Best-effort: a failed local write must not fail task creation.
+    if (localType && typeof localType === 'string' && task.gid) {
+      try {
+        await setLocalTaskTypes({ [task.gid]: localType });
+      } catch (err) {
+        console.error('Failed to set local Type for new task:', err);
+      }
+    }
 
     // Convert to calendar event format for consistency
     const event = asanaTaskToCalendarEvent(task);

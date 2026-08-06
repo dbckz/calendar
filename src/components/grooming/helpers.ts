@@ -1,4 +1,5 @@
 import { CalendarEventResponse } from '@/types';
+import { LOCAL_TYPE_FIELD_GID } from '@/lib/local-task-types-shared';
 
 // Per-integration "Type" custom field info: the field's gid plus a label -> enum
 // option gid map. Mirrors the logic in useAsanaTasks (typeFieldInfoByIntegration):
@@ -17,7 +18,9 @@ export function deriveTypeFieldInfo(
   for (const task of tasks) {
     if (!task.integrationId) continue;
     const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
-    if (!typeField) continue;
+    // Skip a synthesized local-type field: it carries a Type label but must not
+    // make its integration look Asana-writable (see local-task-types-shared).
+    if (!typeField || typeField.gid === LOCAL_TYPE_FIELD_GID) continue;
 
     if (!infoMap.has(task.integrationId)) {
       infoMap.set(task.integrationId, { fieldGid: typeField.gid, options: new Map() });

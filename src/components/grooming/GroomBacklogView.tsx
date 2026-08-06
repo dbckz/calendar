@@ -5,6 +5,7 @@ import { format, parseISO } from 'date-fns';
 import { CalendarEventResponse } from '@/types';
 import { api } from '@/lib/api';
 import { useToast } from '@/hooks/useToast';
+import { typeChoicesFor } from '@/lib/type-choices';
 import { TypeFieldInfo, currentTypeOptionGid } from './helpers';
 
 interface GroomBacklogViewProps {
@@ -20,7 +21,14 @@ interface Draft {
   title: string;
   notes: string;
   dueOn: string;
-  typeGid: string;
+  typeGid: string; // Asana enum option gid (asana-writable workspaces)
+  localType: string; // Type label (local-only workspaces, e.g. DBC)
+}
+
+// The task's current Type label, read from the (possibly overlaid) Type field.
+// For a local-only workspace this is the local store's label.
+function currentTypeLabel(task: CalendarEventResponse): string {
+  return task.customFields?.find(cf => cf.name.toLowerCase() === 'type')?.displayValue ?? '';
 }
 
 const GUIDANCE = [
@@ -57,9 +65,19 @@ export function GroomBacklogView({
   const currentGid = queue[0];
   const current = currentGid ? taskById.get(currentGid) : undefined;
   const typeInfo = current ? typeFieldInfoByIntegration.get(current.integrationId) : undefined;
+  // One rule for the labels offered and where a chosen one is written. A local
+  // workspace (no writable Asana Type field, e.g. DBC) offers the local union
+  // labels and its Type is saved to the app-local store.
+  const typeChoices = typeChoicesFor(current?.integrationId, typeFieldInfoByIntegration);
+  // Both write targets render the same Type select; only what an option carries
+  // differs — an Asana enum option gid, or the label itself for a local workspace.
+  const isLocalType = typeChoices.writeTarget === 'local';
+  const typeOptions = isLocalType
+    ? typeChoices.labels.map(label => ({ value: label, label }))
+    : (typeInfo?.options ?? []).map(o => ({ value: o.gid, label: o.label }));
 
   // Reset the edit draft whenever the current task changes.
-  const [draft, setDraft] = useState<Draft>({ title: '', notes: '', dueOn: '', typeGid: '' });
+  const [draft, setDraft] = useState<Draft>({ title: '', notes: '', dueOn: '', typeGid: '', localType: '' });
   useEffect(() => {
     if (!current) return;
     setDraft({
@@ -67,6 +85,7 @@ export function GroomBacklogView({
       notes: current.description ?? '',
       dueOn: current.dueOn ?? '',
       typeGid: currentTypeOptionGid(current) ?? '',
+      localType: currentTypeLabel(current),
     });
     setShowDelegate(false);
     setBrief('');
@@ -84,7 +103,9 @@ export function GroomBacklogView({
     if (draft.title.trim() && draft.title !== task.title) updates.name = draft.title.trim();
     if (draft.notes !== (task.description ?? '')) updates.notes = draft.notes;
     if (draft.dueOn !== (task.dueOn ?? '')) updates.dueOn = draft.dueOn || null;
-    if (typeInfo && draft.typeGid !== (currentTypeOptionGid(task) ?? '')) {
+    // Only an Asana-writable workspace writes the Type as a custom field; a
+    // local-only one is handled by groomCurrent via the app-local store.
+    if (!isLocalType && typeInfo && draft.typeGid !== (currentTypeOptionGid(task) ?? '')) {
       updates.customFields = { [typeInfo.fieldGid]: draft.typeGid || null };
     }
     return updates;
@@ -102,6 +123,11 @@ export function GroomBacklogView({
     const updates = buildTaskUpdates(task);
     if (Object.keys(updates).length > 0) {
       await api.updateAsanaTask(task.id, task.integrationId, updates);
+    }
+    // Local-only workspace: save the chosen Type label to the app-local store
+    // ('' clears it — null deletes). Asana workspaces are handled above.
+    if (isLocalType && draft.localType !== currentTypeLabel(task)) {
+      await api.setLocalTaskTypes({ [task.id]: draft.localType || null });
     }
     await api.upsertTaskMetadata(task.id, task.integrationId, {
       groomed: true,
@@ -247,13 +273,19 @@ export function GroomBacklogView({
             <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Type</label>
             <select
               className={`${inputClass} bg-white disabled:bg-gray-100`}
-              value={draft.typeGid}
-              disabled={!typeInfo || typeInfo.options.length === 0}
-              onChange={e => setDraft(d => ({ ...d, typeGid: e.target.value }))}
+              value={isLocalType ? draft.localType : draft.typeGid}
+              disabled={typeOptions.length === 0}
+              onChange={e =>
+                setDraft(d =>
+                  isLocalType
+                    ? { ...d, localType: e.target.value }
+                    : { ...d, typeGid: e.target.value }
+                )
+              }
             >
               <option value="">—</option>
-              {typeInfo?.options.map(o => (
-                <option key={o.gid} value={o.gid}>
+              {typeOptions.map(o => (
+                <option key={o.value} value={o.value}>
                   {o.label}
                 </option>
               ))}

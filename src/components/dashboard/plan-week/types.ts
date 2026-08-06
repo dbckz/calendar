@@ -12,6 +12,11 @@ export const STEP_LABELS: Record<Exclude<Step, 'done'>, string> = {
   review: 'Review',
 };
 
+// The 'priorities' step is really two screens the user pages through: an input
+// phase (type your priorities) and a match-review phase. The header step dots
+// give each its own dot, so the review phase needs its own label.
+export const PRIORITIES_MATCH_LABEL = 'Review matches';
+
 // Row state for the reminders-triage step: one Google Tasks reminder plus the
 // user's (AI-seeded, fully editable) decision about whether to keep it as a
 // reminder or convert it into an Asana task, and — when converting — the
@@ -38,14 +43,18 @@ export interface ReminderTriageRow {
   occurrences?: number;
 }
 
-// A single untyped task, resolved with its integration's writable Type labels.
+// A single untyped task, resolved with the Type labels we can write for it.
 export interface UntypedTask {
   gid: string;
   integrationId: string;
   title: string;
   description?: string;
   integrationName?: string;
-  allowedTypes: string[]; // exact Asana enum labels we can write for this integration
+  allowedTypes: string[]; // exact labels we can write (Asana enum, or the local union)
+  // Where a chosen label is written: 'asana' updates the task's Asana Type field;
+  // 'local' saves it to the app-local Type store (for integrations with no
+  // writable Asana Type field, e.g. DBC). Absent on older code paths → 'asana'.
+  writeTarget?: 'asana' | 'local';
 }
 
 // Row state for the type-review step: an untyped task plus the currently chosen

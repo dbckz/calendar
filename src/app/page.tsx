@@ -686,7 +686,7 @@ export default function Home() {
   const handleSidebarAsanaCreate = useCallback(async (
     integrationId: string,
     name: string,
-    options?: { notes?: string; dueOn?: string; projectGid?: string; customFields?: Record<string, string> }
+    options?: { notes?: string; dueOn?: string; projectGid?: string; customFields?: Record<string, string>; localType?: string }
   ) => {
     try {
       const task = await createAsanaTask(integrationId, name, options);

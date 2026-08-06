@@ -140,6 +140,23 @@ describe('PlanWeekModal', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it('gives the priorities step two step dots (input + match-review screens)', () => {
+    const { container } = render(<PlanWeekModal isOpen onClose={jest.fn()} />);
+
+    // With no untyped tasks and no reminders, the screens the user pages through
+    // are: priorities-input, priorities-review, prep, tasks, review = 5 dots.
+    const dots = container.querySelectorAll('span.rounded-full');
+    expect(dots).toHaveLength(5);
+
+    // The two priorities screens each get their own labelled dot.
+    expect(screen.getByTitle('Priorities')).toBeInTheDocument();
+    expect(screen.getByTitle('Review matches')).toBeInTheDocument();
+
+    // On the input phase the first priorities dot is the active one.
+    expect(screen.getByTitle('Priorities').querySelector('span')).toHaveClass('bg-orange-500');
+    expect(screen.getByTitle('Review matches').querySelector('span')).toHaveClass('bg-gray-200');
+  });
+
   it('renders the modal shell and the priorities step when open', () => {
     render(<PlanWeekModal isOpen onClose={jest.fn()} />);
 

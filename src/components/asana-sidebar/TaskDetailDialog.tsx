@@ -6,6 +6,7 @@ import { X, ExternalLink, Send, Check, ArrowLeft, Clock, Folder, Tag, PlayCircle
 import { format, parseISO, isToday, isPast } from 'date-fns';
 import { getAsanaTaskUrl } from '@/lib/asana';
 import { api } from '@/lib/api';
+import { typeChoicesFor } from '@/lib/type-choices';
 import { TaskMetadataEditor } from '../TaskMetadataEditor';
 import { DelegateModal } from '../DelegateModal';
 import { LinkifiedText } from './LinkifiedText';
@@ -65,11 +66,14 @@ export function TaskDetailDialog({
     return typeFieldInfoByIntegration.get(task.integrationId) || null;
   }, [typeFieldInfoByIntegration, task.integrationId]);
 
-  // Available type values for dropdown
-  const typeValues = useMemo(() => {
-    if (!typeFieldInfo) return [];
-    return Array.from(typeFieldInfo.enumOptions.keys()).sort();
-  }, [typeFieldInfo]);
+  // One rule for the labels offered and where a chosen one is written. A local
+  // task (workspace with no writable Asana Type field, e.g. DBC) gets the local
+  // union labels and its Type is saved to the app-local store below.
+  const typeChoices = useMemo(
+    () => typeChoicesFor(task.integrationId, typeFieldInfoByIntegration),
+    [typeFieldInfoByIntegration, task.integrationId],
+  );
+  const typeValues = typeChoices.labels;
 
   // Filter projects to only those from this task's integration
   const availableProjects = useMemo(() => {
@@ -205,7 +209,15 @@ export function TaskDetailDialog({
 
     // Type
     if (editType !== (typeField?.displayValue || '')) {
-      if (typeFieldInfo && editType) {
+      if (typeChoices.writeTarget === 'local') {
+        // Local-only workspace: remember the label in the app-local store,
+        // keyed by task gid. An empty selection clears it (null deletes).
+        // Best-effort and outside `updates` (which only carries Asana writes);
+        // the new value surfaces via the server overlay on the next refresh.
+        api
+          .setLocalTaskTypes({ [task.id]: editType || null })
+          .catch(err => console.error('Failed to save local Type:', err));
+      } else if (typeFieldInfo && editType) {
         const enumOptionGid = typeFieldInfo.enumOptions.get(editType);
         if (enumOptionGid) {
           updates.customFields = { [typeFieldInfo.fieldGid]: enumOptionGid };

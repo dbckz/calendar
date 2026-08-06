@@ -587,6 +587,7 @@ export const api = {
       dueOn?: string;
       projectGid?: string;
       customFields?: Record<string, string>; // fieldGid -> enumOptionGid
+      localType?: string; // Type label for a local-only workspace; set server-side against the new task's gid
     }
   ): Promise<{ success: true; task: CalendarEventResponse }> {
     return fetchWithRetry<{ success: true; task: CalendarEventResponse }>(
@@ -633,6 +634,24 @@ export const api = {
 
   async getAsanaProjects(): Promise<{ projects: AsanaProject[] }> {
     return fetchWithRetry<{ projects: AsanaProject[] }>('/api/asana-projects');
+  },
+
+  // Local "Type" store for tasks whose Asana workspace has no writable Type
+  // field (e.g. DBC). Read the full { taskGid: label } map.
+  async getLocalTaskTypes(): Promise<{ types: Record<string, string> }> {
+    return fetchWithRetry<{ types: Record<string, string> }>('/api/local-task-types');
+  },
+
+  // Merge local Type associations (null deletes a task's local type). Returns the
+  // merged map. Never touches Asana.
+  async setLocalTaskTypes(
+    updates: Record<string, string | null>
+  ): Promise<{ types: Record<string, string> }> {
+    return fetchWithRetry<{ types: Record<string, string> }>('/api/local-task-types', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates }),
+    });
   },
 
   async getAsanaTags(integrationId: string): Promise<AsanaTag[]> {

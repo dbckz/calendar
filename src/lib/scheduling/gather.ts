@@ -34,6 +34,7 @@ import { partitionCarryOvers } from '@/lib/scheduling/carry-overs';
 import { selectStaleRecords, type ReconcileRecord } from '@/lib/scheduling/reconcile';
 import { getEnabledAsanaIntegrations, getEnabledGoogleIntegrations, updateIntegration } from '@/lib/integration-storage';
 import { getMyTasks, refreshAsanaToken } from '@/lib/asana';
+import { getLocalTaskTypes, overlayLocalType } from '@/lib/local-task-types';
 import { ensureValidCredentials, getCalendarEvents } from '@/lib/google-calendar';
 import { classifyBlockCategory, type CapacityQuota } from '@/lib/capacity';
 import { eventsToBusyIntervals, outOfOfficeDates } from '@/lib/scheduling/free-busy';
@@ -128,6 +129,9 @@ async function fetchAsanaData(completedSince: string): Promise<{
   const candidates: AsanaCandidate[] = [];
   const typeByGid = new Map<string, string | null>();
   const nameByGid = new Map<string, string>();
+  // Locally-stored Types overlay for tasks whose workspace has no writable Asana
+  // Type field (e.g. DBC), so those tasks classify into the capacity categories.
+  const localTypes = await getLocalTaskTypes();
   try {
     const integrations = await getEnabledAsanaIntegrations();
     await Promise.all(
@@ -148,7 +152,8 @@ async function fetchAsanaData(completedSince: string): Promise<{
           completedSince
         );
         for (const task of tasks) {
-          const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
+          const customFields = overlayLocalType(task.gid, task.customFields, localTypes);
+          const typeField = customFields?.find(cf => cf.name.toLowerCase() === 'type');
           const typeValue = typeField?.displayValue ?? null;
           typeByGid.set(task.gid, typeValue);
           if (task.name) nameByGid.set(task.gid, task.name);

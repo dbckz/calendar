@@ -4,6 +4,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { CalendarEvent, DragItem, AsanaDateFilter, AsanaSortField, AsanaFilterLogic, AsanaGroupBy } from '@/types';
 import { Filter, X, ChevronDown, ChevronUp, ChevronRight, ArrowUpDown, Clock, Folder, Tag, PlayCircle, Plus, Loader2, Layers, Search, Bot } from 'lucide-react';
 import { api } from '@/lib/api';
+import { typeChoicesFor } from '@/lib/type-choices';
 import { CreateAsanaTaskModal } from '../CreateAsanaTaskModal';
 import { TaskDetailDialog } from './TaskDetailDialog';
 import { MemoizedTaskItem } from './TaskItem';
@@ -369,7 +370,7 @@ export function AsanaSidebar({
     e.stopPropagation();
     setDragOverGroup(null);
 
-    if (!onUpdateTask || !typeFieldInfoByIntegration) return;
+    if (!typeFieldInfoByIntegration) return;
 
     try {
       const data = e.dataTransfer.getData('application/json');
@@ -380,54 +381,58 @@ export function AsanaSidebar({
       // Only handle asana tasks
       if (dragItem.source !== 'asana') return;
 
-      // Get integrationId from drag data or find task
-      let integrationId = dragItem.integrationId;
-      const taskTitle = dragItem.title;
-
-      if (!integrationId) {
-        // Fallback: find the task in our tasks list
-        const task = tasks.find(t => t.id === dragItem.id);
-        if (!task || !task.integrationId) return;
-        integrationId = task.integrationId;
-      }
-
-      // Find the task to get its current type (before any optimistic override)
+      // The task behind the drag, for its integration (when the drag data lacks
+      // one) and its current type (before any optimistic override).
       const task = tasks.find(t => t.id === dragItem.id);
+      const integrationId = dragItem.integrationId ?? task?.integrationId;
+      if (!integrationId) return;
+
       const typeField = task?.customFields?.find(cf => cf.name.toLowerCase() === 'type');
       const currentType = typeField?.displayValue || 'No Type';
 
       // Skip if dropping on the same group
       if (currentType === targetGroupName) return;
 
-      // Get type field info for this task's integration
-      const typeFieldInfo = typeFieldInfoByIntegration.get(integrationId);
-      if (!typeFieldInfo) {
-        console.error('No type field info for integration:', integrationId);
+      // One rule for the labels valid here and where the write goes. A task from
+      // a workspace with no writable Asana Type field (e.g. DBC) has its Type in
+      // the app-local store; every other workspace writes back to Asana.
+      const { labels, writeTarget } = typeChoicesFor(integrationId, typeFieldInfoByIntegration);
+      if (targetGroupName !== 'No Type' && !labels.includes(targetGroupName)) {
+        console.error('No Type option found for type:', targetGroupName);
         return;
       }
 
-      // Get the enum option GID for the target group
-      const enumOptionGid = typeFieldInfo.enumOptions.get(targetGroupName);
-      if (!enumOptionGid && targetGroupName !== 'No Type') {
-        console.error('No enum option found for type:', targetGroupName);
-        return;
+      // Resolve the write up front so we can bail before any optimistic change if
+      // this integration can't take one.
+      // `onUpdateTask` returns void (it fires and forgets), so the awaited result
+      // may be nothing at all.
+      let write: () => void | Promise<unknown>;
+      if (writeTarget === 'local') {
+        // Dropping on the "No Type" group clears the local Type (null deletes).
+        const label = targetGroupName === 'No Type' ? null : targetGroupName;
+        write = () => api.setLocalTaskTypes({ [dragItem.id]: label });
+      } else {
+        if (!onUpdateTask) return;
+        const typeFieldInfo = typeFieldInfoByIntegration.get(integrationId);
+        if (!typeFieldInfo) {
+          console.error('No type field info for integration:', integrationId);
+          return;
+        }
+        const enumOptionGid = typeFieldInfo.enumOptions.get(targetGroupName);
+        const updates: UpdateTaskOptions = {
+          customFields: { [typeFieldInfo.fieldGid]: enumOptionGid || null },
+        };
+        write = () => onUpdateTask(dragItem.id, integrationId, updates);
       }
 
-      console.log(`[AsanaSidebar] Moving task "${taskTitle}" from "${currentType}" to "${targetGroupName}"`);
-
-      // Optimistically update the UI immediately
+      // Optimistically update the UI immediately (both write targets).
       setOptimisticTypeOverrides(prev => {
         const next = new Map(prev);
         next.set(dragItem.id, targetGroupName);
         return next;
       });
 
-      // Update the task's Type custom field in the background
-      const updates: UpdateTaskOptions = {
-        customFields: { [typeFieldInfo.fieldGid]: enumOptionGid || null }
-      };
-
-      // Clear optimistic override after API call completes (success or failure)
+      // Clear optimistic override after the write completes (success or failure).
       const clearOverride = () => {
         setOptimisticTypeOverrides(prev => {
           const next = new Map(prev);
@@ -437,10 +442,10 @@ export function AsanaSidebar({
       };
 
       try {
-        await onUpdateTask(dragItem.id, integrationId, updates);
+        await write();
         clearOverride();
       } catch (apiErr) {
-        console.error('Failed to update task in Asana:', apiErr);
+        console.error('Failed to update task type:', apiErr);
         clearOverride();
       }
     } catch (err) {

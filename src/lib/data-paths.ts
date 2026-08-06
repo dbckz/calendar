@@ -36,6 +36,12 @@ export const INTEGRATIONS_FILE = path.join(DATA_DIR, 'integrations.json');
 export const TIME_TRACKING_FILE = path.join(DATA_DIR, 'time-tracking.json');
 export const WORKFLOW_CONFIG_FILE = path.join(DATA_DIR, 'workflow-config.json');
 
+// Local "Type" associations for tasks from integrations that have no writable
+// Asana Type field (e.g. Dave's DBC workspace). Keyed by Asana task gid; the
+// value is the chosen Type label. Never written back to Asana — it lives here
+// so those tasks can still be typed and counted by the capacity categories.
+export const LOCAL_TASK_TYPES_FILE = path.join(DATA_DIR, 'local-task-types.json');
+
 // Orchestrator worker status file (workers/orchestrator writes this; the app
 // reads it via /api/orchestrator/status). The worker duplicates this path
 // locally in workers/orchestrator/config.ts to avoid importing app code.

@@ -16,6 +16,7 @@ import { summariseWeek, weeklyProgressRows } from '@/lib/weekly-stats';
 import { getDailyRecord } from '@/lib/time-tracking-storage';
 import { getEnabledAsanaIntegrations, updateIntegration } from '@/lib/integration-storage';
 import { getMyTasks, refreshAsanaToken } from '@/lib/asana';
+import { getLocalTaskTypes, overlayLocalType } from '@/lib/local-task-types';
 import { CapacityQuota, classifyBlockCategoryWithCatchAll } from '@/lib/capacity';
 import {
   AsanaIntegration,
@@ -35,6 +36,9 @@ async function buildAsanaTypeMap(
   completedSince: string
 ): Promise<Map<string, { typeValue: string | null; completed: boolean }>> {
   const map = new Map<string, { typeValue: string | null; completed: boolean }>();
+  // Locally-stored Types overlay for workspaces with no writable Asana Type field
+  // (e.g. DBC), so those tasks still classify into the capacity categories.
+  const localTypes = await getLocalTaskTypes();
   try {
     const integrations = await getEnabledAsanaIntegrations();
     await Promise.all(
@@ -55,7 +59,8 @@ async function buildAsanaTypeMap(
           completedSince
         );
         for (const task of tasks) {
-          const typeField = task.customFields?.find(cf => cf.name.toLowerCase() === 'type');
+          const customFields = overlayLocalType(task.gid, task.customFields, localTypes);
+          const typeField = customFields?.find(cf => cf.name.toLowerCase() === 'type');
           map.set(task.gid, {
             typeValue: typeField?.displayValue ?? null,
             completed: task.completed,

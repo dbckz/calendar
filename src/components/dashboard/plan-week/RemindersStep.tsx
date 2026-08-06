@@ -6,6 +6,7 @@ import { AlertTriangle, ArrowRightToLine, Bell, CalendarClock, Check, Trash2 } f
 import type { AsanaProject } from '@/types';
 import type { AsanaTypeFieldInfo } from '@/components/CreateAsanaTaskModal';
 import type { ReminderTriageRow } from './types';
+import { typeChoicesFor } from '@/lib/type-choices';
 import { ProjectCombobox } from './ProjectCombobox';
 
 interface RemindersStepProps {
@@ -261,15 +262,16 @@ export function RemindersStep({
     return m;
   }, [projects]);
 
+  // Type labels offered per workspace. Built for EVERY integration (not just the
+  // ones with a writable Asana Type field) so a workspace like DBC gets the local
+  // union labels and its Type select renders too.
   const typesByIntegration = useMemo(() => {
     const m = new Map<string, string[]>();
-    if (typeFieldInfoByIntegration) {
-      for (const [id, info] of typeFieldInfoByIntegration) {
-        m.set(id, Array.from(info.enumOptions.keys()).sort());
-      }
+    for (const intg of integrations) {
+      m.set(intg.id, typeChoicesFor(intg.id, typeFieldInfoByIntegration).labels);
     }
     return m;
-  }, [typeFieldInfoByIntegration]);
+  }, [integrations, typeFieldInfoByIntegration]);
 
   if (loading || rows === null) {
     const done = progress?.done ?? 0;

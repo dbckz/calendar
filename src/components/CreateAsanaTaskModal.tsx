@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { AsanaProject, CalendarEvent } from '@/types';
+import { typeChoicesFor } from '@/lib/type-choices';
 
 export interface AsanaTypeFieldInfo {
   fieldGid: string;
@@ -14,6 +15,7 @@ export interface CreateAsanaTaskOptions {
   dueOn?: string;
   projectGid?: string;
   customFields?: Record<string, string>;
+  localType?: string; // Type label for a local-only workspace (e.g. DBC), set server-side
 }
 
 interface CreateAsanaTaskModalProps {
@@ -59,12 +61,18 @@ export function CreateAsanaTaskModal({
     return typeFieldInfoByIntegration.get(selectedIntegration) || null;
   }, [typeFieldInfoByIntegration, selectedIntegration]);
 
-  const typeValues = useMemo(() => {
-    if (!typeFieldInfo) return [];
-    return Array.from(typeFieldInfo.enumOptions.keys()).sort();
-  }, [typeFieldInfo]);
+  // One rule for the labels offered and where a chosen one is written: a
+  // workspace with a writable Asana Type field writes back to Asana; one without
+  // (e.g. DBC) offers the local union and writes to the app-local Type store.
+  const typeChoices = useMemo(
+    () => typeChoicesFor(selectedIntegration, typeFieldInfoByIntegration),
+    [typeFieldInfoByIntegration, selectedIntegration],
+  );
+  const typeValues = typeChoices.labels;
 
-  const typeRequired = !!typeFieldInfo && typeValues.length > 0;
+  // Type is required exactly when labels are available — same rule for either
+  // write target, so a local-only workspace behaves like an Asana-writable one.
+  const typeRequired = typeValues.length > 0;
 
   const filteredProjects = useMemo(
     () => projects.filter(p => p.integrationId === selectedIntegration),
@@ -99,10 +107,14 @@ export function CreateAsanaTaskModal({
       if (dueOn) options.dueOn = dueOn;
       if (selectedProject) options.projectGid = selectedProject;
 
-      if (selectedType && typeFieldInfo) {
-        const enumOptionGid = typeFieldInfo.enumOptions.get(selectedType);
-        if (enumOptionGid) {
-          options.customFields = { [typeFieldInfo.fieldGid]: enumOptionGid };
+      if (selectedType) {
+        if (typeChoices.writeTarget === 'local') {
+          options.localType = selectedType;
+        } else if (typeFieldInfo) {
+          const enumOptionGid = typeFieldInfo.enumOptions.get(selectedType);
+          if (enumOptionGid) {
+            options.customFields = { [typeFieldInfo.fieldGid]: enumOptionGid };
+          }
         }
       }
 
