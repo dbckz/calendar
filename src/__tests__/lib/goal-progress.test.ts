@@ -75,6 +75,52 @@ describe('computeProgress', () => {
   });
 });
 
+describe('computeProgress with a progression plan', () => {
+  // A back-loaded plan: only 2 of 6 due by mid-month, the rest late. This is the
+  // case a straight line gets wrong — 2/6 at half-way looks 'behind' linearly but
+  // is exactly on the plan.
+  const planned = makeGoal({
+    plan: [
+      { key: '2026-08-16', value: 2, label: 'two by mid-month' },
+      { key: '2026-08-31', value: 6, label: 'six by month end' },
+    ],
+    planSource: 'ai',
+  });
+
+  it('paces against the milestone ramp, not the straight line', () => {
+    // 2/6 at mid-month is behind the linear 0.5 but on the plan's back-loaded curve.
+    const onPlan = computeProgress(planned, { actual: 2, label: '' }, MID_MONTH);
+    expect(onPlan.expected).toBeCloseTo(2, 0);
+    expect(onPlan.pace).toBe('on-track');
+
+    // The same 2/6 with no plan reads behind, on the straight line.
+    const linear = computeProgress(makeGoal(), { actual: 2, label: '' }, MID_MONTH);
+    expect(linear.pace).toBe('behind');
+  });
+
+  it('interpolates before the first milestone from the period start', () => {
+    // 5 Aug is early: expected should be well under the first milestone's 2.
+    const early = computeProgress(planned, { actual: 0, label: '' }, new Date(2026, 7, 5, 12));
+    expect(early.expected).toBeLessThan(2);
+    expect(early.expected).toBeGreaterThan(0);
+  });
+
+  it('holds at the last milestone after it, when there is no target beyond it', () => {
+    const noTarget = makeGoal({
+      target: undefined,
+      plan: [{ key: '2026-08-10', value: 4, label: 'four early' }],
+    });
+    // Late in the month, past the only milestone: expected stays at 4.
+    const late = computeProgress(noTarget, { actual: 4, label: '' }, new Date(2026, 7, 25));
+    expect(late.expected).toBe(4);
+  });
+
+  it('surfaces the next milestone still ahead', () => {
+    const progress = computeProgress(planned, { actual: 1, label: '' }, new Date(2026, 7, 10));
+    expect(progress.nextMilestone?.key).toBe('2026-08-16');
+  });
+});
+
 describe('buildNudges', () => {
   const item = (goal: Goal, actual: number | null, now = MID_MONTH): GoalWithProgress => ({
     goal,

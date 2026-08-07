@@ -1,13 +1,19 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { X } from 'lucide-react';
+import { format } from 'date-fns';
+import { Sparkles, Trash2, X } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import { goalSections } from '@/lib/life-sections';
 import { periodLabel, quarterKeyForMonth } from '@/lib/goal-periods';
+import { milestoneDate } from '@/lib/goal-plan';
+// Type-only: goal-inference itself is server-side, so nothing is bundled here.
+import type { InferredGoal } from '@/lib/goal-inference';
 import type { AsanaProject } from '@/types';
-import type { Goal, GoalEvidenceKind, GoalPeriodKind } from '@/types/life';
+import type { Goal, GoalEvidenceKind, GoalMilestone, GoalPeriodKind } from '@/types/life';
+
+type EvidenceUnit = 'count' | 'minutes' | 'max-distance-km';
 
 const EVIDENCE_OPTIONS: Array<{ kind: GoalEvidenceKind; label: string; hint: string }> = [
   { kind: 'manual', label: 'Self-reported', hint: 'You type the figure in at check-in time.' },
@@ -21,8 +27,22 @@ const EVIDENCE_OPTIONS: Array<{ kind: GoalEvidenceKind; label: string; hint: str
     label: 'Calendar category',
     hint: 'Counts time booked against a time-tracking category.',
   },
-  { kind: 'exercise', label: 'Exercise log', hint: 'Counts sessions (or minutes) logged.' },
+  { kind: 'exercise', label: 'Exercise log', hint: 'Counts sessions, minutes, or your longest single distance.' },
 ];
+
+// The 'count'/'minutes'/'max-distance-km' choices offered per evidence kind.
+// A peak distance only makes sense for the exercise log.
+const UNIT_OPTIONS: Record<'exercise' | 'calendar-category', Array<{ value: EvidenceUnit; label: string }>> = {
+  exercise: [
+    { value: 'count', label: 'Sessions' },
+    { value: 'minutes', label: 'Minutes' },
+    { value: 'max-distance-km', label: 'Longest distance (km)' },
+  ],
+  'calendar-category': [
+    { value: 'count', label: 'Occurrences' },
+    { value: 'minutes', label: 'Minutes' },
+  ],
+};
 
 interface GoalEditorModalProps {
   // Absent for a new goal.
@@ -53,16 +73,24 @@ export function GoalEditorModal({
   const [targetUnit, setTargetUnit] = useState(goal?.target?.unit ?? '');
   const [evidenceKind, setEvidenceKind] = useState<GoalEvidenceKind>(goal?.evidence.kind ?? 'manual');
   const [evidenceRef, setEvidenceRef] = useState(goal?.evidence.ref ?? '');
-  const [evidenceUnit, setEvidenceUnit] = useState<'count' | 'minutes'>(goal?.evidence.unit ?? 'count');
+  const [evidenceUnit, setEvidenceUnit] = useState<EvidenceUnit>(goal?.evidence.unit ?? 'count');
   const [parentGoalId, setParentGoalId] = useState(goal?.parentGoalId ?? '');
   const [projects, setProjects] = useState<AsanaProject[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Period is fixed for an existing goal — moving a goal between months would
-  // rewrite history rather than edit it.
-  const periodKind = goal?.periodKind ?? defaultPeriodKind;
-  const periodKey = goal?.periodKey ?? defaultPeriodKey;
+  // rewrite history rather than edit it. For a new goal the inference may set it.
+  const [periodKind, setPeriodKind] = useState<GoalPeriodKind>(goal?.periodKind ?? defaultPeriodKind);
+  const [periodKey, setPeriodKey] = useState(goal?.periodKey ?? defaultPeriodKey);
+
+  // The AI phase, offered only for a new goal: describe it in free text, let the
+  // model draft the structure and a progression plan, then confirm and edit.
+  const [draftText, setDraftText] = useState('');
+  const [inferring, setInferring] = useState(false);
+  const [inferNote, setInferNote] = useState<string | null>(null);
+  const [milestones, setMilestones] = useState<GoalMilestone[]>(goal?.plan ?? []);
+  const [planSource, setPlanSource] = useState<Goal['planSource']>(goal?.planSource);
 
   useEffect(() => {
     if (evidenceKind !== 'asana-project' || projects.length > 0) return;
@@ -72,21 +100,66 @@ export function GoalEditorModal({
       .catch(err => console.error('Failed to load Asana projects:', err));
   }, [evidenceKind, projects.length]);
 
-  const eligibleParents = useMemo(
-    () =>
-      parentCandidates.filter(
-        p =>
-          p.periodKind === 'quarter' &&
-          p.sectionId === sectionId &&
-          p.periodKey === quarterKeyForMonth(periodKey)
-      ),
-    [parentCandidates, sectionId, periodKey]
-  );
+  const eligibleParents = useMemo(() => {
+    // Parents only apply to monthly goals; quarterKeyForMonth would choke on a
+    // quarter key ("2026-Q3"), so don't even ask for a quarterly goal.
+    if (periodKind !== 'month') return [];
+    const parentQuarter = quarterKeyForMonth(periodKey);
+    return parentCandidates.filter(
+      p => p.periodKind === 'quarter' && p.sectionId === sectionId && p.periodKey === parentQuarter
+    );
+  }, [parentCandidates, sectionId, periodKey, periodKind]);
 
   // Switching section can strip the selected parent of its validity.
   useEffect(() => {
     if (parentGoalId && !eligibleParents.some(p => p.id === parentGoalId)) setParentGoalId('');
   }, [eligibleParents, parentGoalId]);
+
+  // Prefill every form field from an accepted proposal. The user then reviews and
+  // edits before anything is saved.
+  const applyProposal = (proposal: InferredGoal) => {
+    setSectionId(proposal.sectionId);
+    setPeriodKind(proposal.periodKind);
+    setPeriodKey(proposal.periodKey);
+    setTitle(proposal.title);
+    setDetail(proposal.detail ?? '');
+    setTargetValue(proposal.target ? String(proposal.target.value) : '');
+    setTargetUnit(proposal.target?.unit ?? '');
+    setEvidenceKind(proposal.evidence.kind);
+    setEvidenceRef(proposal.evidence.ref ?? '');
+    setEvidenceUnit((proposal.evidence.unit as EvidenceUnit) ?? 'count');
+    setMilestones(proposal.milestones);
+    setPlanSource('ai');
+  };
+
+  const suggest = async () => {
+    if (!draftText.trim()) return;
+    setInferring(true);
+    setInferNote(null);
+    setError(null);
+    try {
+      const { proposal } = await api.inferGoal({ text: draftText.trim(), sectionId });
+      if (!proposal) {
+        setInferNote("Couldn't draft that one — fill it in below and it'll still save.");
+        return;
+      }
+      applyProposal(proposal);
+    } catch {
+      setInferNote("Couldn't reach the drafting model — fill it in below.");
+    } finally {
+      setInferring(false);
+    }
+  };
+
+  const updateMilestone = (index: number, patch: Partial<GoalMilestone>) => {
+    setMilestones(list => list.map((m, i) => (i === index ? { ...m, ...patch } : m)));
+    setPlanSource('manual');
+  };
+
+  const removeMilestone = (index: number) => {
+    setMilestones(list => list.filter((_, i) => i !== index));
+    setPlanSource('manual');
+  };
 
   const save = async () => {
     if (!title.trim()) {
@@ -97,6 +170,15 @@ export function GoalEditorModal({
     setError(null);
 
     const parsedTarget = Number(targetValue);
+    const cleanMilestones = milestones
+      .filter(m => m.label.trim() || typeof m.value === 'number')
+      .map(m => ({
+        key: m.key,
+        label: m.label.trim() || (m.value !== undefined ? `${m.value}` : ''),
+        ...(typeof m.value === 'number' ? { value: m.value } : {}),
+        ...(m.reasoning ? { reasoning: m.reasoning } : {}),
+      }));
+
     const payload = {
       title: title.trim(),
       detail: detail.trim() || undefined,
@@ -111,6 +193,8 @@ export function GoalEditorModal({
           ? { unit: evidenceUnit }
           : {}),
       },
+      plan: cleanMilestones,
+      planSource,
     };
 
     try {
@@ -156,6 +240,36 @@ export function GoalEditorModal({
 
         <div className="p-5 space-y-4">
           {!goal && (
+            <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+              <label htmlFor="goal-draft" className="block text-xs font-semibold text-indigo-900 mb-1">
+                Describe it, and I&apos;ll draft the rest
+              </label>
+              <textarea
+                id="goal-draft"
+                value={draftText}
+                onChange={e => setDraftText(e.target.value)}
+                rows={2}
+                placeholder="Run 10K by the end of the quarter"
+                className="w-full px-3 py-2 text-sm border border-indigo-200 rounded-md bg-white"
+              />
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  onClick={suggest}
+                  disabled={inferring || !draftText.trim()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  {inferring ? 'Drafting…' : milestones.length > 0 || title ? 'Redraft' : 'Suggest'}
+                </button>
+                <span className="text-[11px] text-indigo-800/70">
+                  Fills in the fields below, including a progression plan. Edit anything before saving.
+                </span>
+              </div>
+              {inferNote && <p className="mt-2 text-xs text-amber-700">{inferNote}</p>}
+            </div>
+          )}
+
+          {!goal && (
             <Field label="Life area" htmlFor="goal-section">
               <select
                 id="goal-section"
@@ -179,7 +293,6 @@ export function GoalEditorModal({
               onChange={e => setTitle(e.target.value)}
               placeholder="What are you aiming for?"
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md"
-              autoFocus
             />
           </Field>
 
@@ -225,6 +338,7 @@ export function GoalEditorModal({
               onChange={e => {
                 setEvidenceKind(e.target.value as GoalEvidenceKind);
                 setEvidenceRef('');
+                setEvidenceUnit('count');
               }}
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md"
             >
@@ -273,13 +387,43 @@ export function GoalEditorModal({
                 <select
                   id="goal-evidence-unit"
                   value={evidenceUnit}
-                  onChange={e => setEvidenceUnit(e.target.value as 'count' | 'minutes')}
+                  onChange={e => setEvidenceUnit(e.target.value as EvidenceUnit)}
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md"
                 >
-                  <option value="count">Occurrences</option>
-                  <option value="minutes">Minutes</option>
+                  {UNIT_OPTIONS[evidenceKind].map(o => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
                 </select>
               </Field>
+            </div>
+          )}
+
+          {milestones.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="block text-xs font-semibold text-gray-600">
+                  Progression plan
+                  {planSource === 'ai' && (
+                    <span className="ml-1.5 font-normal text-indigo-500">drafted</span>
+                  )}
+                </span>
+                <span className="text-[11px] text-gray-400">
+                  {milestones.length} milestone{milestones.length === 1 ? '' : 's'}
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                {milestones.map((m, i) => (
+                  <MilestoneRow
+                    key={`${m.key}-${i}`}
+                    milestone={m}
+                    unit={targetUnit}
+                    onChange={patch => updateMilestone(i, patch)}
+                    onRemove={() => removeMilestone(i)}
+                  />
+                ))}
+              </div>
             </div>
           )}
 
@@ -325,6 +469,54 @@ export function GoalEditorModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// One editable milestone: its date (read-only, set by the plan), a numeric figure
+// and a label, with a delete. Editing anything flips the plan to hand-edited.
+function MilestoneRow({
+  milestone,
+  unit,
+  onChange,
+  onRemove,
+}: {
+  milestone: GoalMilestone;
+  unit: string;
+  onChange: (patch: Partial<GoalMilestone>) => void;
+  onRemove: () => void;
+}) {
+  const at = milestoneDate(milestone.key);
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-2 py-1.5">
+      <span className="w-14 shrink-0 text-[11px] font-medium text-gray-500 tabular-nums">
+        {at ? format(at, 'd MMM') : milestone.key}
+      </span>
+      <input
+        type="number"
+        value={milestone.value ?? ''}
+        onChange={e => {
+          const v = e.target.value.trim();
+          onChange({ value: v === '' ? undefined : Number(v) });
+        }}
+        className="w-16 px-1.5 py-1 text-sm border border-gray-300 rounded-md bg-white"
+        aria-label={`Milestone figure${unit ? ` in ${unit}` : ''}`}
+      />
+      {unit && <span className="text-[11px] text-gray-400">{unit}</span>}
+      <input
+        value={milestone.label}
+        onChange={e => onChange({ label: e.target.value })}
+        className="flex-1 min-w-0 px-2 py-1 text-sm border border-gray-300 rounded-md bg-white"
+        placeholder="What this step is"
+        aria-label="Milestone label"
+      />
+      <button
+        onClick={onRemove}
+        className="p-1 rounded shrink-0 text-gray-400 hover:bg-red-50 hover:text-red-600"
+        aria-label="Remove milestone"
+      >
+        <Trash2 className="w-3.5 h-3.5" />
+      </button>
     </div>
   );
 }

@@ -15,7 +15,7 @@ import { getEnabledAsanaIntegrations, updateIntegration } from './integration-st
 import { refreshAsanaToken } from './asana';
 import { getAllSessions } from './storage/exercise';
 import { getAllWeeklyStats } from './storage/weekly-stats';
-import type { Goal } from '@/types/life';
+import type { ExerciseSession, Goal } from '@/types/life';
 
 export interface ResolvedEvidence {
   actual: number | null;
@@ -86,7 +86,27 @@ async function resolveExercise(goal: Goal, start: Date, end: Date): Promise<Reso
     const minutes = sessions.reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0);
     return { actual: minutes, label: `${minutes} min logged across ${sessions.length} ${scope}` };
   }
+  // Peak metric: the longest single distance covered in the period, so a "run
+  // 10K" goal is judged by the best run, not a tally. Both the session's own
+  // distance and any distance logged on an exercise inside it count.
+  if (goal.evidence.unit === 'max-distance-km') {
+    const longest = sessions.reduce((max, s) => Math.max(max, sessionDistanceKm(s)), 0);
+    if (longest <= 0) return { actual: null, label: `No distance logged in ${scope}` };
+    const rounded = Math.round(longest * 10) / 10;
+    return { actual: rounded, label: `Longest ${rounded} km across ${sessions.length} ${scope}` };
+  }
   return { actual: sessions.length, label: `${sessions.length} ${scope} logged` };
+}
+
+// The greatest single distance a session represents: its own distance, or the
+// longest distance logged on any exercise inside it, whichever is larger.
+function sessionDistanceKm(session: ExerciseSession): number {
+  const own = session.distanceKm ?? 0;
+  const perExercise = (session.exercises ?? []).reduce(
+    (max, e) => Math.max(max, e.distanceKm ?? 0),
+    0
+  );
+  return Math.max(own, perExercise);
 }
 
 // Minutes booked against a time-tracking category, read out of the durable

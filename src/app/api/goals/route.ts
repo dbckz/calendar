@@ -49,6 +49,8 @@ export async function POST(request: NextRequest) {
       parentGoalId: body.parentGoalId || undefined,
       target: body.target,
       evidence: body.evidence,
+      plan: body.plan,
+      planSource: body.planSource,
     });
     return NextResponse.json({ goal });
   } catch (error) {

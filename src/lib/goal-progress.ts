@@ -7,6 +7,7 @@
 // forgiving so an ordinary week doesn't read as failure.
 
 import { isPeriodOver, periodElapsed } from './goal-periods';
+import { expectedFromPlan, nextMilestone } from './goal-plan';
 import type {
   Goal,
   GoalPace,
@@ -34,8 +35,18 @@ export function computeProgress(
   const actual = evidence.actual;
   const lastCheckIn = goal.checkIns.at(-1);
 
-  const expected = target !== null ? round1(target * elapsed) : null;
+  // Where the goal should be by now. A goal with a progression plan is paced
+  // against the milestone ramp; without one it falls back to the straight line.
+  const planned = expectedFromPlan(goal, now);
+  let expected: number | null = null;
+  if (planned !== null) expected = round1(planned);
+  else if (target !== null) expected = round1(target * elapsed);
   const completion = target !== null && target > 0 && actual !== null ? actual / target : null;
+  // The fraction the pace bands compare against: the plan's expected share of the
+  // target where a plan exists, otherwise plain elapsed time.
+  const expectedFraction =
+    target !== null && target > 0 && expected !== null ? expected / target : elapsed;
+  const upcoming = nextMilestone(goal, now);
 
   return {
     goalId: goal.id,
@@ -43,20 +54,24 @@ export function computeProgress(
     expected,
     actual,
     completion,
-    pace: derivePace(target, actual, elapsed, completion),
+    pace: derivePace(target, actual, expectedFraction, completion),
     evidenceLabel: evidence.label,
     // A goal with no evidence AND no check-in is invisible progress-wise; that
     // is exactly what the nudge should surface. An actual of 0 counts as no
     // evidence too — nothing has happened.
     noEvidence: !actual && goal.checkIns.length === 0,
     ...(lastCheckIn ? { lastCheckIn } : {}),
+    ...(upcoming ? { nextMilestone: upcoming } : {}),
   };
 }
 
+// `expectedFraction` is where the goal should be as a share of its target: plain
+// elapsed time for a straight-line goal, the milestone ramp's height for a
+// planned one. The tolerance bands are applied around it either way.
 function derivePace(
   target: number | null,
   actual: number | null,
-  elapsed: number,
+  expectedFraction: number,
   completion: number | null
 ): GoalPace {
   if (target === null) return 'no-target';
@@ -64,8 +79,8 @@ function derivePace(
   if (completion === null) return 'no-data';
   // A finished goal is never 'behind', however early in the period it landed.
   if (completion >= 1) return 'ahead';
-  if (completion >= elapsed + AHEAD_TOLERANCE) return 'ahead';
-  if (completion < elapsed - BEHIND_TOLERANCE) return 'behind';
+  if (completion >= expectedFraction + AHEAD_TOLERANCE) return 'ahead';
+  if (completion < expectedFraction - BEHIND_TOLERANCE) return 'behind';
   return 'on-track';
 }
 

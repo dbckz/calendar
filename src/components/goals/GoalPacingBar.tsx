@@ -1,5 +1,6 @@
 'use client';
 
+import { describeMilestone } from '@/lib/goal-plan';
 import type { GoalProgress, GoalTarget } from '@/types/life';
 
 const PACE_STYLES = {
@@ -70,6 +71,12 @@ export function GoalPacingBar({ progress, target }: GoalPacingBarProps) {
       <p className="mt-1 text-[11px] text-gray-400 truncate" title={progress.evidenceLabel}>
         {progress.evidenceLabel}
       </p>
+
+      {progress.nextMilestone && (
+        <p className="mt-0.5 text-[11px] font-medium text-gray-500 truncate">
+          Next: {describeMilestone(progress.nextMilestone, target?.unit)}
+        </p>
+      )}
     </div>
   );
 }

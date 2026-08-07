@@ -173,4 +173,41 @@ describe('goal storage', () => {
   it('reports a delete of something that isn’t there', async () => {
     expect(await deleteGoal('nope')).toBe(false);
   });
+
+  it('stores a progression plan, cleaning it to in-period, monotone milestones', async () => {
+    const goal = await createGoal({
+      sectionId: 'exercise',
+      periodKind: 'quarter',
+      periodKey: '2026-Q3',
+      title: 'Run 10K',
+      target: { value: 10, unit: 'km' },
+      evidence: { kind: 'exercise', unit: 'max-distance-km' },
+      planSource: 'ai',
+      plan: [
+        { key: '2026-08-31', value: 7, label: '7 km' },
+        { key: '2026-07-31', value: 5, label: '5 km' },
+        { key: '2026-12-01', value: 12, label: 'in Q4' }, // out of period, dropped
+      ],
+    });
+
+    expect(goal.planSource).toBe('ai');
+    // Sorted by date, out-of-period entry gone.
+    expect(goal.plan?.map(m => m.key)).toEqual(['2026-07-31', '2026-08-31']);
+  });
+
+  it('updates and clears a plan', async () => {
+    const goal = await createGoal({
+      sectionId: 'exercise',
+      periodKind: 'month',
+      periodKey: '2026-08',
+      title: 'Run',
+      target: { value: 6, unit: 'km' },
+      plan: [{ key: '2026-08-15', value: 4, label: '4 km' }],
+    });
+    expect(goal.plan).toHaveLength(1);
+
+    const emptied = await updateGoal(goal.id, { plan: [] });
+    expect(emptied?.plan).toBeUndefined();
+    expect(emptied?.planSource).toBeUndefined();
+  });
 });

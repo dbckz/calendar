@@ -42,9 +42,11 @@ export type GoalEvidenceKind =
 export interface GoalEvidence {
   kind: GoalEvidenceKind;
   ref?: string;
-  // For 'calendar-category' and 'exercise', whether the target counts minutes
-  // or occurrences. Ignored by the task-counting kinds.
-  unit?: 'count' | 'minutes';
+  // For 'calendar-category' and 'exercise', how the target is counted. 'count'
+  // and 'minutes' are tallies; 'max-distance-km' (exercise only) is a peak
+  // metric — the longest single completed run/session distance in the period,
+  // which is how a "run 10K" goal is judged. Ignored by the task-counting kinds.
+  unit?: 'count' | 'minutes' | 'max-distance-km';
   // Restrict an asana-* source to one workspace; absent means every workspace.
   integrationId?: string;
 }
@@ -75,6 +77,21 @@ export interface GoalCheckIn {
 // scorecard hit rates.
 export type GoalStatus = 'active' | 'hit' | 'partial' | 'missed' | 'dropped';
 
+// One waypoint on the path from where a goal starts to its target, so a big goal
+// ("run 10K") is paced against a ramp rather than a single straight line. Ordered
+// by `key`, which is a date inside the goal's period:
+//   'yyyy-MM-dd'   a specific day  ('2026-09-15')
+//   'yyyy-[W]ww'   an ISO week     ('2026-W37', resolved to its Monday)
+// A numeric `value` is the figure the goal should be at by then (in the target's
+// unit); milestones without one are narrative checkpoints that don't affect
+// pacing. `reasoning` is the one line the inference wrote for why this step.
+export interface GoalMilestone {
+  key: string;
+  value?: number;
+  label: string;
+  reasoning?: string;
+}
+
 export interface Goal {
   id: string;
   sectionId: LifeSectionId;
@@ -87,6 +104,14 @@ export interface Goal {
   parentGoalId?: string;
   target?: GoalTarget;
   evidence: GoalEvidence;
+  // The progression plan: intermediate milestones from the current state to the
+  // target across the period. Consumed by pacing (the expected curve bends
+  // through these instead of running straight) and by the life areas — the
+  // exercise programmer reads an exercise goal's ramp to set today's target.
+  plan?: GoalMilestone[];
+  // Where the plan came from: drafted by the inference ('ai') or hand-entered
+  // ('manual'). Absent when there is no plan.
+  planSource?: 'ai' | 'manual';
   // Latest self-reported figure for manual goals (also written by a check-in
   // that carries a value).
   manualValue?: number;
@@ -121,6 +146,9 @@ export interface GoalProgress {
   // nudge keys off.
   noEvidence: boolean;
   lastCheckIn?: GoalCheckIn;
+  // The next milestone still ahead on the plan (if any), so nudges, check-in
+  // copy and the pacing bar can say "next: 6 km by 15 Sep" without re-deriving it.
+  nextMilestone?: GoalMilestone;
 }
 
 export interface GoalWithProgress {

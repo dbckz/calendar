@@ -18,6 +18,8 @@ export async function PATCH(
       reflection: body.reflection,
       manualValue: body.manualValue,
       parentGoalId: body.parentGoalId,
+      plan: body.plan,
+      planSource: body.planSource,
     });
     if (!goal) return NextResponse.json({ error: 'Goal not found' }, { status: 404 });
     return NextResponse.json({ goal });

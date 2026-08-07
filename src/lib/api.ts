@@ -25,6 +25,7 @@ import type {
   Scorecard,
 } from '@/types/life';
 import type { GoalNudge } from '@/lib/goal-progress';
+import type { InferredGoal } from '@/lib/goal-inference';
 import type { ExerciseProgression } from '@/lib/exercise-progression';
 import type { ExerciseTarget } from '@/lib/exercise-targets';
 import type { DelegationStats } from '@/lib/delegation-stats';
@@ -1589,9 +1590,26 @@ export const api = {
     parentGoalId?: string;
     target?: { value: number; unit?: string };
     evidence?: Goal['evidence'];
+    plan?: Goal['plan'];
+    planSource?: Goal['planSource'];
   }): Promise<{ goal: Goal }> {
     return fetchWithRetry<{ goal: Goal }>(
       '/api/goals',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Free text → a structured goal + progression-plan proposal. `proposal` is null
+  // when the model is unavailable or returns nothing usable; the editor then
+  // stays on the manual form.
+  async inferGoal(input: { text: string; sectionId?: string }): Promise<{ proposal: InferredGoal | null }> {
+    return fetchWithRetry<{ proposal: InferredGoal | null }>(
+      '/api/goals/infer',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -10,9 +10,11 @@ import { randomUUID } from 'crypto';
 import { readAllDomains, writeAllDomains } from './db';
 import { isValidSectionId } from '../life-sections';
 import { isValidPeriodKey, quarterKeyForMonth } from '../goal-periods';
+import { sanitizeMilestones } from '../goal-plan';
 import type {
   Goal,
   GoalCheckIn,
+  GoalMilestone,
   GoalPeriodKind,
   GoalStatus,
 } from '@/types/life';
@@ -22,15 +24,38 @@ import type {
 export async function getAllGoals(): Promise<Goal[]> {
   const raw = readAllDomains().goals;
   if (!Array.isArray(raw)) return [];
-  // Tolerant load: a malformed entry is dropped rather than crashing the tab.
-  return raw.filter(
-    (g): g is Goal =>
-      !!g &&
-      typeof g === 'object' &&
-      typeof (g as Goal).id === 'string' &&
-      typeof (g as Goal).title === 'string' &&
-      typeof (g as Goal).sectionId === 'string'
-  );
+  // Tolerant load: a malformed entry is dropped rather than crashing the tab, and
+  // a malformed plan is cleaned off an otherwise-good goal rather than losing it.
+  return raw
+    .filter(
+      (g): g is Goal =>
+        !!g &&
+        typeof g === 'object' &&
+        typeof (g as Goal).id === 'string' &&
+        typeof (g as Goal).title === 'string' &&
+        typeof (g as Goal).sectionId === 'string'
+    )
+    .map(sanitizeGoalPlan);
+}
+
+// Clean a goal's stored plan on read: keep only well-formed, in-period
+// milestones. A goal whose plan is emptied by this loses `plan`/`planSource` so
+// it reads as unplanned rather than carrying an empty array.
+function sanitizeGoalPlan(goal: Goal): Goal {
+  if (!goal.plan) return goal;
+  const plan = sanitizeMilestones(goal.plan, {
+    periodKind: goal.periodKind,
+    periodKey: goal.periodKey,
+    target: goal.target?.value,
+    unit: goal.target?.unit,
+  });
+  if (plan.length === 0) {
+    const rest = { ...goal };
+    delete rest.plan;
+    delete rest.planSource;
+    return rest;
+  }
+  return { ...goal, plan, planSource: goal.planSource ?? 'manual' };
 }
 
 async function writeGoals(goals: Goal[]): Promise<void> {
@@ -69,6 +94,8 @@ export interface CreateGoalInput {
   parentGoalId?: string;
   target?: { value: number; unit?: string };
   evidence?: Goal['evidence'];
+  plan?: GoalMilestone[];
+  planSource?: Goal['planSource'];
 }
 
 // Throws on an unknown section, a malformed period key, or an invalid parent —
@@ -84,6 +111,13 @@ export async function createGoal(input: CreateGoalInput, now = new Date().toISOS
   const goals = await getAllGoals();
   if (input.parentGoalId) await assertValidParent(goals, input, input.parentGoalId);
 
+  const plan = sanitizeMilestones(input.plan, {
+    periodKind: input.periodKind,
+    periodKey: input.periodKey,
+    target: input.target?.value,
+    unit: input.target?.unit,
+  });
+
   const goal: Goal = {
     id: randomUUID(),
     sectionId: input.sectionId,
@@ -94,6 +128,7 @@ export async function createGoal(input: CreateGoalInput, now = new Date().toISOS
     ...(input.parentGoalId ? { parentGoalId: input.parentGoalId } : {}),
     ...(input.target && input.target.value > 0 ? { target: input.target } : {}),
     evidence: input.evidence ?? { kind: 'manual' },
+    ...(plan.length > 0 ? { plan, planSource: input.planSource ?? 'manual' } : {}),
     checkIns: [],
     status: 'active',
     createdAt: now,
@@ -120,7 +155,19 @@ async function assertValidParent(
 }
 
 export type UpdateGoalInput = Partial<
-  Pick<Goal, 'title' | 'detail' | 'target' | 'evidence' | 'status' | 'reflection' | 'manualValue' | 'parentGoalId'>
+  Pick<
+    Goal,
+    | 'title'
+    | 'detail'
+    | 'target'
+    | 'evidence'
+    | 'status'
+    | 'reflection'
+    | 'manualValue'
+    | 'parentGoalId'
+    | 'plan'
+    | 'planSource'
+  >
 >;
 
 export async function updateGoal(
@@ -136,7 +183,31 @@ export async function updateGoal(
     await assertValidParent(goals, existing, patch.parentGoalId);
   }
 
-  const next: Goal = { ...existing, ...stripUndefined(patch), updatedAt: now };
+  // The plan is cleaned separately: milestones must sit inside the goal's period
+  // and ramp toward its (possibly just-changed) target, which the blanket spread
+  // can't enforce.
+  const scalarPatch = { ...patch };
+  delete scalarPatch.plan;
+  const next: Goal = { ...existing, ...stripUndefined(scalarPatch), updatedAt: now };
+
+  if (patch.plan !== undefined) {
+    const target = patch.target?.value ?? existing.target?.value;
+    const unit = patch.target?.unit ?? existing.target?.unit;
+    const plan = sanitizeMilestones(patch.plan, {
+      periodKind: existing.periodKind,
+      periodKey: existing.periodKey,
+      target,
+      unit,
+    });
+    if (plan.length > 0) {
+      next.plan = plan;
+      next.planSource = patch.planSource ?? existing.planSource ?? 'manual';
+    } else {
+      delete next.plan;
+      delete next.planSource;
+    }
+  }
+
   // Clearing the parent is expressed as an explicit null/'' from the client.
   if (patch.parentGoalId === '' || patch.parentGoalId === null) delete next.parentGoalId;
   if (patch.status && patch.status !== 'active' && !existing.closedAt) next.closedAt = now;
