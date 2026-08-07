@@ -46,7 +46,14 @@ export function useEventNotifications(events: CalendarEvent[]) {
   const firedRef = useRef<Set<string>>(new Set());
 
   // Initialise from localStorage + current permission after mount.
+  //
+  // Deliberately synchronous, unlike the other post-mount reads in this app.
+  // Deferring to an animation frame is the usual way to satisfy the lint rule,
+  // but rAF does not run in a background tab — and a tab left open in the
+  // background is exactly when these notifications matter. Arming them must not
+  // depend on the tab being looked at.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPermission(getPermission());
     setEnabled(window.localStorage.getItem(STORAGE_KEY) === 'true');
   }, []);

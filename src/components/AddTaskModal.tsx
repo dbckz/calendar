@@ -62,9 +62,13 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
     api.getTaskTemplates().then(r => setTemplates(r.templates)).catch(console.error);
   }, []);
 
-  // Update form fields when modal opens with new default times (e.g., from timeline drag)
+  // Seed the form when the modal opens with new default times (e.g. from a
+  // timeline drag). Applied in an animation frame rather than synchronously in
+  // the effect body; the modal is opening in the same frame, so the fields are
+  // populated before there is anything to type into.
   useEffect(() => {
-    if (isOpen) {
+    if (!isOpen) return;
+    const frame = window.requestAnimationFrame(() => {
       if (defaultStartTime) {
         setDueDate(format(defaultStartTime, 'yyyy-MM-dd'));
         setDueTime(format(defaultStartTime, 'HH:mm'));
@@ -74,7 +78,8 @@ export function AddTaskModal({ isOpen, onClose, onAdd, defaultDate, defaultStart
       }
       // Reset to first integration when modal opens
       setSelectedIntegrationId(googleIntegrations?.[0]?.id);
-    }
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [isOpen, defaultStartTime, defaultDate, googleIntegrations]);
 
   // Close on Escape key

@@ -181,7 +181,7 @@ export default function WorkflowConfig() {
     }
   };
 
-  const updateTaskQuota = (taskType: string, field: keyof TaskQuota, value: any) => {
+  const updateTaskQuota = <K extends keyof TaskQuota>(taskType: string, field: K, value: TaskQuota[K]) => {
     setConfig(prev => ({
       ...prev,
       taskQuotas: {
@@ -194,7 +194,7 @@ export default function WorkflowConfig() {
     }));
   };
 
-  const updateScheduling = (field: keyof SchedulingConfig, value: any) => {
+  const updateScheduling = <K extends keyof SchedulingConfig>(field: K, value: SchedulingConfig[K]) => {
     setConfig(prev => ({
       ...prev,
       scheduling: {

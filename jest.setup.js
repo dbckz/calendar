@@ -53,7 +53,7 @@ beforeEach(() => {
   // Clear the internal store
   localStorageMock.__resetStore();
   // Reset all mock implementations to their defaults
-  localStorageMock.getItem.mockImplementation((key) => null);
+  localStorageMock.getItem.mockImplementation(() => null);
   localStorageMock.setItem.mockClear();
   localStorageMock.removeItem.mockClear();
   localStorageMock.clear.mockClear();

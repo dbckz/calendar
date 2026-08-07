@@ -209,9 +209,15 @@ export default function Home() {
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [colorSchemeIndex, setColorSchemeIndex] = useState(0);
 
-  // Set random color scheme on mount (client-side only) to avoid hydration mismatch
+  // Random colour scheme, picked on the client only so SSR and the first client
+  // render agree. Deferred to an animation frame rather than set in the effect
+  // body — same pattern as MobileShell, and a synchronous setState here would
+  // just cost an extra render pass.
   useEffect(() => {
-    setColorSchemeIndex(Math.floor(Math.random() * COLOR_SCHEMES.length));
+    const frame = window.requestAnimationFrame(() => {
+      setColorSchemeIndex(Math.floor(Math.random() * COLOR_SCHEMES.length));
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   const colorScheme = COLOR_SCHEMES[colorSchemeIndex];
@@ -309,7 +315,14 @@ export default function Home() {
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectedGoogleEvent, isEditingGoogleEvent, calendarSelectionModal.show, deleteConfirmModal.show]);
+  }, [
+    selectedGoogleEvent,
+    isEditingGoogleEvent,
+    setSelectedGoogleEvent,
+    setIsEditingGoogleEvent,
+    calendarSelectionModal.show,
+    deleteConfirmModal.show,
+  ]);
 
   useEffect(() => {
     api.getSettings()
@@ -478,7 +491,7 @@ export default function Home() {
     });
 
     return [...enrichedGoogleEvents, ...adhocEvents, ...scheduledAsanaEvents];
-  }, [googleEvents, getTasksForDate, adhocToCalendarEvent, getScheduledAsanaEventsForDate, scheduledAsanaTasks, isEventOnDate]);
+  }, [googleEvents, getTasksForDate, adhocToCalendarEvent, getScheduledAsanaEventsForDate, scheduledAsanaTasks, isEventOnDate, asanaGidsByTitle]);
 
   const allEvents = useMemo(
     () => buildEventsForDate(format(selectedDate, 'yyyy-MM-dd')),
@@ -1035,7 +1048,7 @@ export default function Home() {
     } else if (event.source === 'google') {
       setSelectedGoogleEvent(event);
     }
-  }, []);
+  }, [setSelectedGoogleEvent]);
 
   const handleClearOpenTaskDialog = useCallback(() => {
     setOpenTaskDialogId(null);
@@ -1138,16 +1151,8 @@ export default function Home() {
     window.location.hash = 'calendar';
   }, []);
 
-  const handleOpenAsanaTask = useCallback((taskId: string) => {
-    setActiveTab('calendar');
-    window.location.hash = 'calendar';
-    setOpenTaskDialogId(taskId);
-    setTaskNavIds(null);
-  }, []);
-
-  // Open a task from the Command Center WITHOUT leaving it (a page-level dialog
-  // renders over the dashboard). Distinct from handleOpenAsanaTask, which is for
-  // calendar-originated opens.
+  // Open a task from the Command Center WITHOUT leaving it — a page-level dialog
+  // renders over the dashboard rather than switching to the calendar tab.
   const handleOpenTaskInPlace = useCallback((taskId: string, navIds?: string[]) => {
     setOpenTaskDialogId(taskId);
     setTaskNavIds(navIds ?? null);

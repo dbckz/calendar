@@ -41,9 +41,15 @@ export function TodayColumn({ events, rolloverHour = DEFAULT_ROLLOVER_HOUR, onTa
   // HTML, then fills in the live time.
   const [now, setNow] = useState<Date | null>(null);
   useEffect(() => {
-    setNow(new Date());
+    // The first reading is taken in an animation frame rather than synchronously
+    // in the effect body: same result a frame later, without the extra render
+    // pass a synchronous setState in an effect costs.
+    const frame = window.requestAnimationFrame(() => setNow(new Date()));
     const id = setInterval(() => setNow(new Date()), 60_000);
-    return () => clearInterval(id);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      clearInterval(id);
+    };
   }, []);
 
   // Index of the first event that starts after now — where the now-line goes.

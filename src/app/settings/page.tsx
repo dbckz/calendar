@@ -171,7 +171,7 @@ function SettingsContent() {
 
       const { authUrl } = await res.json();
       window.location.href = authUrl;
-    } catch (error) {
+    } catch {
       setMessage({ type: 'error', text: 'Failed to connect Google Calendar.' });
       setIsGoogleLoading(false);
     }
@@ -183,7 +183,7 @@ function SettingsContent() {
       if (!res.ok) throw new Error('Failed to get auth URL');
       const { authUrl } = await res.json();
       window.location.href = authUrl;
-    } catch (error) {
+    } catch {
       setMessage({ type: 'error', text: 'Failed to reconnect Google Calendar.' });
     }
   };
@@ -193,7 +193,7 @@ function SettingsContent() {
       await fetch(`/api/settings?integrationId=${integrationId}`, { method: 'DELETE' });
       fetchSettings();
       setMessage({ type: 'success', text: 'Google Calendar disconnected.' });
-    } catch (error) {
+    } catch {
       setMessage({ type: 'error', text: 'Failed to disconnect Google Calendar.' });
     }
   };
@@ -236,7 +236,7 @@ function SettingsContent() {
       if (!res.ok) throw new Error('Failed to get auth URL');
       const { authUrl } = await res.json();
       window.location.href = authUrl;
-    } catch (error) {
+    } catch {
       setMessage({ type: 'error', text: 'Failed to reconnect Asana.' });
     }
   };
@@ -246,7 +246,7 @@ function SettingsContent() {
       await fetch(`/api/settings?integrationId=${integrationId}`, { method: 'DELETE' });
       fetchSettings();
       setMessage({ type: 'success', text: 'Asana disconnected.' });
-    } catch (error) {
+    } catch {
       setMessage({ type: 'error', text: 'Failed to disconnect Asana.' });
     }
   };
@@ -292,7 +292,7 @@ function SettingsContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ integrationId, calendars: updated }),
       });
-    } catch (error) {
+    } catch {
       // Revert on failure
       setCalendarLists(prev => ({ ...prev, [integrationId]: calendars }));
       setMessage({ type: 'error', text: 'Failed to save calendar selection.' });
@@ -307,7 +307,7 @@ function SettingsContent() {
         body: JSON.stringify({ id: integrationId, enabled }),
       });
       fetchSettings();
-    } catch (error) {
+    } catch {
       setMessage({ type: 'error', text: 'Failed to update integration.' });
     }
   };
