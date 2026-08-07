@@ -200,11 +200,14 @@ describe('exerciseKey', () => {
   });
 
   it('merges only the equivalences that have been confirmed', () => {
-    // A Paloff press is always done with a cable, so the qualifier is noise.
+    // Both Paloff spellings collapse onto the corrected "Pallof press".
     expect(exerciseKey('Paloff press with cable')).toBe(exerciseKey('Paloff press'));
     // "Treadmill" is shorthand for a treadmill run.
     expect(exerciseKey('Treadmill')).toBe(exerciseKey('Treadmill run'));
-    // Two names for the same machine.
+    // Both pulldown spellings are the lat pulldown.
+    expect(exerciseKey('Pulldown')).toBe(exerciseKey('Cable lat pulldowns'));
+    // Two names for the same machine — the rear delt movement is the reverse pec
+    // deck run backwards.
     expect(exerciseKey('Rear delt machine')).toBe(exerciseKey('Reverse pec deck machine'));
   });
 
@@ -212,8 +215,6 @@ describe('exerciseKey', () => {
     // Dumbbell and cable versions load the movement differently — 7kg of
     // dumbbell lateral raise is not 2.5kg on the cable.
     expect(exerciseKey('Db lateral raise')).not.toBe(exerciseKey('Cable lateral raise'));
-    // A bar lat pulldown and a cable one are different exercises.
-    expect(exerciseKey('Pulldown')).not.toBe(exerciseKey('Cable lat pulldowns'));
     // A treadmill run is not an outdoor run — the outdoor effort is harder.
     expect(exerciseKey('Treadmill run')).not.toBe(exerciseKey('Run'));
   });

@@ -9,9 +9,18 @@
 
 import { randomUUID } from 'crypto';
 import { readAllDomains, writeAllDomains } from './db';
+import { normalizeExerciseName } from '../exercise-names';
 import type { ExerciseEntry, ExerciseSession, ExerciseSource } from '@/types/life';
 
 const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+// The single chokepoint for canonical naming: every path that persists an entry
+// (createSession, the importer's upsert, the mid-session add, and renames via
+// updateSessionEntry) runs its name through here, so the store never gains a new
+// spelling variant regardless of which route wrote it.
+function canonicalise(entry: Omit<ExerciseEntry, 'id'>): Omit<ExerciseEntry, 'id'> {
+  return { ...entry, name: normalizeExerciseName(entry.name) };
+}
 
 // Its own `exerciseSessions` domain, for the same reason as goals: getUserData()
 // only returns the domains it knows about.
@@ -88,7 +97,7 @@ export async function createSession(
     ...(input.notes?.trim() ? { notes: input.notes.trim() } : {}),
     ...(input.label?.trim() ? { label: input.label.trim() } : {}),
     ...(input.exercises?.length
-      ? { exercises: input.exercises.map(e => ({ ...e, id: randomUUID() })) }
+      ? { exercises: input.exercises.map(e => ({ ...canonicalise(e), id: randomUUID() })) }
       : {}),
     ...(input.googleEventId ? { googleEventId: input.googleEventId } : {}),
     ...(input.googleCalendarId ? { googleCalendarId: input.googleCalendarId } : {}),
@@ -168,7 +177,7 @@ export async function upsertSessionByImportKey(
     // Exercises are replaced wholesale: the source row IS the record of what
     // was done, and merging two lists of lifts would produce nonsense.
     ...(input.exercises
-      ? { exercises: input.exercises.map(e => ({ ...e, id: randomUUID() })) }
+      ? { exercises: input.exercises.map(e => ({ ...canonicalise(e), id: randomUUID() })) }
       : {}),
     ...(input.components ? { components: input.components } : {}),
     ...(input.targetDistanceKm !== undefined
@@ -205,11 +214,19 @@ export async function updateSessionEntry(
   const existing = sessions.find(s => s.id === sessionId);
   if (!existing?.exercises?.some(e => e.id === entryId)) return null;
 
+  // A rename is corrected to its canonical spelling, so filing an exercise under
+  // a variant name still merges it into the one history.
+  const canonicalPatch =
+    typeof patch.name === 'string' ? { ...patch, name: normalizeExerciseName(patch.name) } : patch;
+
   const next: ExerciseSession = {
     ...existing,
     exercises: existing.exercises.map(e =>
       e.id === entryId
-        ? { ...e, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) }
+        ? {
+            ...e,
+            ...Object.fromEntries(Object.entries(canonicalPatch).filter(([, v]) => v !== undefined)),
+          }
         : e
     ),
     updatedAt: now,
@@ -228,7 +245,7 @@ export async function addSessionEntry(
   const existing = sessions.find(s => s.id === sessionId);
   if (!existing) return null;
 
-  const withId: ExerciseEntry = { ...entry, id: randomUUID() };
+  const withId: ExerciseEntry = { ...canonicalise(entry), id: randomUUID() };
   const next: ExerciseSession = {
     ...existing,
     exercises: [...(existing.exercises ?? []), withId],

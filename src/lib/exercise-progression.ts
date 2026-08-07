@@ -4,6 +4,7 @@
 // level. "Am I training enough?" is a session-count question; "is my chest press
 // going up?" can only be answered from the individual sets.
 
+import { normalizeExerciseName } from './exercise-names';
 import type { ExerciseSession } from '@/types/life';
 
 export interface ProgressionPoint {
@@ -34,33 +35,16 @@ export interface ExerciseProgression {
   weightChangeKg?: number;
 }
 
-// Equivalent names, keyed by normalised form → canonical key.
-//
-// There is deliberately NO general "strip the equipment word" rule. Equipment
-// usually IS the distinction: per Dave, dumbbell and cable versions of a
-// movement are always different exercises (the weights aren't comparable — 7kg
-// of dumbbell lateral raise against 2.5kg on the cable), and a bar lat pulldown
-// is a different exercise from a cable one. So equivalences are only ever
-// asserted case by case, from a confirmed answer, not inferred.
-const ALIASES: Record<string, string> = {
-  // A Paloff press is always done with a cable, so the qualifier is noise.
-  'paloff press with cable': 'paloff press',
-  // "Treadmill" is shorthand for a treadmill run. Kept SEPARATE from "Run",
-  // which means outdoors and is a meaningfully harder effort.
-  treadmill: 'treadmill run',
-  // Same movement, two names for the machine.
-  'rear delt machine': 'reverse pec deck machine',
-};
-
 // Exercise names are typed by hand and drift ("Db lateral raise" vs "DB lateral
-// raise"). Matching on a normalised key keeps one lift's history together
+// raise"). Grouping on a key derived from the canonical name (see
+// exercise-names) keeps one lift's history together — even where old,
+// un-migrated data on the other machine still carries a pre-canonical spelling —
 // without forcing a fixed exercise list.
 export function exerciseKey(name: string): string {
-  const base = name
+  return normalizeExerciseName(name)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
-  return ALIASES[base] ?? base;
 }
 
 // `before`, when given, restricts progression to sessions dated strictly before

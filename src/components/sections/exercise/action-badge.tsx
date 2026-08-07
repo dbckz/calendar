@@ -1,6 +1,6 @@
-import { ArrowUp, Equal, TrendingDown, Sparkles, type LucideIcon } from 'lucide-react';
+import { ArrowUp, Equal, TrendingDown, Sparkles, Flame, type LucideIcon } from 'lucide-react';
 
-import type { TargetAction } from '@/lib/exercise-targets';
+import type { ExerciseKind, TargetAction } from '@/lib/exercise-targets';
 
 // How each progression recommendation is labelled and coloured. Shared by the
 // Plan tab's read-only targets and the Today checklist so a "Go up" looks the
@@ -23,6 +23,36 @@ export function ActionBadge({ action }: { action: TargetAction }) {
     >
       <Icon className="h-3 w-3" />
       {style.label}
+    </span>
+  );
+}
+
+// How the AI programme labels an exercise's role. The 'core' lift is the one
+// being driven up session to session; it is labelled "Staple" rather than
+// "Core" so it doesn't read as an abs movement next to dead bugs and planks.
+// 'rotation' and 'cardio' are quieter, greyer context.
+const KIND_STYLE: Record<ExerciseKind, { label: string; className: string }> = {
+  core: { label: 'Staple', className: 'text-indigo-700 bg-indigo-50' },
+  rotation: { label: 'Rotating', className: 'text-gray-500 bg-gray-100' },
+  cardio: { label: 'Cardio', className: 'text-sky-700 bg-sky-50' },
+};
+
+export function KindTag({ kind }: { kind: ExerciseKind }) {
+  const style = KIND_STYLE[kind];
+  return (
+    <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${style.className}`}>
+      {style.label}
+    </span>
+  );
+}
+
+// The final exercise, taken to failure. Deliberately loud — it's the one cue
+// that changes how the last set is performed.
+export function FailureTag() {
+  return (
+    <span className="flex items-center gap-1 rounded-md bg-orange-50 px-2 py-0.5 text-[11px] font-semibold text-orange-700">
+      <Flame className="h-3 w-3" />
+      To failure
     </span>
   );
 }
