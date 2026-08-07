@@ -120,6 +120,38 @@ export async function setWeeklyTaskOutcomes(
   return changed;
 }
 
+// Mark (or unmark) one working day of a week as out of office.
+//
+// Deliberately the one assertion here that is not additive: the reconcile
+// rebuilds a past day from the calendar as it stands NOW, so a holiday that was
+// cancelled has to stop counting. Everything else in this record is a
+// high-water mark; this tracks the calendar.
+export async function recordOutOfOfficeDay(
+  weekStart: string,
+  date: string,
+  outOfOffice: boolean,
+  at: string = new Date().toISOString()
+): Promise<void> {
+  const data = await getUserData();
+  const all = { ...(data.weeklyStats || {}) };
+  const existing = all[weekStart];
+  // Nothing to unmark on a week with no record — don't create one to say so.
+  if (!existing && !outOfOffice) return;
+
+  const record: WeeklyStatsRecord = existing ? { ...existing } : emptyRecord(weekStart, at);
+  const current = new Set(record.outOfOfficeDays ?? []);
+  if (outOfOffice === current.has(date)) return; // already correct
+
+  if (outOfOffice) current.add(date);
+  else current.delete(date);
+
+  record.outOfOfficeDays = [...current].sort();
+  record.updatedAt = at;
+  all[weekStart] = record;
+  data.weeklyStats = all;
+  await saveUserData(data);
+}
+
 // Record a day's per-integration time. Absolute values (not deltas): the client
 // re-reports the running totals for the day, so the latest report wins.
 export async function recordWeeklyTime(

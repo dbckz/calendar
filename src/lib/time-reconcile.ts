@@ -20,6 +20,7 @@ import { addDays, format, startOfWeek } from 'date-fns';
 
 import { getEnabledGoogleIntegrations } from '@/lib/integration-storage';
 import { fetchEventsForDays } from '@/lib/scheduling/gather';
+import { outOfOfficeDates } from '@/lib/scheduling/free-busy';
 import { recordDailyTime, getTimeTrackingData } from '@/lib/time-tracking-storage';
 import type { EventTimeRecord, IntegrationTimeRecord } from '@/lib/time-tracking-storage';
 import {
@@ -33,13 +34,15 @@ import {
   getScheduledAsanaTasks,
   getGoogleEventAttributions,
   recordWeeklyTime,
+  recordOutOfOfficeDay,
   getEventAttributionRules,
   getAnalysisStartDate,
   pruneWeeklyStatsBefore,
 } from '@/lib/user-data-storage';
 import { getEnabledAsanaIntegrations } from '@/lib/integration-storage';
-import { getWorkflowConfig } from '@/lib/workflow-config-storage';
+import { getWorkflowConfig, type WorkflowConfig } from '@/lib/workflow-config-storage';
 import { logicalToday, normalizeRolloverHour } from '@/lib/date-utils';
+import { parseTimeOfDay } from '@/lib/scheduling/engine';
 import type { AsanaIntegration, CalendarEvent } from '@/types';
 
 // How many past days to rebuild by default, and the hard ceiling on a request.
@@ -68,6 +71,41 @@ function enrichWithLocalRecords(
       ...(link.integrationId ? { linkedAsanaIntegrationId: link.integrationId } : {}),
     };
   });
+}
+
+const WEEKDAY_NAMES = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+];
+
+// The configured working window for one past day, as outOfOfficeDates() wants
+// it — or null when the day is not a working day at all (a weekend needs no OOO
+// marker: nothing was expected of it), or when working hours aren't configured.
+//
+// Built here rather than via resolveWorkingWindow because that builds days
+// forward from `now` for scheduling, and every day this reconcile looks at is
+// already in the past.
+function workingWindowFor(
+  date: string,
+  scheduling: WorkflowConfig['scheduling']
+): { dateStr: string; whStartMs: number; whEndMs: number } | null {
+  if (!scheduling?.workingHours) return null;
+  const day = new Date(`${date}T00:00:00`);
+  const names = new Set(
+    (scheduling.workingDays ?? []).map((d: string) => d.charAt(0).toUpperCase() + d.slice(1).toLowerCase())
+  );
+  if (!names.has(WEEKDAY_NAMES[day.getDay()])) return null;
+
+  const start = parseTimeOfDay(scheduling.workingHours.start) ?? { h: 9, m: 0 };
+  const end = parseTimeOfDay(scheduling.workingHours.end) ?? { h: 17, m: 0 };
+  const at = (t: { h: number; m: number }) =>
+    new Date(day.getFullYear(), day.getMonth(), day.getDate(), t.h, t.m).getTime();
+  return { dateStr: date, whStartMs: at(start), whEndMs: at(end) };
 }
 
 // Rebuild the last `days` past days (never today) from the calendar.
@@ -208,8 +246,19 @@ export async function reconcilePastDays(days = DEFAULT_RECONCILE_DAYS): Promise<
 
     await recordDailyTime(date, integrationTotals, eventRecords);
 
+    const weekStart = format(startOfWeek(day, { weekStartsOn: 1 }), 'yyyy-MM-dd');
+
+    // Was this a day off? A holiday week should read as a week off, not as a
+    // collapse in output, so the week records which of its working days were
+    // out of office. Asserted both ways from the live calendar — a cancelled
+    // holiday unmarks the day on the next reconcile.
+    const window = workingWindowFor(date, config.scheduling);
+    if (window) {
+      await recordOutOfOfficeDay(weekStart, date, outOfOfficeDates(trusted, [window]).has(date));
+    }
+
     await recordWeeklyTime(
-      format(startOfWeek(day, { weekStartsOn: 1 }), 'yyyy-MM-dd'),
+      weekStart,
       date,
       Object.keys(attributed.scheduled).map(workspaceId => ({
         integrationId: workspaceId,

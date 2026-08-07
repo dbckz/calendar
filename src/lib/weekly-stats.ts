@@ -37,6 +37,20 @@ export interface WeekSummary {
   completionRate: number;
   minutesWorkedByIntegration: WeekIntegrationSummary[];
   totalMinutesWorked: number;
+  // Working days spent out of office (yyyy-MM-dd, ascending). A week with days
+  // in here is not comparable to a full week: less was possible, so less got
+  // done. The rate is left alone — inflating it would be inventing work — and
+  // the days are shown alongside it so the number reads correctly.
+  outOfOfficeDays: string[];
+}
+
+// Working days in a standard week, for reading a week's completion against the
+// time actually available. Weeks are Mon–Fri here, matching the app's default
+// working days; a week fully out of office has none left.
+const WORKING_DAYS_PER_WEEK = 5;
+
+export function workingDaysAvailable(week: Pick<WeekSummary, 'outOfOfficeDays'>): number {
+  return Math.max(0, WORKING_DAYS_PER_WEEK - week.outOfOfficeDays.length);
 }
 
 const UNCATEGORISED = 'Uncategorised';
@@ -84,6 +98,7 @@ export function summariseWeek(record: WeeklyStatsRecord): WeekSummary {
     completionRate: totalScheduled > 0 ? (totalCompleted + totalStarted) / totalScheduled : 0,
     minutesWorkedByIntegration,
     totalMinutesWorked: minutesWorkedByIntegration.reduce((n, i) => n + i.minutes, 0),
+    outOfOfficeDays: [...(record.outOfOfficeDays ?? [])].sort(),
   };
 }
 

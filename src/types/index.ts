@@ -542,6 +542,12 @@ export interface WeeklyStatsRecord {
     string, // Asana integration id
     { integrationName: string; days: Record<string, WeeklyStatsIntegrationDay> }
   >;
+  // Working days in this week spent out of office (yyyy-MM-dd), read off the
+  // calendar. Without it a holiday week reads as a collapse in output; with it
+  // the low numbers are explained. Written by the reconcile, which also REMOVES
+  // a date whose OOO event has since been deleted. Absent on records written
+  // before this was tracked — which means "not known", not "was in the office".
+  outOfOfficeDays?: string[];
 }
 
 // A DURABLE attribution override for calendar events, matched by recurring

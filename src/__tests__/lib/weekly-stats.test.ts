@@ -9,8 +9,14 @@ import {
   recordWeeklyTasks,
   setWeeklyTaskOutcomes,
   recordWeeklyTime,
+  recordOutOfOfficeDay,
 } from '@/lib/user-data-storage';
-import { summariseWeek, weeklyProgressRows, unscheduledThisWeek } from '@/lib/weekly-stats';
+import {
+  summariseWeek,
+  weeklyProgressRows,
+  unscheduledThisWeek,
+  workingDaysAvailable,
+} from '@/lib/weekly-stats';
 import { __resetDbForTests } from '@/lib/storage/db';
 import type { WeeklyStatsRecord } from '@/types';
 import type { CarryOverEntry } from '@/lib/storage/carry-overs';
@@ -296,5 +302,58 @@ describe('unscheduledThisWeek (dashboard "Left unscheduled" derivation)', () => 
     const summary = summariseWeek((await getWeeklyStats(WEEK))!);
     // Both count as planned-but-not-done: carried = 2, none completed.
     expect(summary.categories[0]).toMatchObject({ carried: 2, completed: 0, scheduled: 2 });
+  });
+});
+
+// A holiday week should read as a week off, not as a collapse in output.
+describe('out-of-office days', () => {
+  it('records days away and reports the working days that were left', async () => {
+    await recordWeeklyTasks(WEEK, GROUPED_AND_SINGLES);
+    await recordOutOfOfficeDay(WEEK, '2026-07-23', true);
+    await recordOutOfOfficeDay(WEEK, '2026-07-22', true);
+
+    const summary = summariseWeek((await getWeeklyStats(WEEK))!);
+    // Ascending, whatever order they were recorded in.
+    expect(summary.outOfOfficeDays).toEqual(['2026-07-22', '2026-07-23']);
+    expect(workingDaysAvailable(summary)).toBe(3);
+  });
+
+  it('unmarks a day whose holiday was cancelled', async () => {
+    await recordWeeklyTasks(WEEK, GROUPED_AND_SINGLES);
+    await recordOutOfOfficeDay(WEEK, '2026-07-23', true);
+    await recordOutOfOfficeDay(WEEK, '2026-07-23', false);
+
+    const summary = summariseWeek((await getWeeklyStats(WEEK))!);
+    expect(summary.outOfOfficeDays).toEqual([]);
+    expect(workingDaysAvailable(summary)).toBe(5);
+  });
+
+  it('leaves the completion rate alone — the days are context, not a correction', async () => {
+    await recordWeeklyTasks(WEEK, GROUPED_AND_SINGLES);
+    await setWeeklyTaskOutcomes(WEEK, [{ taskId: 'e1', outcome: 'done' }]);
+    await recordOutOfOfficeDay(WEEK, '2026-07-23', true);
+
+    const summary = summariseWeek((await getWeeklyStats(WEEK))!);
+    expect(summary.completionRate).toBeCloseTo(1 / 5);
+  });
+
+  it('does not create a week record just to say a day was not out of office', async () => {
+    await recordOutOfOfficeDay('2026-08-03', '2026-08-04', false);
+    expect(await getWeeklyStats('2026-08-03')).toBeNull();
+  });
+
+  it('reads a week with nothing recorded as a full week', async () => {
+    await recordWeeklyTasks(WEEK, GROUPED_AND_SINGLES);
+    const summary = summariseWeek((await getWeeklyStats(WEEK))!);
+    expect(summary.outOfOfficeDays).toEqual([]);
+    expect(workingDaysAvailable(summary)).toBe(5);
+  });
+
+  it('never reports negative days available, however many are recorded', async () => {
+    await recordWeeklyTasks(WEEK, GROUPED_AND_SINGLES);
+    for (const day of ['20', '21', '22', '23', '24', '25']) {
+      await recordOutOfOfficeDay(WEEK, `2026-07-${day}`, true);
+    }
+    expect(workingDaysAvailable(summariseWeek((await getWeeklyStats(WEEK))!))).toBe(0);
   });
 });

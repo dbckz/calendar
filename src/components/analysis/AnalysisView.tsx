@@ -19,6 +19,32 @@ function rateColor(rate: number): string {
   return 'bg-orange-400';
 }
 
+// Working days in a normal week. A week with fewer available is not comparable
+// to a full one: less was possible, so less got done.
+const WORKING_DAYS_PER_WEEK = 5;
+
+function daysOut(week: WeekSummary): number {
+  return week.outOfOfficeDays?.length ?? 0;
+}
+
+function daysAvailable(week: WeekSummary): number {
+  return Math.max(0, WORKING_DAYS_PER_WEEK - daysOut(week));
+}
+
+function outOfOfficeLabel(week: WeekSummary): string | null {
+  const out = daysOut(week);
+  if (out === 0) return null;
+  if (daysAvailable(week) === 0) return 'away all week';
+  return `${out} day${out === 1 ? '' : 's'} out of office`;
+}
+
+// A week spent away is shown neutral rather than in the "you missed a lot"
+// orange: the rate is honest, but painting an expected quiet week as a failure
+// is not.
+function trendColor(week: WeekSummary): string {
+  return daysAvailable(week) === 0 ? 'bg-gray-300' : rateColor(week.completionRate);
+}
+
 function weekLabel(weekStart: string): string {
   const parsed = parseISO(weekStart);
   return Number.isNaN(parsed.getTime()) ? weekStart : `Week of ${format(parsed, 'd MMM yyyy')}`;
@@ -49,20 +75,32 @@ function CompletionTrend({ weeks }: { weeks: WeekSummary[] }) {
       <p className="text-[11px] text-gray-400 mb-3">
         Share of scheduled tasks finished or started, oldest week first.
       </p>
-      <ul className="flex items-end gap-2 h-24">
+      {/* The fixed height belongs to the bar track, not the column: with it on
+          the row, the track claimed every pixel and the labels above and below
+          were pushed outside the card. */}
+      <ul className="flex items-end gap-2">
         {oldestFirst.map(week => (
-          <li key={week.weekStart} className="flex-1 flex flex-col items-center justify-end h-full">
+          <li key={week.weekStart} className="flex-1 flex flex-col items-center justify-end">
             <span className="text-[11px] text-gray-500 mb-1">{pct(week.completionRate)}%</span>
-            <div className="w-full h-full bg-gray-100 rounded-full flex flex-col justify-end overflow-hidden">
+            <div className="w-full h-24 bg-gray-100 rounded-full flex flex-col justify-end overflow-hidden">
               <div
-                className={`w-full rounded-full ${rateColor(week.completionRate)}`}
+                className={`w-full rounded-full ${trendColor(week)}`}
                 style={{ height: `${Math.max(pct(week.completionRate), 2)}%` }}
-                aria-label={`${shortWeekLabel(week.weekStart)}: ${pct(week.completionRate)} per cent finished or started`}
+                aria-label={`${shortWeekLabel(week.weekStart)}: ${pct(week.completionRate)} per cent finished or started${
+                  outOfOfficeLabel(week) ? `, ${outOfOfficeLabel(week)}` : ''
+                }`}
               />
             </div>
             <span className="text-[10px] text-gray-400 mt-1 truncate w-full text-center">
               {shortWeekLabel(week.weekStart)}
             </span>
+            {/* Days away are shown on the column itself: a low bar means
+                something different when half the week wasn't worked. */}
+            {daysOut(week) > 0 && (
+              <span className="text-[10px] text-gray-400 truncate w-full text-center">
+                🌴 {daysAvailable(week) === 0 ? 'away' : `${daysOut(week)}d out`}
+              </span>
+            )}
           </li>
         ))}
       </ul>
@@ -84,7 +122,14 @@ function WeekCard({
   return (
     <div className={CARD}>
       <div className="flex items-baseline justify-between mb-3">
-        <h3 className="text-base font-semibold text-gray-900">{weekLabel(week.weekStart)}</h3>
+        <h3 className="flex items-baseline gap-2 text-base font-semibold text-gray-900">
+          {weekLabel(week.weekStart)}
+          {outOfOfficeLabel(week) && (
+            <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[11px] font-medium text-sky-700">
+              🌴 {outOfOfficeLabel(week)}
+            </span>
+          )}
+        </h3>
         <span className="text-sm text-gray-500">
           <span className={`font-semibold ${week.completionRate >= 0.8 ? 'text-emerald-600' : 'text-gray-800'}`}>
             {pct(week.completionRate)}%
@@ -97,6 +142,14 @@ function WeekCard({
         {progressed} of {week.totalScheduled} scheduled tasks finished or started
         {started > 0 && <span className="text-amber-600"> · {started} started</span>}
         {untouched > 0 && <span className="text-orange-600"> — {untouched} untouched</span>}
+        {/* The denominator that actually applied: judging a two-day week
+            against a five-day one is how a normal holiday reads as a slump. */}
+        {daysOut(week) > 0 && (
+          <span className="text-sky-700">
+            {' '}
+            · {daysAvailable(week)} working day{daysAvailable(week) === 1 ? '' : 's'} available
+          </span>
+        )}
       </div>
 
       {week.categories.length === 0 ? (

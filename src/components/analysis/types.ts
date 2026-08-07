@@ -43,6 +43,10 @@ export interface WeekSummary {
   totalCompleted: number;
   totalStarted?: number;
   completionRate: number; // (completed + started) / scheduled; 0 when nothing was scheduled
+  // Working days of this week spent out of office. Optional: weeks recorded
+  // before OOO tracking have none, which means "not known" rather than "was in
+  // the office" — a distinction that only matters for those old weeks.
+  outOfOfficeDays?: string[];
   totalMinutesWorked: number;
   timeByIntegration: TimeByIntegration[];
   events: AnalysisEvent[];
