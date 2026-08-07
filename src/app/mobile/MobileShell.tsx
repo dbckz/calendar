@@ -26,8 +26,13 @@ import { DayTab } from './tabs/DayTab';
 import { RemindersTab } from './tabs/RemindersTab';
 import { ExerciseTab } from './tabs/ExerciseTab';
 import { GoalsTab } from './tabs/GoalsTab';
+import { WellbeingTab } from './tabs/WellbeingTab';
 import { useGoalNudges } from '@/hooks/useGoalNudges';
-import { useExerciseOverview, useGoalsOverview } from '@/hooks/useLifeAreas';
+import {
+  useExerciseOverview,
+  useGoalsOverview,
+  useWellbeingOverview,
+} from '@/hooks/useLifeAreas';
 
 const TAB_STORAGE_KEY = 'mobile-active-tab';
 
@@ -37,6 +42,7 @@ const TAB_SUBTITLES: Record<MobileTab, string> = {
   reminders: 'Reminders',
   goals: 'Goals',
   exercise: 'Exercise',
+  wellbeing: 'Wellbeing',
 };
 
 export function MobileShell() {
@@ -95,6 +101,7 @@ export function MobileShell() {
   const { nudges: goalNudges } = useGoalNudges();
   const goalsOverview = useGoalsOverview(activeTab === 'goals');
   const exerciseOverview = useExerciseOverview(activeTab === 'exercise');
+  const wellbeingOverview = useWellbeingOverview(activeTab === 'wellbeing');
 
   const loadSettings = useCallback(async () => {
     try {
@@ -236,6 +243,7 @@ export function MobileShell() {
       // fetch data that isn't on screen, and goal evidence isn't free.
       if (activeTab === 'goals') goalsOverview.refresh();
       if (activeTab === 'exercise') exerciseOverview.refresh();
+      if (activeTab === 'wellbeing') wellbeingOverview.refresh();
     } finally {
       setIsRefreshing(false);
     }
@@ -248,6 +256,7 @@ export function MobileShell() {
     activeTab,
     goalsOverview,
     exerciseOverview,
+    wellbeingOverview,
   ]);
 
   // A Day-tab event opens the task sheet when it's backed by an Asana task in
@@ -419,6 +428,15 @@ export function MobileShell() {
             onSessionChanged={exerciseOverview.refresh}
             isLoading={exerciseOverview.isLoading}
             error={exerciseOverview.error}
+          />
+        )}
+
+        {activeTab === 'wellbeing' && (
+          <WellbeingTab
+            analysis={wellbeingOverview.analysis}
+            experiments={wellbeingOverview.experiments}
+            isLoading={wellbeingOverview.isLoading}
+            error={wellbeingOverview.error}
           />
         )}
 

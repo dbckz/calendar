@@ -16,6 +16,8 @@ jest.mock('@/lib/api', () => ({
     completeDailyReview: jest.fn(),
     getReviewMessage: jest.fn(),
     dismissReviewTitle: jest.fn(),
+    getWellbeingDays: jest.fn(),
+    saveWellbeingDay: jest.fn(),
   },
 }));
 
@@ -104,6 +106,8 @@ describe('DailyReviewModal — step 1 outcomes and replacements', () => {
     });
     (api.completeDailyReview as jest.Mock).mockResolvedValue({});
     (api.getReviewMessage as jest.Mock).mockResolvedValue({ message: 'Good day.' });
+    (api.getWellbeingDays as jest.Mock).mockResolvedValue({ days: [] });
+    (api.saveWellbeingDay as jest.Mock).mockResolvedValue({ day: null });
   });
 
   it('offers three outcomes and records Started on apply', async () => {
@@ -353,6 +357,8 @@ describe('DailyReviewModal — catch-up context', () => {
     });
     (api.completeDailyReview as jest.Mock).mockResolvedValue({});
     (api.getReviewMessage as jest.Mock).mockResolvedValue({ message: 'Good day.' });
+    (api.getWellbeingDays as jest.Mock).mockResolvedValue({ days: [] });
+    (api.saveWellbeingDay as jest.Mock).mockResolvedValue({ day: null });
   });
 
   // Render with a specific `review` payload attached to the analyze response.
@@ -422,5 +428,102 @@ describe('DailyReviewModal — catch-up context', () => {
     expect(
       screen.getByRole('button', { name: /What were you doing instead\?/ })
     ).toBeInTheDocument();
+  });
+});
+
+// The daily habits ride along with step 1. What matters is that a skip can't be
+// saved without a reason, and that answers reach storage for the right day.
+describe('DailyReviewModal — daily habits', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (api.confirmReplan as jest.Mock).mockResolvedValue({
+      results: [],
+      doneResults: [],
+      additionResults: [],
+    });
+    (api.completeDailyReview as jest.Mock).mockResolvedValue({});
+    (api.getReviewMessage as jest.Mock).mockResolvedValue({ message: 'Good day.' });
+    (api.getWellbeingDays as jest.Mock).mockResolvedValue({ days: [] });
+    (api.saveWellbeingDay as jest.Mock).mockResolvedValue({ day: null });
+  });
+
+  // The habit group is labelled with its question, so each one is addressable.
+  function habitGroup(question: RegExp) {
+    return screen.getByRole('group', { name: question });
+  }
+
+  async function click(name: RegExp | string, container?: HTMLElement) {
+    const scope = container ? within(container) : screen;
+    await act(async () => {
+      fireEvent.click(scope.getByRole('button', { name }));
+    });
+  }
+
+  it('asks the habit questions even when there is nothing to review', async () => {
+    await openModal([]);
+    expect(screen.getByText(/Nothing to review yet/i)).toBeInTheDocument();
+    expect(habitGroup(/Did you meditate today\?/i)).toBeInTheDocument();
+    expect(habitGroup(/morning pages/i)).toBeInTheDocument();
+  });
+
+  it('saves the answers with the reason for a skip', async () => {
+    await openModal([reviewBlock()]);
+
+    await click(/^Yes$/, habitGroup(/Did you meditate today\?/i));
+    await click(/^No$/, habitGroup(/morning pages/i));
+
+    const reason = screen.getByLabelText(/Why morning pages didn’t happen/i);
+    await act(async () => {
+      fireEvent.change(reason, { target: { value: 'Overslept' } });
+    });
+    const notes = screen.getByLabelText(/Anything else worth noting\?/i);
+    await act(async () => {
+      fireEvent.change(notes, { target: { value: 'Slept badly' } });
+    });
+
+    await saveAndReplan();
+
+    const call = (api.saveWellbeingDay as jest.Mock).mock.calls[0][0];
+    expect(call.habits).toEqual([
+      { habitId: 'meditate', done: true },
+      { habitId: 'morning-pages', done: false, reason: 'Overslept' },
+    ]);
+    expect(call.notes).toBe('Slept badly');
+    expect(call.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('blocks the save when a skip has no reason', async () => {
+    await openModal([reviewBlock()]);
+
+    await click(/^No$/, habitGroup(/Did you meditate today\?/i));
+    await saveAndReplan();
+
+    expect(api.saveWellbeingDay).not.toHaveBeenCalled();
+    expect(api.confirmReplan).not.toHaveBeenCalled();
+    expect(screen.getByText(/Say why a habit didn’t happen/i)).toBeInTheDocument();
+  });
+
+  it('sends nothing when both questions are left unanswered', async () => {
+    await openModal([reviewBlock()]);
+    await saveAndReplan();
+    expect(api.saveWellbeingDay).not.toHaveBeenCalled();
+  });
+
+  it('seeds the answers already recorded for the day', async () => {
+    (api.getWellbeingDays as jest.Mock).mockResolvedValue({
+      days: [
+        {
+          date: '2026-08-07',
+          habits: [{ habitId: 'meditate', done: false, reason: 'Travelling' }],
+          notes: 'On a train',
+          createdAt: '',
+          updatedAt: '',
+        },
+      ],
+    });
+    await openModal([reviewBlock()]);
+
+    expect(screen.getByLabelText(/Why meditate didn’t happen/i)).toHaveValue('Travelling');
+    expect(screen.getByLabelText(/Anything else worth noting\?/i)).toHaveValue('On a train');
   });
 });

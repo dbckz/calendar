@@ -24,6 +24,14 @@ import type {
   GoalWithProgress,
   Scorecard,
 } from '@/types/life';
+import type {
+  Experiment,
+  ExperimentStatus,
+  ExperimentVerdict,
+  HabitLog,
+  WellbeingAnalysis,
+  WellbeingDay,
+} from '@/types/wellbeing';
 import type { GoalNudge } from '@/lib/goal-progress';
 import type { InferredGoal } from '@/lib/goal-inference';
 import type { ExerciseProgression } from '@/lib/exercise-progression';
@@ -1838,6 +1846,102 @@ export const api = {
     if (to) params.set('to', to);
     return fetchWithRetry<{ analysis: ExerciseAnalysis }>(
       `/api/exercise/analysis?${params.toString()}`
+    );
+  },
+
+  // --- Wellbeing (daily habits and experiments) -----------------------------
+
+  async getWellbeingDays(from?: string, to?: string): Promise<{ days: WellbeingDay[] }> {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    return fetchWithRetry<{ days: WellbeingDay[] }>(`/api/wellbeing/days?${params.toString()}`);
+  },
+
+  // Upsert one day's habit answers. Habits merge by id server-side, so sending
+  // only the ones just answered never wipes an earlier answer for that day.
+  async saveWellbeingDay(input: {
+    date: string;
+    habits: HabitLog[];
+    notes?: string;
+  }): Promise<{ day: WellbeingDay }> {
+    return fetchWithRetry<{ day: WellbeingDay }>(
+      '/api/wellbeing/days',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  async getWellbeingAnalysis(from?: string, to?: string): Promise<{ analysis: WellbeingAnalysis }> {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    return fetchWithRetry<{ analysis: WellbeingAnalysis }>(
+      `/api/wellbeing/analysis?${params.toString()}`
+    );
+  },
+
+  async getExperiments(status?: ExperimentStatus): Promise<{ experiments: Experiment[] }> {
+    const params = new URLSearchParams();
+    if (status) params.set('status', status);
+    return fetchWithRetry<{ experiments: Experiment[] }>(
+      `/api/wellbeing/experiments?${params.toString()}`
+    );
+  },
+
+  async createExperiment(input: Partial<Experiment>): Promise<{ experiment: Experiment }> {
+    return fetchWithRetry<{ experiment: Experiment }>(
+      '/api/wellbeing/experiments',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // An empty string clears a field (that is how reopening drops a verdict);
+  // omitting the key leaves whatever is stored alone.
+  async updateExperiment(
+    id: string,
+    patch: Partial<Omit<Experiment, 'verdict'>> & { verdict?: ExperimentVerdict | '' }
+  ): Promise<{ experiment: Experiment }> {
+    return fetchWithRetry<{ experiment: Experiment }>(
+      `/api/wellbeing/experiments/${id}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  async deleteExperiment(id: string): Promise<{ success: boolean }> {
+    return fetchWithRetry<{ success: boolean }>(
+      `/api/wellbeing/experiments/${id}`,
+      { method: 'DELETE' },
+      { maxRetries: 0 }
+    );
+  },
+
+  async checkInExperiment(
+    id: string,
+    input: { rating?: number; note?: string }
+  ): Promise<{ experiment: Experiment }> {
+    return fetchWithRetry<{ experiment: Experiment }>(
+      `/api/wellbeing/experiments/${id}/check-in`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+      { maxRetries: 0 }
     );
   },
 };

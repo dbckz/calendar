@@ -67,6 +67,18 @@ export const LIFE_SECTIONS: LifeSection[] = [
     subTabs: [{ id: 'goals', label: 'Goals', icon: 'Target' }],
   },
   {
+    id: 'wellbeing',
+    label: 'Wellbeing',
+    icon: 'HeartPulse',
+    // Goals-free for now: the two habits are tracked day by day rather than
+    // against a monthly target, and the experiments carry their own verdicts.
+    holdsGoals: false,
+    subTabs: [
+      { id: 'analysis', label: 'Analysis', icon: 'BarChart3' },
+      { id: 'experiments', label: 'Experiments', icon: 'FlaskConical' },
+    ],
+  },
+  {
     id: 'goals',
     label: 'Goals',
     icon: 'Target',

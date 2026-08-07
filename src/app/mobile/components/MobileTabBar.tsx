@@ -1,8 +1,8 @@
 'use client';
 
-import { Bell, CalendarDays, Dumbbell, LayoutDashboard, Target } from 'lucide-react';
+import { Bell, CalendarDays, Dumbbell, HeartPulse, LayoutDashboard, Target } from 'lucide-react';
 
-export type MobileTab = 'home' | 'day' | 'reminders' | 'goals' | 'exercise';
+export type MobileTab = 'home' | 'day' | 'reminders' | 'goals' | 'exercise' | 'wellbeing';
 
 const TABS: Array<{ id: MobileTab; label: string; Icon: typeof LayoutDashboard }> = [
   { id: 'home', label: 'Home', Icon: LayoutDashboard },
@@ -10,6 +10,7 @@ const TABS: Array<{ id: MobileTab; label: string; Icon: typeof LayoutDashboard }
   { id: 'reminders', label: 'Reminders', Icon: Bell },
   { id: 'goals', label: 'Goals', Icon: Target },
   { id: 'exercise', label: 'Exercise', Icon: Dumbbell },
+  { id: 'wellbeing', label: 'Wellbeing', Icon: HeartPulse },
 ];
 
 export const MOBILE_TABS: MobileTab[] = TABS.map(t => t.id);

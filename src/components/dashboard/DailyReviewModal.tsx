@@ -27,6 +27,14 @@ import {
 import { categoryColor, slotLabelMs, titleLabel } from './replanFormat';
 import { ReplanSections, replanHasWork } from './ReplanSections';
 import { GoalCheckInPanel } from '@/components/goals/GoalCheckInPanel';
+import {
+  HabitCheckPanel,
+  emptyHabitAnswers,
+  habitLogsFrom,
+  incompleteHabits,
+  type HabitAnswers,
+} from './HabitCheckPanel';
+import { logicalToday } from '@/lib/date-utils';
 import { useReplanActions } from './useReplanActions';
 
 interface DailyReviewModalProps {
@@ -92,6 +100,14 @@ export function DailyReviewModal({
   // Fired (best-effort) when the review is confirmed; never blocks the apply.
   const [reviewMessage, setReviewMessage] = useState<string | null>(null);
   const [reviewMessageLoading, setReviewMessageLoading] = useState(false);
+  // The daily habits, asked alongside "what got done" — the review is the one
+  // moment the day is being thought about, so it is where the answers come from.
+  const [habitAnswers, setHabitAnswers] = useState<HabitAnswers>(emptyHabitAnswers);
+  const [wellbeingNotes, setWellbeingNotes] = useState('');
+  const [showHabitErrors, setShowHabitErrors] = useState(false);
+  // Fixed for the life of the modal so the panel doesn't re-seed if the review
+  // is left open across the rollover hour.
+  const [reviewDate] = useState(() => logicalToday());
 
   // Step 2 reuses the exact replan review + confirm behaviour.
   const actions = useReplanActions(step === 2 ? data : null, onApplied);
@@ -122,6 +138,9 @@ export function DailyReviewModal({
     setIsApplying(false);
     setReviewMessage(null);
     setReviewMessageLoading(false);
+    setHabitAnswers(emptyHabitAnswers());
+    setWellbeingNotes('');
+    setShowHabitErrors(false);
     analyze().then(res => {
       if (res) setMarks(initMarks(res.reviewBlocks ?? []));
     });
@@ -216,6 +235,14 @@ export function DailyReviewModal({
 
   // Apply the step-1 marks, then re-analyze and advance to the replan step.
   const applyAndContinue = useCallback(async () => {
+    // A habit answered "no" without a reason blocks the save: the reason is the
+    // only part of a skip worth having later, so an empty one is worse than no
+    // answer at all.
+    if (incompleteHabits(habitAnswers).length > 0) {
+      setShowHabitErrors(true);
+      setError('Say why a habit didn’t happen before saving.');
+      return;
+    }
     setIsApplying(true);
     setError(null);
     // Fire the closing-message request now (from the marks the user just
@@ -267,6 +294,22 @@ export function DailyReviewModal({
         if (failed > 0) setError(`${failed} update${failed === 1 ? '' : 's'} could not be saved.`);
         onApplied?.();
       }
+      // The day's habits and notes. Awaited rather than fired-and-forgotten:
+      // unlike the closing message this is data being recorded, and a silent
+      // loss would leave a hole in the record that nothing else can refill.
+      const habitLogs = habitLogsFrom(habitAnswers);
+      if (habitLogs.length > 0 || wellbeingNotes.trim()) {
+        try {
+          await api.saveWellbeingDay({
+            date: reviewDate,
+            habits: habitLogs,
+            notes: wellbeingNotes,
+          });
+        } catch (err) {
+          console.error('Failed to save the day’s habits:', err);
+          setError('Your review was saved, but the habit answers were not.');
+        }
+      }
       // Stamp the review as completed so the next one only covers what finishes
       // after now, and record the calendar rows he reviewed (rather than
       // dismissed) as implicit "this IS a task" verdicts. Best-effort — a failure
@@ -281,7 +324,17 @@ export function DailyReviewModal({
     } finally {
       setIsApplying(false);
     }
-  }, [reviewBlocks, marks, replacements, analyze, onApplied, summariseOutcome]);
+  }, [
+    reviewBlocks,
+    marks,
+    replacements,
+    analyze,
+    onApplied,
+    summariseOutcome,
+    habitAnswers,
+    wellbeingNotes,
+    reviewDate,
+  ]);
 
   if (!isOpen) return null;
 
@@ -334,8 +387,9 @@ export function DailyReviewModal({
               </p>
             </div>
           ) : !data ? null : step === 1 ? (
-            reviewBlocks.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 gap-2 text-center">
+            <>
+            {reviewBlocks.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-10 gap-2 text-center">
                 <Check className="w-8 h-8 text-emerald-500" />
                 <p className="text-sm font-medium text-gray-700">Nothing to review yet.</p>
                 <p className="text-xs text-gray-400">
@@ -366,7 +420,20 @@ export function DailyReviewModal({
                   />
                 ))}
               </ul>
-            )
+            )}
+            {/* The habits ride along with the review for the same reason the
+                goal check-in does: this is the one moment the day is already
+                being thought about. Shown even when there was nothing to
+                review — a quiet day still had a morning. */}
+            <HabitCheckPanel
+              date={reviewDate}
+              answers={habitAnswers}
+              onChange={setHabitAnswers}
+              notes={wellbeingNotes}
+              onNotesChange={setWellbeingNotes}
+              showErrors={showHabitErrors}
+            />
+            </>
           ) : (
             <>
               {(reviewMessageLoading || reviewMessage) && (
