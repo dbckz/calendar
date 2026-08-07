@@ -90,6 +90,10 @@ export interface TaskDetailDialogProps {
   // task's aiDelegable flag and marks the entry reviewed. Shown only when the
   // delegation entry is finished (done/failed) and not yet reviewed.
   onMoveToBacklog?: (entry: DelegationQueueEntry) => void;
+  // "Return to AI queue" for a finished delegation run: stamps returnedToAiAt so
+  // the task rejoins the AI-runnable queue, marks the entry reviewed, and
+  // re-affirms aiDelegable + a positive verdict. Same visibility as backlog.
+  onReturnToAiQueue?: (entry: DelegationQueueEntry) => void;
   // Step to the previous/next task in the originating list (Command Center
   // panels). Each is provided only when such a neighbour exists, so the
   // corresponding chevron renders only at a non-end position.

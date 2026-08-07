@@ -707,6 +707,28 @@ export const api = {
     });
   },
 
+  // Explicitly return a delegated task to the AI-runnable queue. Stamps
+  // returnedToAiAt (which lifts the AI-runnable exclusion) and settles
+  // reviewedAt so the entry also leaves the "For review" inbox. Pass the
+  // entry's existing reviewedAt to preserve it; otherwise it is stamped now.
+  async returnDelegationToAiQueue(
+    asanaTaskGid: string,
+    integrationId: string,
+    reviewedAt?: string
+  ): Promise<{ entry: DelegationQueueEntry }> {
+    const now = new Date().toISOString();
+    return fetchWithRetry<{ entry: DelegationQueueEntry }>('/api/orchestrator/queue', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        asanaTaskGid,
+        integrationId,
+        reviewedAt: reviewedAt ?? now,
+        returnedToAiAt: now,
+      }),
+    });
+  },
+
   async deleteDelegationEntry(asanaTaskGid: string): Promise<{ success: boolean }> {
     return fetchWithRetry<{ success: boolean }>(
       `/api/orchestrator/queue?asanaTaskGid=${encodeURIComponent(asanaTaskGid)}`,

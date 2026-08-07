@@ -172,6 +172,12 @@ export interface DelegationQueueEntry {
   // stays out of the inbox across reloads. Cleared automatically when the
   // entry is re-queued so a fresh run re-enters the inbox.
   reviewedAt?: string;
+  // Set only when the user EXPLICITLY returns a reviewed task to the AI-runnable
+  // queue (its next step is AI-runnable again). Delegating a task otherwise
+  // removes it from the AI-runnable queue permanently; this flag is the one way
+  // back, and it is never set automatically. Cleared on any re-queue (a fresh
+  // delegation run takes the task out of the queue again).
+  returnedToAiAt?: string;
   updatedAt: string;
 }
 

@@ -1204,6 +1204,26 @@ export default function Home() {
     toast.success('Moved to backlog for a human');
   }, [saveMetadata, markReviewed, toast]);
 
+  // "Return to AI queue": the next step is AI-runnable again. Stamp
+  // returnedToAiAt (lifting the AI-runnable exclusion) and settle reviewedAt so
+  // the entry leaves For-review, then re-affirm aiDelegable + a positive verdict
+  // (the same mechanism as accepting a claim) so a later assessment can't drop
+  // it. saveMetadata also updates the client store so the panel reappears at once.
+  const handleReturnToAiQueue = useCallback((entry: DelegationQueueEntry) => {
+    saveMetadata(entry.asanaTaskGid, entry.integrationId, { aiDelegable: true })
+      .catch(err => console.error('Error setting aiDelegable:', err));
+    Promise.all([
+      api.returnDelegationToAiQueue(entry.asanaTaskGid, entry.integrationId, entry.reviewedAt),
+      api.applyAiVerdicts([{ gid: entry.asanaTaskGid, integrationId: entry.integrationId }], []),
+    ])
+      .then(() => refreshDelegation())
+      .catch(err => {
+        toast.error('Failed to return to AI queue');
+        console.error('Error returning delegation to AI queue:', err);
+      });
+    toast.success('Returned to AI queue');
+  }, [saveMetadata, refreshDelegation, toast]);
+
   // GIDs of Asana tasks the store currently shows as completed. A task merely
   // absent from the store is NOT treated as completed — an integration fetch
   // may have failed or the task may belong to another workspace.
@@ -1324,6 +1344,7 @@ export default function Home() {
               delegationEntry={delegationByGid[dashboardDialogTask.id]}
               onDelegated={handleDelegated}
               onMoveToBacklog={handleMoveToBacklog}
+              onReturnToAiQueue={handleReturnToAiQueue}
             />
           )}
         </div>

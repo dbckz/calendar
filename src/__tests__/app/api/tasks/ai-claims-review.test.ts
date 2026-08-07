@@ -21,6 +21,7 @@ jest.mock('@/lib/user-data-storage', () => ({
   setAiUserVerdicts: jest.fn(),
   getAllTaskMetadata: jest.fn(),
   upsertTaskMetadata: jest.fn(),
+  getAllDelegationEntries: jest.fn(),
 }));
 
 import { POST as classify } from '@/app/api/tasks/classify-ai/route';
@@ -33,6 +34,7 @@ import {
   setAiUserVerdicts,
   getAllTaskMetadata,
   upsertTaskMetadata,
+  getAllDelegationEntries,
 } from '@/lib/user-data-storage';
 
 const TASKS = [
@@ -55,6 +57,7 @@ beforeEach(() => {
   (getAllTaskMetadata as jest.Mock).mockResolvedValue({
     'g-known': { asanaTaskGid: 'g-known', integrationId: 'ai1', aiDelegable: true, updatedAt: '' },
   });
+  (getAllDelegationEntries as jest.Mock).mockResolvedValue({});
   (classifyTasks as jest.Mock).mockResolvedValue([
     { gid: 'g-new', aiSuitable: true, reason: 'Self-contained' },
     { gid: 'g-known', aiSuitable: true, reason: 'Still fine' },
@@ -127,6 +130,49 @@ describe('classify-ai — review mode', () => {
 
     const mirrored = (upsertTaskMetadata as jest.Mock).mock.calls.map(c => [c[0], c[2]]);
     expect(mirrored).not.toContainEqual(['g-new', { aiDelegable: true }]);
+  });
+});
+
+describe('classify-ai — delegated tasks are excluded from the AI-runnable queue', () => {
+  // g-new has an active delegation entry (any state, not yet returned), so it is
+  // excluded from the AI-runnable queue however the classifier votes.
+  const delegated = (over: Record<string, unknown> = {}) => ({
+    'g-new': {
+      asanaTaskGid: 'g-new',
+      integrationId: 'ai1',
+      title: 'Draft the summary',
+      brief: '',
+      mode: 'background',
+      state: 'done',
+      priority: 0,
+      enqueuedAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      ...over,
+    },
+  });
+
+  it('does not mirror a positive verdict onto a delegated task, in apply mode', async () => {
+    (getAllDelegationEntries as jest.Mock).mockResolvedValue(delegated());
+    await post(classify, { tasks: TASKS });
+
+    const mirrored = (upsertTaskMetadata as jest.Mock).mock.calls.map(c => [c[0], c[2]]);
+    expect(mirrored).not.toContainEqual(['g-new', { aiDelegable: true }]);
+    // Other tasks are unaffected.
+    expect(mirrored).toContainEqual(['g-no', { aiDelegable: false }]);
+  });
+
+  it('does not offer a delegated task as a review claim', async () => {
+    (getAllDelegationEntries as jest.Mock).mockResolvedValue(delegated());
+    const out = await post(classify, { tasks: TASKS, mode: 'review' });
+    expect(out.claims).toEqual([]);
+  });
+
+  it('treats the task normally again once it has been returned to the queue', async () => {
+    (getAllDelegationEntries as jest.Mock).mockResolvedValue(
+      delegated({ returnedToAiAt: '2026-08-05T10:00:00.000Z' })
+    );
+    const out = await post(classify, { tasks: TASKS, mode: 'review' });
+    expect(out.claims.map((c: { gid: string }) => c.gid)).toEqual(['g-new']);
   });
 });
 

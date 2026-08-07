@@ -49,8 +49,11 @@ export async function upsertDelegationEntry(
   // Re-queueing a task (e.g. "Continue with AI", a fresh delegation, or a
   // usage-limit backoff) clears any prior triage, so the next finished run
   // re-enters the "For review" inbox instead of staying hidden as reviewed.
+  // It also clears returnedToAiAt: a task with a run in flight belongs out of
+  // the AI-runnable queue, exactly as when it was first delegated.
   if (updates.state === 'queued') {
     delete merged.reviewedAt;
+    delete merged.returnedToAiAt;
   }
 
   data.delegationQueue[asanaTaskGid] = merged;

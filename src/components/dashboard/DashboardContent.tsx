@@ -403,6 +403,7 @@ export function DashboardContent({
             <AiRunnableTasks
               tasks={asanaTasks}
               metadataByGid={metadataByGid}
+              delegationByGid={delegationByGid}
               onTaskClick={onOpenTask}
               onDelegate={onDelegateTask}
             />

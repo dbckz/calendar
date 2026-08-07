@@ -11,8 +11,10 @@ import {
   getAiUserVerdicts,
   getAllTaskMetadata,
   upsertTaskMetadata,
+  getAllDelegationEntries,
 } from '@/lib/user-data-storage';
 import { selectNewAiClaims, type AiClaimCandidate } from '@/lib/ai-verdicts';
+import { excludedFromAiRunnable } from '@/lib/delegation-exclusion';
 import { buildExamplesBlock } from '@/lib/classifier-learning';
 import { AiClassificationEntry } from '@/types';
 
@@ -45,11 +47,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'tasks array is required' }, { status: 400 });
     }
 
-    const [cache, userVerdicts, metadata] = await Promise.all([
+    const [cache, userVerdicts, metadata, delegationQueue] = await Promise.all([
       getAllAiClassification(),
       getAiUserVerdicts(),
       getAllTaskMetadata(),
+      getAllDelegationEntries(),
     ]);
+
+    // Tasks delegated to an agent leave the AI-runnable queue until explicitly
+    // returned (see delegation-exclusion). A re-assessment must never bring one
+    // back automatically, so a positive verdict is not mirrored onto its
+    // metadata and it is not offered as a claim.
+    const excludedGids = excludedFromAiRunnable(delegationQueue);
 
     // Split into cached (unchanged) vs. needs-assessment. A task Dave RULED OUT is
     // skipped entirely — his rejection stands, so there is nothing to spend an LLM
@@ -109,8 +118,11 @@ export async function POST(request: NextRequest) {
       // In review mode a NEW positive claim is held back until Dave confirms it;
       // everything else (negatives, and positives for tasks already accepted)
       // applies immediately, as it always has.
+      // A delegated (excluded) task never has a positive verdict mirrored back
+      // onto it either — that would silently re-add it to the AI-runnable queue.
+      const awaitingConfirmation = mode === 'review' && metadata[task.gid]?.aiDelegable !== true;
       const holdBack =
-        mode === 'review' && verdict.aiSuitable && metadata[task.gid]?.aiDelegable !== true;
+        verdict.aiSuitable && (awaitingConfirmation || excludedGids.has(task.gid));
       if (!holdBack) {
         await upsertTaskMetadata(task.gid, task.integrationId, { aiDelegable: verdict.aiSuitable });
       }
@@ -123,17 +135,19 @@ export async function POST(request: NextRequest) {
     // The claims to review: newly-claimed tasks that are neither already in the
     // list nor already ruled out. Built for every mode (cheap, and harmless to
     // report) but only acted on by the review flow.
-    const candidates: AiClaimCandidate[] = tasks.map(task => ({
-      gid: task.gid,
-      integrationId: task.integrationId,
-      title: task.title,
-      integrationName: task.integrationName,
-      dueOn: task.dueOn,
-      reason: newEntries[task.gid]?.reason ?? cache[task.gid]?.reason,
-      aiSuitable: newEntries[task.gid]?.aiSuitable ?? cache[task.gid]?.aiSuitable,
-      alreadyAccepted: metadata[task.gid]?.aiDelegable === true,
-      userVerdict: userVerdicts[task.gid],
-    }));
+    const candidates: AiClaimCandidate[] = tasks
+      .filter(task => !excludedGids.has(task.gid))
+      .map(task => ({
+        gid: task.gid,
+        integrationId: task.integrationId,
+        title: task.title,
+        integrationName: task.integrationName,
+        dueOn: task.dueOn,
+        reason: newEntries[task.gid]?.reason ?? cache[task.gid]?.reason,
+        aiSuitable: newEntries[task.gid]?.aiSuitable ?? cache[task.gid]?.aiSuitable,
+        alreadyAccepted: metadata[task.gid]?.aiDelegable === true,
+        userVerdict: userVerdicts[task.gid],
+      }));
     const claims = selectNewAiClaims(candidates);
 
     return NextResponse.json({

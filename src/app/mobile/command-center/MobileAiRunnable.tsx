@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from 'react';
 import { Bot, Zap } from 'lucide-react';
-import { CalendarEvent, TaskMetadata } from '@/types';
+import { CalendarEvent, DelegationQueueEntry, TaskMetadata } from '@/types';
+import { isExcludedFromAiRunnable } from '@/lib/delegation-exclusion';
 import { MobileTaskRow } from './MobileTaskRow';
 
 const COLLAPSED_COUNT = 8;
@@ -12,19 +13,23 @@ const COLLAPSED_COUNT = 8;
 export function MobileAiRunnable({
   tasks,
   metadataByGid,
+  delegationByGid,
   onTaskClick,
   onDelegate,
 }: {
   tasks: CalendarEvent[]; // incomplete Asana tasks
   metadataByGid: Record<string, TaskMetadata>;
+  // Delegation queue, so a delegated task drops out of this panel until it is
+  // explicitly returned to the queue (mirrors the desktop AiRunnableTasks).
+  delegationByGid: Record<string, DelegationQueueEntry>;
   onTaskClick?: (task: CalendarEvent) => void;
   onDelegate?: (task: CalendarEvent) => void;
 }) {
   const runnable = useMemo(
     () => tasks
-      .filter(t => !t.completed && metadataByGid[t.id]?.aiDelegable)
+      .filter(t => !t.completed && metadataByGid[t.id]?.aiDelegable && !isExcludedFromAiRunnable(delegationByGid[t.id]))
       .sort((a, b) => (a.dueOn || '9999').localeCompare(b.dueOn || '9999')),
-    [tasks, metadataByGid]
+    [tasks, metadataByGid, delegationByGid]
   );
   const [expanded, setExpanded] = useState(false);
   const shown = expanded ? runnable : runnable.slice(0, COLLAPSED_COUNT);

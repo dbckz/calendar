@@ -289,6 +289,25 @@ export function MobileShell() {
     toast.success('Moved to backlog for a human');
   }, [saveMetadata, refreshDelegation, toast]);
 
+  // "Return to AI queue": the next step is AI-runnable again. Mirrors the
+  // desktop handler — stamp returnedToAiAt + settle reviewedAt (leaves
+  // For-review, lifts the AI-runnable exclusion) and re-affirm aiDelegable + a
+  // positive verdict so a later assessment can't drop it.
+  const handleReturnToAiQueue = useCallback((entry: DelegationQueueEntry) => {
+    saveMetadata(entry.asanaTaskGid, entry.integrationId, { aiDelegable: true })
+      .catch(err => console.error('Error setting aiDelegable:', err));
+    Promise.all([
+      api.returnDelegationToAiQueue(entry.asanaTaskGid, entry.integrationId, entry.reviewedAt),
+      api.applyAiVerdicts([{ gid: entry.asanaTaskGid, integrationId: entry.integrationId }], []),
+    ])
+      .then(() => refreshDelegation())
+      .catch(err => {
+        toast.error('Failed to return to AI queue');
+        console.error('Error returning delegation to AI queue:', err);
+      });
+    toast.success('Returned to AI queue');
+  }, [saveMetadata, refreshDelegation, toast]);
+
   const prevDay = subDays(selectedDate, 1);
   const nextDay = addDays(selectedDate, 1);
   const showLoading = isLoading || isRefreshing;
@@ -438,6 +457,7 @@ export function MobileShell() {
           onAddComment={addAsanaComment}
           onDelegate={setDelegateTask}
           onMoveToBacklog={handleMoveToBacklog}
+          onReturnToAiQueue={handleReturnToAiQueue}
         />
       )}
 

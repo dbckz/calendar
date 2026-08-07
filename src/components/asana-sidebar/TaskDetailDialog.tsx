@@ -38,6 +38,7 @@ export function TaskDetailDialog({
   delegationEntry,
   onDelegated,
   onMoveToBacklog,
+  onReturnToAiQueue,
   onPrevTask,
   onNextTask,
 }: TaskDetailDialogProps) {
@@ -181,6 +182,12 @@ export function TaskDetailDialog({
   const handleMoveToBacklog = () => {
     if (!delegationEntry || !onMoveToBacklog) return;
     onMoveToBacklog(delegationEntry);
+    onClose();
+  };
+
+  const handleReturnToAiQueue = () => {
+    if (!delegationEntry || !onReturnToAiQueue) return;
+    onReturnToAiQueue(delegationEntry);
     onClose();
   };
 
@@ -628,6 +635,19 @@ export function TaskDetailDialog({
             >
               <UserRound className="w-4 h-4" />
               Move to backlog
+            </button>
+          )}
+
+          {/* Return to AI queue — the next step is AI-runnable again. Puts the
+              task back in the AI-runnable panel and clears it from For-review. */}
+          {isReviewable && onReturnToAiQueue && (
+            <button
+              onClick={handleReturnToAiQueue}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium border border-indigo-300 text-indigo-700 hover:bg-indigo-50 transition-colors"
+              title="The next step is AI-runnable — return this task to the AI-runnable queue and clear it from the For-review inbox"
+            >
+              <Bot className="w-4 h-4" />
+              Return to AI queue
             </button>
           )}
 

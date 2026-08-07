@@ -86,6 +86,33 @@ describe('delegation queue storage', () => {
     expect(entry?.reviewedAt).toBeUndefined();
   });
 
+  it('persists returnedToAiAt without wiping it on an unrelated write', async () => {
+    await upsertDelegationEntry('ret-1', 'int-1', { state: 'done' });
+    const returnedToAiAt = '2026-08-05T10:00:00.000Z';
+    // "Return to AI queue" stamps returnedToAiAt (+ reviewedAt), NOT state:queued.
+    await upsertDelegationEntry('ret-1', 'int-1', { returnedToAiAt, reviewedAt: returnedToAiAt });
+
+    const entry = await getDelegationEntry('ret-1');
+    expect(entry?.returnedToAiAt).toBe(returnedToAiAt);
+    expect(entry?.state).toBe('done'); // unchanged by the return write
+  });
+
+  it('clears returnedToAiAt when an entry is re-queued (delegate again)', async () => {
+    await upsertDelegationEntry('ret-2', 'int-1', {
+      state: 'done',
+      returnedToAiAt: '2026-08-05T10:00:00.000Z',
+      reviewedAt: '2026-08-05T10:00:00.000Z',
+    });
+    // Delegating again sends the entry back to queued; a run in flight belongs
+    // out of the AI-runnable queue, so returnedToAiAt is cleared with reviewedAt.
+    await upsertDelegationEntry('ret-2', 'int-1', { state: 'queued' });
+
+    const entry = await getDelegationEntry('ret-2');
+    expect(entry?.state).toBe('queued');
+    expect(entry?.returnedToAiAt).toBeUndefined();
+    expect(entry?.reviewedAt).toBeUndefined();
+  });
+
   it('preserves a prior result when re-queued (Continue with AI)', async () => {
     await upsertDelegationEntry('rev-3', 'int-1', {
       state: 'done',

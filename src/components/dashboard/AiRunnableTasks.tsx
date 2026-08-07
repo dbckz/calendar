@@ -3,7 +3,8 @@
 import { useMemo, useState } from 'react';
 import { format, parseISO, isPast, isToday } from 'date-fns';
 import { Bot, Calendar, Zap } from 'lucide-react';
-import { CalendarEvent, TaskMetadata } from '@/types';
+import { CalendarEvent, DelegationQueueEntry, TaskMetadata } from '@/types';
+import { isExcludedFromAiRunnable } from '@/lib/delegation-exclusion';
 import { usePaged, PageBar, useFitCount } from './PageBar';
 import { ExpandedTasksModal } from './ExpandedTasksModal';
 
@@ -12,6 +13,9 @@ const ROW_PX = 46; // approx height of one compact task row incl. gap
 interface AiRunnableTasksProps {
   tasks: CalendarEvent[];                      // incomplete Asana tasks
   metadataByGid: Record<string, TaskMetadata>;
+  // Delegation queue, so a delegated task drops out of this panel (see
+  // isExcludedFromAiRunnable) until it is explicitly returned to the queue.
+  delegationByGid: Record<string, DelegationQueueEntry>;
   onTaskClick?: (taskId: string, navIds?: string[]) => void; // open the task dialog in-place
   onDelegate?: (task: CalendarEvent) => void;  // open the compose-brief modal directly
 }
@@ -26,12 +30,12 @@ function dueColor(dueOn?: string): string {
 
 // A dedicated section for tasks flagged aiDelegable in their metadata — the ones
 // an agent can realistically run end to end. One click to brief and delegate.
-export function AiRunnableTasks({ tasks, metadataByGid, onTaskClick, onDelegate }: AiRunnableTasksProps) {
+export function AiRunnableTasks({ tasks, metadataByGid, delegationByGid, onTaskClick, onDelegate }: AiRunnableTasksProps) {
   const runnable = useMemo(
     () => tasks
-      .filter(t => !t.completed && metadataByGid[t.id]?.aiDelegable)
+      .filter(t => !t.completed && metadataByGid[t.id]?.aiDelegable && !isExcludedFromAiRunnable(delegationByGid[t.id]))
       .sort((a, b) => (a.dueOn || '9999').localeCompare(b.dueOn || '9999')),
-    [tasks, metadataByGid]
+    [tasks, metadataByGid, delegationByGid]
   );
   const [listRef, perPage] = useFitCount<HTMLUListElement>(ROW_PX);
   const { page, pageCount, pageItems, next, prev } = usePaged(runnable, perPage);

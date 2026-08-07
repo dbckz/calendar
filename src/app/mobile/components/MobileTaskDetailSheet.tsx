@@ -41,6 +41,7 @@ export function MobileTaskDetailSheet({
   onAddComment,
   onDelegate,
   onMoveToBacklog,
+  onReturnToAiQueue,
 }: {
   task: CalendarEvent;
   delegationEntry?: DelegationQueueEntry;
@@ -49,6 +50,7 @@ export function MobileTaskDetailSheet({
   onAddComment?: (taskId: string, integrationId: string, text: string) => Promise<void>;
   onDelegate?: (task: CalendarEvent) => void;
   onMoveToBacklog?: (entry: DelegationQueueEntry) => void;
+  onReturnToAiQueue?: (entry: DelegationQueueEntry) => void;
 }) {
   const [comment, setComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -266,6 +268,20 @@ export function MobileTaskDetailSheet({
           >
             <UserRound className="h-4 w-4" />
             Move to backlog
+          </button>
+        )}
+
+        {isReviewable && onReturnToAiQueue && delegationEntry && (
+          <button
+            type="button"
+            onClick={() => {
+              onReturnToAiQueue(delegationEntry);
+              onClose();
+            }}
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-lg border border-indigo-300 font-medium text-indigo-700 transition-colors active:bg-indigo-50"
+          >
+            <Bot className="h-4 w-4" />
+            Return to AI queue
           </button>
         )}
 

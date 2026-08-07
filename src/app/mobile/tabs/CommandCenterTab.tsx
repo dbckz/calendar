@@ -77,6 +77,7 @@ export function CommandCenterTab({
       <MobileAiRunnable
         tasks={asanaTasks}
         metadataByGid={metadataByGid}
+        delegationByGid={delegationByGid}
         onTaskClick={onOpenTask}
         onDelegate={onDelegateTask}
       />
