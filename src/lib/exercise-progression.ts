@@ -12,6 +12,10 @@ export interface ProgressionPoint {
   sets?: number;
   reps?: number;
   holdSeconds?: number;
+  // Cardio work is measured in time and distance, not sets and load. Carried so
+  // a treadmill "last time" reads "15 min · 3.5 km" and not "the same".
+  durationMinutes?: number;
+  distanceKm?: number;
   // sets × reps × weight for the session — the usual rough proxy for work done.
   volume?: number;
   notes?: string;
@@ -89,6 +93,8 @@ export function buildProgressions(
         ...(entry.sets !== undefined ? { sets: entry.sets } : {}),
         ...(entry.reps !== undefined ? { reps: entry.reps } : {}),
         ...(entry.holdSeconds !== undefined ? { holdSeconds: entry.holdSeconds } : {}),
+        ...(entry.durationMinutes !== undefined ? { durationMinutes: entry.durationMinutes } : {}),
+        ...(entry.distanceKm !== undefined ? { distanceKm: entry.distanceKm } : {}),
         ...(entry.notes ? { notes: entry.notes } : {}),
       };
       if (entry.weightKg !== undefined && entry.sets && entry.reps) {

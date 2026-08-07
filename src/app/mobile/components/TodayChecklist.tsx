@@ -1,12 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { format, parseISO } from 'date-fns';
 import { Check, Loader2, Plus, Trash2, X } from 'lucide-react';
 
 import { useTodaySession, type FieldPatch, type TodayRow } from '@/hooks/useTodaySession';
 import { describeVolumeLoad } from '@/lib/exercise-targets';
-import { ActionBadge } from '@/components/sections/exercise/action-badge';
+import { ActionBadge, FailureTag, KindTag } from '@/components/sections/exercise/action-badge';
 
 // The in-the-gym checklist on mobile: today's workout, one tickable row per
 // exercise, each carrying its guidance (what to aim for and why, from last
@@ -20,6 +19,7 @@ export function TodayChecklist({ onSessionChanged }: { onSessionChanged?: () => 
     doneCount,
     totalCount,
     isLoading,
+    generating,
     error,
     busyKey,
     toggleDone,
@@ -47,6 +47,13 @@ export function TodayChecklist({ onSessionChanged }: { onSessionChanged?: () => 
           </span>
         )}
       </div>
+
+      {generating && (
+        <p className="flex items-center gap-1.5 text-xs text-gray-400">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Refining today’s plan…
+        </p>
+      )}
 
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -163,6 +170,8 @@ function RowCard({
             >
               {row.name}
             </p>
+            {row.kind && <KindTag kind={row.kind} />}
+            {row.toFailure && <FailureTag />}
             {row.action && <ActionBadge action={row.action} />}
           </div>
           <p className="mt-0.5 text-xs tabular-nums text-gray-600">
@@ -172,12 +181,8 @@ function RowCard({
             )}
           </p>
           {row.rationale && <p className="mt-0.5 text-xs text-gray-500">{row.rationale}</p>}
-          {row.last && (
-            <p className="mt-0.5 text-[11px] text-gray-400">
-              Last: {format(parseISO(row.last.date), 'd MMM')}
-              {row.last.sets && row.last.reps ? ` · ${row.last.sets}×${row.last.reps}` : ''}
-              {row.last.weightKg !== undefined ? ` · ${row.last.weightKg}kg` : ''}
-            </p>
+          {row.lastSummary && (
+            <p className="mt-0.5 text-[11px] text-gray-400">Last: {row.lastSummary}</p>
           )}
           {row.notes && !open && <p className="mt-0.5 text-xs text-gray-500">{row.notes}</p>}
         </button>

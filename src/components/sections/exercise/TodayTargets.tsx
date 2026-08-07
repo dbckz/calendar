@@ -5,7 +5,7 @@ import { format, parseISO } from 'date-fns';
 
 import { api } from '@/lib/api';
 import { describeVolumeLoad, type ExerciseTarget } from '@/lib/exercise-targets';
-import { ActionBadge } from './action-badge';
+import { ActionBadge, FailureTag, KindTag } from './action-badge';
 
 // What to aim for today, from the last time each exercise was trained.
 //
@@ -57,21 +57,19 @@ export function TodayTargets({ date }: { date?: string }) {
           <li key={target.key} className="py-2.5">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-sm font-medium text-gray-900">{target.name}</p>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <p className="text-sm font-medium text-gray-900">{target.name}</p>
+                  {target.kind && <KindTag kind={target.kind} />}
+                  {target.toFailure && <FailureTag />}
+                </div>
                 <p className="mt-0.5 text-xs text-gray-500">{target.rationale}</p>
-                {target.last && (
-                  <p className="mt-0.5 text-[11px] text-gray-400">
-                    Last: {format(parseISO(target.last.date), 'd MMM')}
-                    {target.last.sets && target.last.reps
-                      ? ` · ${target.last.sets}×${target.last.reps}`
-                      : ''}
-                    {target.last.weightKg !== undefined ? ` · ${target.last.weightKg}kg` : ''}
-                  </p>
+                {target.lastSummary && (
+                  <p className="mt-0.5 text-[11px] text-gray-400">Last: {target.lastSummary}</p>
                 )}
               </div>
 
               <div className="flex flex-shrink-0 flex-col items-end gap-1">
-                <ActionBadge action={target.action} />
+                {target.action && <ActionBadge action={target.action} />}
                 <span className="text-sm font-semibold tabular-nums text-gray-900">
                   {describeTarget(target)}
                 </span>

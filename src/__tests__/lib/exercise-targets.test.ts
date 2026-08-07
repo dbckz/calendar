@@ -5,7 +5,7 @@
  * training log — reading effort out of them is the whole basis of the
  * recommendation, so they are the cases that matter.
  */
-import { buildTarget, readEffort } from '@/lib/exercise-targets';
+import { buildTarget, describeLast, describeVolumeLoad, readEffort } from '@/lib/exercise-targets';
 import type { ExerciseProgression, ProgressionPoint } from '@/lib/exercise-progression';
 
 function progression(latest: ProgressionPoint, name = 'Converging chest press machine'): ExerciseProgression {
@@ -145,5 +145,36 @@ describe('buildTarget', () => {
   it('reports having no history to go on', () => {
     const empty: ExerciseProgression = { name: 'Hack squat', key: 'hack squat', sessions: 0, points: [] };
     expect(buildTarget(empty).action).toBe('no-history');
+  });
+
+  it('repeats a cardio piece with its real numbers, not "the same"', () => {
+    // The exact complaint: a treadmill run that used to say "Repeat the same".
+    const target = buildTarget(
+      progression({ date: '2026-08-02', durationMinutes: 15, distanceKm: 2.5 }, 'Treadmill run')
+    );
+    expect(target.kind).toBe('cardio');
+    expect(target.durationMinutes).toBe(15);
+    expect(target.distanceKm).toBe(2.5);
+    expect(target.rationale).toContain('15 min · 2.5 km');
+    expect(target.lastSummary).toBe('2 Aug · 15 min · 2.5 km');
+  });
+});
+
+describe('describeVolumeLoad', () => {
+  it('renders duration and distance for cardio', () => {
+    expect(describeVolumeLoad({ durationMinutes: 15, distanceKm: 3.5 })).toBe('15 min · 3.5 km');
+  });
+
+  it('renders sets, reps and load for strength', () => {
+    expect(describeVolumeLoad({ sets: 3, reps: 8, weightKg: 40 })).toBe('3 × 8 · 40kg');
+  });
+});
+
+describe('describeLast', () => {
+  it('leads with the date and includes the numbers', () => {
+    expect(describeLast({ date: '2026-08-02', sets: 3, reps: 10, weightKg: 39 })).toBe(
+      '2 Aug · 3 × 10 · 39kg'
+    );
+    expect(describeLast({ date: '2026-08-02', durationMinutes: 15 })).toBe('2 Aug · 15 min');
   });
 });

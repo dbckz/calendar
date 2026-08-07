@@ -14,7 +14,16 @@
 // more honest than assuming a fixed weekly increment — his log has a lift going
 // 27kg → struggled → 25.3kg, which a fixed increment would have made worse.
 
+import { format, parseISO } from 'date-fns';
+
 import type { ExerciseProgression, ProgressionPoint } from './exercise-progression';
+
+// How an exercise sits in the programme:
+//   core     — kept identical session to session so it can be driven up
+//   rotation — an accessory swapped between sessions
+//   cardio   — a run or treadmill piece, measured in time/distance
+// Set by the AI programmer; the deterministic fallback only ever knows 'cardio'.
+export type ExerciseKind = 'core' | 'rotation' | 'cardio';
 
 // Reps in reserve: how many more reps were left at the end of a set.
 // 0 means nothing left; 4+ means the weight was comfortably light.
@@ -84,14 +93,26 @@ export type TargetAction = 'increase' | 'hold' | 'add-reps' | 'reduce' | 'no-his
 export interface ExerciseTarget {
   name: string;
   key: string;
-  action: TargetAction;
-  // What to aim for. Weight is absent for bodyweight work.
+  // The deterministic builder always sets one; AI programme rows lead with a
+  // `kind`/`toFailure` tag instead, so it is optional.
+  action?: TargetAction;
+  // What to aim for. Weight is absent for bodyweight work; duration/distance
+  // carry cardio pieces.
   weightKg?: number;
   sets?: number;
   reps?: number;
   holdSeconds?: number;
+  durationMinutes?: number;
+  distanceKm?: number;
+  // Where the exercise sits in the programme (AI path), and whether it is the
+  // one to take to failure. The UI shows both as subtle row tags.
+  kind?: ExerciseKind;
+  toFailure?: boolean;
   // Last time out, for context.
   last?: ProgressionPoint;
+  // "2 Aug · 3 × 8 · 40kg" — what was actually done last time, with numbers, so
+  // the row never reads "repeat the same" with nothing to repeat.
+  lastSummary?: string;
   // One sentence saying why — the recommendation has to be arguable with, not
   // just obeyed.
   rationale: string;
@@ -105,18 +126,35 @@ export function describeVolumeLoad(t: {
   reps?: number;
   holdSeconds?: number;
   weightKg?: number;
+  durationMinutes?: number;
+  distanceKm?: number;
 }): string {
   let volume = '';
   if (t.sets && t.reps) volume = `${t.sets} × ${t.reps}`;
   else if (t.sets && t.holdSeconds) volume = `${t.sets} × ${t.holdSeconds}s`;
   const load = t.weightKg !== undefined ? `${t.weightKg}kg` : '';
-  return [volume, load].filter(Boolean).join(' · ');
+  const cardio = [
+    t.durationMinutes !== undefined ? `${t.durationMinutes} min` : '',
+    t.distanceKm !== undefined ? `${t.distanceKm} km` : '',
+  ].filter(Boolean);
+  return [volume, load, ...cardio].filter(Boolean).join(' · ');
 }
 
-// Round to something you can actually load. Machine stacks and dumbbells move in
-// steps; half a kilo is the finest worth suggesting.
+// "2 Aug · 3 × 8 · 40kg" (or "· 15 min · 3.5 km" for cardio) — the concrete
+// record of last time, so a row never says "repeat the same" with no numbers.
+export function describeLast(point: ProgressionPoint): string {
+  const detail = describeVolumeLoad(point);
+  const date = format(parseISO(point.date), 'd MMM');
+  return detail ? `${date} · ${detail}` : date;
+}
+
+// Round to something you can actually load. Below 10kg the smallest dumbbells
+// and plates jump by roughly a kilo, so half-kilo targets there are fiction;
+// heavier, a microplate makes a half-kilo step real. The AI programmer reasons
+// about specific equipment — this is only the offline fallback's rule of thumb.
 function roundLoad(kg: number): number {
-  return Math.round(kg * 2) / 2;
+  const step = kg < 10 ? 1 : 0.5;
+  return Math.round(kg / step) * step;
 }
 
 // How big a jump the effort justifies. Deliberately conservative: a jump that is
@@ -139,7 +177,31 @@ export function buildTarget(progression: ExerciseProgression): ExerciseTarget {
   const effort = readEffort(last.notes);
   const sets = last.sets;
   const reps = last.reps;
-  const context = { ...base, last, sets, reps, ...(last.holdSeconds ? { holdSeconds: last.holdSeconds } : {}) };
+  const context = {
+    ...base,
+    last,
+    lastSummary: describeLast(last),
+    sets,
+    reps,
+    ...(last.holdSeconds ? { holdSeconds: last.holdSeconds } : {}),
+  };
+
+  // Cardio: a run or treadmill piece has time and/or distance but no load or
+  // reps. Repeat it with the actual numbers — "the same" told Dave nothing.
+  if (last.weightKg === undefined && (last.durationMinutes !== undefined || last.distanceKm !== undefined)) {
+    const detail = describeVolumeLoad({
+      durationMinutes: last.durationMinutes,
+      distanceKm: last.distanceKm,
+    });
+    return {
+      ...context,
+      action: 'hold',
+      kind: 'cardio',
+      ...(last.durationMinutes !== undefined ? { durationMinutes: last.durationMinutes } : {}),
+      ...(last.distanceKm !== undefined ? { distanceKm: last.distanceKm } : {}),
+      rationale: `Last time was ${detail} — match or beat it.`,
+    };
+  }
 
   // Bodyweight or unloaded work: progress by reps or time, never by weight.
   if (last.weightKg === undefined) {
@@ -235,8 +297,27 @@ export function buildSessionTargets(
   components: string[] = [],
   limit = 8
 ): ExerciseTarget[] {
+  return orderTargets(selectPlanProgressions(progressions, components, limit).map(buildTarget));
+}
+
+// The exercises a session's plan implies, most-relevant first and capped. Shared
+// by the deterministic targets and the AI programmer's input so both reason over
+// the same set of lifts.
+export function selectPlanProgressions(
+  progressions: ExerciseProgression[],
+  components: string[] = [],
+  limit = 8
+): ExerciseProgression[] {
   const relevant = components.length > 0 ? filterToPlan(progressions, components) : progressions;
-  return relevant.slice(0, limit).map(buildTarget);
+  return relevant.slice(0, limit);
+}
+
+// Run/treadmill first, everything else in its original order — a warm-up run
+// leads the session, not a chest press. A stable partition, so the relative
+// order within each group is preserved.
+function orderTargets(targets: ExerciseTarget[]): ExerciseTarget[] {
+  const isCardio = (t: ExerciseTarget) => t.kind === 'cardio';
+  return [...targets.filter(isCardio), ...targets.filter(t => !isCardio(t))];
 }
 
 // Which muscle groups a plan component implies, and the words that identify an

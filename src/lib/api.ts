@@ -1764,6 +1764,10 @@ export const api = {
     date: string;
     plan?: { label?: string; components: string[] };
     targets: ExerciseTarget[];
+    // 'ai' once the Claude programme is cached, 'fallback' while it generates or
+    // when Claude is unavailable. `generating` flags that a refetch will upgrade.
+    source?: 'ai' | 'fallback';
+    generating?: boolean;
   }> {
     const params = new URLSearchParams();
     if (date) params.set('date', date);

@@ -5,7 +5,12 @@ import { format } from 'date-fns';
 
 import { api } from '@/lib/api';
 import { exerciseKey, type ProgressionPoint } from '@/lib/exercise-progression';
-import { describeVolumeLoad, type ExerciseTarget, type TargetAction } from '@/lib/exercise-targets';
+import {
+  describeVolumeLoad,
+  type ExerciseKind,
+  type ExerciseTarget,
+  type TargetAction,
+} from '@/lib/exercise-targets';
 import type { ExerciseEntry, ExerciseSession } from '@/types/life';
 
 // Today's workout as one interactive checklist, shared by the desktop Today tab
@@ -30,13 +35,21 @@ export interface TodayRow {
   reps?: number;
   holdSeconds?: number;
   weightKg?: number;
+  durationMinutes?: number;
+  distanceKm?: number;
   notes?: string;
   // What to aim for, e.g. "3 × 8 · 40kg".
   targetText?: string;
   // Guidance from the previous workout. Absent on added-on-the-spot exercises.
   action?: TargetAction;
+  // AI-programme tags: where the exercise sits and whether it's the to-failure
+  // finisher. Absent on deterministic non-cardio rows and added-on-the-spot ones.
+  kind?: ExerciseKind;
+  toFailure?: boolean;
   rationale?: string;
   last?: ProgressionPoint;
+  // "2 Aug · 3 × 8 · 40kg" — last time with numbers, shown on the row.
+  lastSummary?: string;
 }
 
 export interface TodayPlan {
@@ -66,10 +79,15 @@ function rowFromTarget(t: ExerciseTarget): TodayRow {
     reps: t.reps,
     holdSeconds: t.holdSeconds,
     weightKg: t.weightKg,
+    durationMinutes: t.durationMinutes,
+    distanceKm: t.distanceKm,
     targetText: describeVolumeLoad(t) || undefined,
     action: t.action,
+    kind: t.kind,
+    toFailure: t.toFailure,
     rationale: t.rationale,
     last: t.last,
+    lastSummary: t.lastSummary,
   };
 }
 
@@ -83,6 +101,8 @@ function rowFromEntry(e: ExerciseEntry): TodayRow {
     reps: e.reps,
     holdSeconds: e.holdSeconds,
     weightKg: e.weightKg,
+    durationMinutes: e.durationMinutes,
+    distanceKm: e.distanceKm,
     notes: e.notes,
     targetText: e.targetText,
   };
@@ -98,10 +118,18 @@ function applyEntry(row: TodayRow, e: ExerciseEntry): TodayRow {
     reps: e.reps ?? row.reps,
     holdSeconds: e.holdSeconds ?? row.holdSeconds,
     weightKg: e.weightKg ?? row.weightKg,
+    durationMinutes: e.durationMinutes ?? row.durationMinutes,
+    distanceKm: e.distanceKm ?? row.distanceKm,
     notes: e.notes ?? row.notes,
     targetText: e.targetText ?? row.targetText,
   };
 }
+
+// How hard the checklist chases the AI programme once the server says it is
+// generating: a handful of delayed refetches, then it settles for the
+// deterministic targets rather than polling a broken Claude forever.
+const MAX_POLLS = 3;
+const POLL_DELAY_MS = 20000;
 
 // Guidance rows first (in target order), then any entries added on the spot.
 function mergeRows(targets: ExerciseTarget[], session: ExerciseSession | null): TodayRow[] {
@@ -129,10 +157,16 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  // True while the AI programme is being generated server-side; the checklist
+  // shows the deterministic targets and quietly upgrades when it lands.
+  const [generating, setGenerating] = useState(false);
 
   const targetsRef = useRef<ExerciseTarget[]>([]);
   const sessionRef = useRef<ExerciseSession | null>(null);
   const ensureRef = useRef<Promise<ExerciseSession> | null>(null);
+  // At most one pending refetch, and how many have been spent of the budget.
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollsRef = useRef(0);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -149,6 +183,18 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
       sessionRef.current = session;
       setPlan(targetsRes.plan ?? null);
       setRows(mergeRows(targetsRes.targets, session));
+
+      const stillGenerating = !!targetsRes.generating && targetsRes.source !== 'ai';
+      setGenerating(stillGenerating);
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+      // Chase the programme with a single delayed refetch, capped.
+      if (stillGenerating && pollsRef.current < MAX_POLLS) {
+        pollsRef.current += 1;
+        pollTimerRef.current = setTimeout(() => load(), POLL_DELAY_MS);
+      }
     } catch (err) {
       console.error('Failed to load today’s workout:', err);
       setError('Could not load today’s workout.');
@@ -157,8 +203,16 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
     }
   }, [date]);
 
+  // Fresh poll budget whenever the day changes.
+  useEffect(() => {
+    pollsRef.current = 0;
+  }, [date]);
+
   useEffect(() => {
     load();
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
   }, [load]);
 
   // Create-or-resume today's session, once. Concurrent first-actions share the
@@ -322,6 +376,7 @@ export function useTodaySession(dateArg?: string, onSessionChanged?: () => void)
     doneCount,
     totalCount: rows.length,
     isLoading,
+    generating,
     error,
     busyKey,
     reload: load,
