@@ -65,6 +65,7 @@ export interface CreateSessionInput {
   components?: string[];
   targetDistanceKm?: number;
   source?: ExerciseSource;
+  freeformText?: string;
   importKey?: string;
   plannedSessionId?: string;
 }
@@ -104,6 +105,7 @@ export async function createSession(
     ...(input.components?.length ? { components: input.components } : {}),
     ...(input.targetDistanceKm ? { targetDistanceKm: input.targetDistanceKm } : {}),
     source: input.source ?? 'manual',
+    ...(input.freeformText?.trim() ? { freeformText: input.freeformText.trim() } : {}),
     ...(input.importKey ? { importKey: input.importKey } : {}),
     ...(input.plannedSessionId ? { plannedSessionId: input.plannedSessionId } : {}),
     planned,

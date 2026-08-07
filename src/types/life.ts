@@ -220,7 +220,7 @@ export interface ExerciseEntry {
 
 // Where a session came from, so an import can be re-run without duplicating
 // hand-entered work.
-export type ExerciseSource = 'manual' | 'sheet' | 'calendar';
+export type ExerciseSource = 'manual' | 'sheet' | 'calendar' | 'freeform';
 
 // One session, planned or done. A planned session is created ahead of time with
 // completed=false; logging it after the fact flips completed and fills in the
@@ -251,6 +251,10 @@ export interface ExerciseSession {
   components?: string[];
   targetDistanceKm?: number;
   source?: ExerciseSource;
+  // For a session logged freehand: exactly what was written, kept verbatim
+  // alongside whatever the parse made of it. The parse is a convenience; this
+  // is the record. Anything read wrongly can be corrected from here later.
+  freeformText?: string;
   // Stable key for de-duplicating repeat imports (source + its natural id).
   importKey?: string;
   // On a LOGGED session: the planned session it was done against. Set when a

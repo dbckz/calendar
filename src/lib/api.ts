@@ -35,6 +35,7 @@ import type {
 import type { GoalNudge } from '@/lib/goal-progress';
 import type { InferredGoal } from '@/lib/goal-inference';
 import type { ExerciseProgression } from '@/lib/exercise-progression';
+import type { FreeformDraft } from '@/lib/exercise-freeform';
 import type { ExerciseTarget } from '@/lib/exercise-targets';
 import type { DelegationStats } from '@/lib/delegation-stats';
 import type { ProjectScan } from '@/lib/projects/scan';
@@ -1716,6 +1717,29 @@ export const api = {
   ): Promise<{ session: ExerciseSession }> {
     return fetchWithRetry<{ session: ExerciseSession }>(
       '/api/exercise',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+      { maxRetries: 0 }
+    );
+  },
+
+  // Log a session from a blob of text describing what was actually done — for
+  // the day that went off-plan. Called twice from the desktop (read it, then
+  // save the corrected draft) and once from mobile (`save`, no draft).
+  //
+  // The parse spawns Claude, so it is slow by web standards and never retried:
+  // a second call would just run the model again on the same text.
+  async logExerciseFreeform(input: {
+    text: string;
+    date?: string;
+    save?: boolean;
+    draft?: FreeformDraft;
+  }): Promise<{ draft?: FreeformDraft; session?: ExerciseSession; parsed: boolean }> {
+    return fetchWithRetry<{ draft?: FreeformDraft; session?: ExerciseSession; parsed: boolean }>(
+      '/api/exercise/freeform',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -11,6 +11,9 @@ export function describeEntry(entry: ExerciseEntry): string {
   if (entry.sets && entry.reps) parts.push(`${entry.sets} × ${entry.reps}`);
   else if (entry.sets && entry.holdSeconds) parts.push(`${entry.sets} × ${entry.holdSeconds}s`);
   else if (entry.reps) parts.push(`${entry.reps} reps`);
+  // A single hold with no set count — "a 90 second plank", as freehand logs
+  // tend to describe it.
+  else if (entry.holdSeconds) parts.push(`${entry.holdSeconds}s`);
 
   if (entry.perSide && parts.length > 0) parts[parts.length - 1] += ' each side';
 

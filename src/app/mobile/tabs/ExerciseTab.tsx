@@ -4,6 +4,7 @@ import { format, parseISO } from 'date-fns';
 
 import { describeEntry } from '@/components/sections/exercise/ExerciseEntryList';
 import type { ExerciseAnalysis, ExerciseSession } from '@/types/life';
+import { FreeformLogCard } from '../components/FreeformLogCard';
 import { TodayChecklist } from '../components/TodayChecklist';
 
 // The mobile Exercise view — the primary gym surface. Today's workout leads as
@@ -28,6 +29,9 @@ export function ExerciseTab({
   return (
     <div className="space-y-5">
       <TodayChecklist onSessionChanged={onSessionChanged} />
+
+      {/* The escape hatch from the checklist: the day the plan didn't happen. */}
+      <FreeformLogCard onLogged={onSessionChanged} />
 
       {isLoading && <p className="text-center text-sm text-gray-500">Loading sessions…</p>}
       {error && (

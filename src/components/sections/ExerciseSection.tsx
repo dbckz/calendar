@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { format, parseISO, subDays } from 'date-fns';
-import { Check, ChevronDown, ChevronRight, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Plus, RefreshCw, Trash2, Wand2 } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import { parseLoad, parseVolume } from '@/lib/exercise-parse';
@@ -10,6 +10,7 @@ import type { ExerciseAnalysis, ExerciseIntensity, ExerciseSession } from '@/typ
 import { SectionGoals } from '@/components/goals/SectionGoals';
 import { ExerciseEntryList } from './exercise/ExerciseEntryList';
 import { ExerciseToday } from './exercise/ExerciseToday';
+import { FreeformLog } from './exercise/FreeformLog';
 import { ProgressionTab } from './exercise/ProgressionTab';
 import { TodayTargets } from './exercise/TodayTargets';
 
@@ -44,7 +45,9 @@ function ExerciseLog({ mode }: { mode: 'plan' | 'history' }) {
   const [sessions, setSessions] = useState<ExerciseSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [formOpen, setFormOpen] = useState(false);
+  // The two ways to log after the fact: the structured form, and a blob of text
+  // for the day that went off-plan. Only one is open at a time.
+  const [formOpen, setFormOpen] = useState<'structured' | 'freeform' | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState<string | null>(null);
@@ -143,8 +146,18 @@ function ExerciseLog({ mode }: { mode: 'plan' | 'history' }) {
               Sync calendar
             </button>
           )}
+          {mode === 'history' && (
+            <button
+              onClick={() => setFormOpen(open => (open === 'freeform' ? null : 'freeform'))}
+              title="Describe what you did in your own words and have it read into the log"
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50"
+            >
+              <Wand2 className="w-4 h-4" />
+              Log freehand
+            </button>
+          )}
           <button
-            onClick={() => setFormOpen(open => !open)}
+            onClick={() => setFormOpen(open => (open === 'structured' ? null : 'structured'))}
             className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold text-white bg-gray-900 rounded-md hover:bg-gray-800"
           >
             <Plus className="w-4 h-4" />
@@ -153,15 +166,26 @@ function ExerciseLog({ mode }: { mode: 'plan' | 'history' }) {
         </div>
       </div>
 
-      {formOpen && (
+      {formOpen === 'structured' && (
         <SessionForm
           mode={mode}
-          onCancel={() => setFormOpen(false)}
+          onCancel={() => setFormOpen(null)}
           onSaved={() => {
-            setFormOpen(false);
+            setFormOpen(null);
             load();
           }}
           onError={setError}
+        />
+      )}
+
+      {formOpen === 'freeform' && (
+        <FreeformLog
+          date={TODAY()}
+          onCancel={() => setFormOpen(null)}
+          onSaved={() => {
+            setFormOpen(null);
+            load();
+          }}
         />
       )}
 
@@ -186,7 +210,7 @@ function ExerciseLog({ mode }: { mode: 'plan' | 'history' }) {
               <div className="flex items-center justify-between gap-3 p-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    {entries.length > 0 && (
+                    {(entries.length > 0 || session.freeformText) && (
                       <button
                         onClick={() => setExpandedId(isOpen ? null : session.id)}
                         aria-expanded={isOpen}
@@ -211,6 +235,11 @@ function ExerciseLog({ mode }: { mode: 'plan' | 'history' }) {
                     {session.source === 'calendar' && (
                       <span className="px-1.5 py-0.5 text-[11px] rounded bg-blue-100 text-blue-700">
                         calendar
+                      </span>
+                    )}
+                    {session.source === 'freeform' && (
+                      <span className="px-1.5 py-0.5 text-[11px] rounded bg-violet-100 text-violet-700">
+                        freehand
                       </span>
                     )}
                   </div>
@@ -248,6 +277,14 @@ function ExerciseLog({ mode }: { mode: 'plan' | 'history' }) {
               {isOpen && (
                 <div className="border-t border-gray-100 px-3 pb-2">
                   <ExerciseEntryList entries={entries} />
+                  {/* What was actually written, for a session logged freehand.
+                      The parse above is a reading of this, not a replacement
+                      for it. */}
+                  {session.freeformText && (
+                    <p className="mt-2 whitespace-pre-wrap border-l-2 border-violet-200 pl-2.5 text-xs leading-5 text-gray-500">
+                      {session.freeformText}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
